@@ -28,17 +28,31 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install maturin pytest polars
+          python -m pip install --upgrade pip
+          pip install maturin pytest
       
       - name: Build Python package
         run: |
           cd rustychickpeas-python
+          python -m venv .venv
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            . .venv/Scripts/activate
+          else
+            . .venv/bin/activate
+          fi
           maturin develop --release
+        shell: bash
       
       - name: Run tests
         run: |
           cd rustychickpeas-python
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            . .venv/Scripts/activate
+          else
+            . .venv/bin/activate
+          fi
           pytest tests/ -v
+        shell: bash
 
   rust-tests:
     name: Test Rust core
