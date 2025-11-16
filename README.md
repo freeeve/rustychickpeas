@@ -56,8 +56,42 @@ maturin develop --release
 ```python
 import rustychickpeas as rcp
 
-# Create a graph using GraphSnapshotBuilder (capacity is optional, auto-grows as needed)
-builder = rcp.GraphSnapshotBuilder(version="v1.0")
+# Create a manager for version management
+manager = rcp.RustyChickpeas()
+
+# Create a builder (capacity is optional, auto-grows as needed)
+builder = manager.create_builder(version="v1.0")
+
+# Add nodes and relationships
+builder.add_node(1, ["Person"])
+builder.add_node(2, ["Person"])
+builder.add_rel(1, 2, "KNOWS")
+
+# Set properties
+builder.set_prop(1, "name", "Alice")
+builder.set_prop(1, "age", 30)
+
+# Finalize and add to manager
+builder.finalize_into(manager)
+
+# Retrieve snapshot by version
+graph = manager.get_graph_snapshot("v1.0")
+
+# Query the graph - get_rels() returns Node objects (neighbor nodes)
+neighbors = graph.get_rels(0, rcp.Direction.Outgoing)  # Returns list of Node objects
+print(f"Node 0 has {len(neighbors)} outgoing neighbors")
+for neighbor in neighbors:
+    print(f"  Neighbor ID: {neighbor.id()}")
+
+# Or get a Node object and use its methods
+node = graph.get_node(0)
+neighbor_ids = node.get_rel_ids(rcp.Direction.Outgoing)  # Returns list of node IDs
+print(f"Neighbor IDs: {neighbor_ids}")
+
+# Get relationships as Relationship objects (includes type, start/end nodes)
+relationships = node.get_rels(rcp.Direction.Outgoing)  # Returns list of Relationship objects
+for rel in relationships:
+    print(f"  Relationship: {rel.get_type()} from {rel.get_start_node().id()} to {rel.get_end_node().id()}")
 
 # Load from Parquet files (recommended for bulk loading)
 graph = rcp.GraphSnapshot.read_from_parquet(
@@ -69,19 +103,6 @@ graph = rcp.GraphSnapshot.read_from_parquet(
     end_node_column="to",
     rel_type_column="type"
 )
-
-# Or use RustyChickpeas manager for version management
-manager = rcp.RustyChickpeas()
-builder = manager.create_builder(version="v1.0")
-# ... add nodes/relationships via Parquet loading ...
-builder.finalize_into(manager)
-
-# Retrieve snapshot by version
-graph = manager.get_graph_snapshot("v1.0")
-
-# Query the graph
-neighbors = graph.get_neighbors(0, rcp.Direction.Outgoing)
-print(f"Node 0 neighbors: {neighbors}")
 ```
 
 ### Rust
