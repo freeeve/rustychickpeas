@@ -42,6 +42,8 @@ htmlcov/
 coverage.xml
 cobertura.xml
 *.cover
+*.lcov
+lcov.info
 .hypothesis/
 .pytest_cache/
 *.profraw
