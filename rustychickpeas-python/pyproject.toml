@@ -1,0 +1,102 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rustychickpeas"
+version = "0.1.0"
+description = "High-performance in-memory graph API with RoaringBitmaps, Python bindings via PyO3"
+readme = "../README.md"
+requires-python = ">=3.8"
+license = {text = "MIT OR Apache-2.0"}
+authors = [
+    {name = "Eve Freeman", email = "eve.freema@gmail.com"}
+]
+keywords = ["graph", "database", "roaring-bitmap", "graph-algorithms", "in-memory"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/freeeve/rustychickpeas"
+Documentation = "https://github.com/freeeve/rustychickpeas#readme"
+Repository = "https://github.com/freeeve/rustychickpeas"
+Issues = "https://github.com/freeeve/rustychickpeas/issues"
+
+[tool.maturin]
+module-name = "rustychickpeas"
+py-limited-api = "auto"
+
+[tool.coverage.run]
+# Coverage configuration for pytest-cov
+source = ["rustychickpeas"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/build/*",
+    "*/dist/*",
+    "*/.*",
+    "*/setup.py",
+]
+
+[tool.coverage.report]
+# Coverage report settings
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+# Show missing lines in report
+show_missing = true
+
+# Precision for percentage display
+precision = 2
+
+# Skip empty files
+skip_empty = true
+
+# Fail under threshold (optional)
+# fail_under = 80
+
+[tool.coverage.html]
+# HTML report directory
+directory = "htmlcov"
+
+[tool.pytest.ini_options]
+# Pytest configuration
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]

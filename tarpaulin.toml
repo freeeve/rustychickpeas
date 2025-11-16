@@ -1,0 +1,48 @@
+# Cargo Tarpaulin configuration for Rust test coverage
+
+[trace]
+# Enable tracing for coverage
+trace = true
+
+# Exclude test files and benchmarks from coverage
+exclude_files = [
+    "*/tests/*",
+    "*/benches/*",
+    "*/target/*",
+    "*/examples/*",
+]
+
+# Exclude specific patterns
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+    "**/target/**",
+    "**/examples/**",
+    "**/*.rs.bak",
+]
+
+# Exclude lines that are just closing braces or similar
+exclude_lines = [
+    "unreachable!()",
+    "unimplemented!()",
+    "panic!()",
+]
+
+# Coverage threshold (optional - can be set per package)
+# fail_under = 80
+
+# Output formats
+out = ["Xml", "Html"]
+
+# Timeout for tests (as duration string)
+timeout = "300s"
+
+# Follow test execution
+follow_exec = true
+
+# Line coverage (default)
+line = true
+
+# Branch coverage (optional, slower)
+# branch = true
+

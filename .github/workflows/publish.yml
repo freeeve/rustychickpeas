@@ -1,0 +1,79 @@
+name: Publish to TestPyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    name: Build and publish wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        exclude:
+          # Reduce matrix size - we can expand later if needed
+          - os: windows-latest
+            python-version: "3.8"
+          - os: macos-latest
+            python-version: "3.8"
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install maturin
+        run: pip install maturin
+      
+      - name: Build wheels
+        run: |
+          cd rustychickpeas-python
+          maturin build --release --out dist
+        env:
+          # For TestPyPI: native wheels are fine (less portable but work for testing)
+          # For production PyPI, consider using manylinux Docker containers for better Linux compatibility
+          MATURIN_PEP517_ARGS: "--manylinux=off"
+      
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: rustychickpeas-python/dist/*.whl
+          if-no-files-found: error
+  
+  publish:
+    name: Publish to TestPyPI
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    # Allow both releases and manual workflow dispatch for testing
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/rustychickpeas
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.TESTPYPI_API_TOKEN }}
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+

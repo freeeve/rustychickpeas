@@ -1,0 +1,34 @@
+# Coverage.py configuration file
+# This is a fallback for older coverage.py versions that don't read pyproject.toml
+
+[run]
+source = rustychickpeas
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */venv/*
+    */build/*
+    */dist/*
+    */.*
+    */setup.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+    class .*\bProtocol\):
+    @(abc\.)?abstractmethod
+
+show_missing = True
+precision = 2
+skip_empty = True
+
+[html]
+directory = htmlcov
+

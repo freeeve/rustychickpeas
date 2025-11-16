@@ -1,0 +1,15 @@
+[package]
+name = "rustychickpeas-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "rustychickpeas"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustychickpeas-core = { path = "../rustychickpeas-core" }
+pyo3 = { workspace = true }
+
