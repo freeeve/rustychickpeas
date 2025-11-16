@@ -53,47 +53,86 @@ maturin develop --release
 
 ### Python
 
+#### Basic Usage (with Manager)
+
 ```python
 import rustychickpeas as rcp
 
 # Create a manager for version management
 manager = rcp.RustyChickpeas()
 
-# Create a builder (capacity is optional, auto-grows as needed)
+# Create a builder with a version
 builder = manager.create_builder(version="v1.0")
+
+# Add nodes with labels
+builder.add_node(1, ["Person"])
+builder.add_node(2, ["Person"])
+builder.add_node(3, ["Company"])
+
+# Add relationships
+builder.add_rel(1, 2, "KNOWS")
+builder.add_rel(1, 3, "WORKS_FOR")
+
+# Set properties (automatic type detection)
+builder.set_prop(1, "name", "Alice")
+builder.set_prop(1, "age", 30)
+builder.set_prop(2, "name", "Bob")
+builder.set_prop(3, "name", "Acme Corp")
+
+# Finalize and add to manager (uses the version set when creating the builder)
+builder.finalize_into(manager)
+
+# Retrieve snapshot by version
+graph = manager.get_graph_snapshot("v1.0")
+
+# Query nodes
+node = graph.get_node(0)  # Get Node object (external ID 1 maps to internal ID 0)
+print(f"Node labels: {node.get_labels()}")  # ["Person"]
+print(f"Node property 'name': {node.get_property('name')}")  # "Alice"
+
+# Query relationships - get neighbor Node objects
+neighbors = graph.get_rels(0, rcp.Direction.Outgoing)
+print(f"Node 0 has {len(neighbors)} outgoing neighbors")
+for neighbor in neighbors:
+    print(f"  Neighbor ID: {neighbor.id()}, labels: {neighbor.get_labels()}")
+
+# Or get just the neighbor IDs
+neighbor_ids = node.get_rel_ids(rcp.Direction.Outgoing)
+print(f"Neighbor IDs: {neighbor_ids}")  # [1, 2]
+
+# Get relationships as Relationship objects (includes type, start/end nodes)
+relationships = node.get_rels(rcp.Direction.Outgoing)
+for rel in relationships:
+    print(f"  {rel.get_type()}: {rel.get_start_node().id()} -> {rel.get_end_node().id()}")
+```
+
+#### Standalone Usage (without Manager)
+
+```python
+import rustychickpeas as rcp
+
+# Create a standalone builder
+builder = rcp.GraphSnapshotBuilder(version="v1.0")
 
 # Add nodes and relationships
 builder.add_node(1, ["Person"])
 builder.add_node(2, ["Person"])
 builder.add_rel(1, 2, "KNOWS")
 
-# Set properties
-builder.set_prop(1, "name", "Alice")
-builder.set_prop(1, "age", 30)
+# Finalize into a snapshot
+graph = builder.finalize()
 
-# Finalize and add to manager
-builder.finalize_into(manager)
-
-# Retrieve snapshot by version
-graph = manager.get_graph_snapshot("v1.0")
-
-# Query the graph - get_rels() returns Node objects (neighbor nodes)
-neighbors = graph.get_rels(0, rcp.Direction.Outgoing)  # Returns list of Node objects
-print(f"Node 0 has {len(neighbors)} outgoing neighbors")
-for neighbor in neighbors:
-    print(f"  Neighbor ID: {neighbor.id()}")
-
-# Or get a Node object and use its methods
+# Query the graph
 node = graph.get_node(0)
-neighbor_ids = node.get_rel_ids(rcp.Direction.Outgoing)  # Returns list of node IDs
-print(f"Neighbor IDs: {neighbor_ids}")
+neighbors = node.get_rels(rcp.Direction.Outgoing)
+```
 
-# Get relationships as Relationship objects (includes type, start/end nodes)
-relationships = node.get_rels(rcp.Direction.Outgoing)  # Returns list of Relationship objects
-for rel in relationships:
-    print(f"  Relationship: {rel.get_type()} from {rel.get_start_node().id()} to {rel.get_end_node().id()}")
+#### Loading from Parquet Files
 
-# Load from Parquet files (recommended for bulk loading)
+```python
+import rustychickpeas as rcp
+
+# Direct loading (creates a standalone snapshot)
 graph = rcp.GraphSnapshot.read_from_parquet(
     nodes_path="nodes.parquet",
     relationships_path="relationships.parquet",
@@ -103,6 +142,17 @@ graph = rcp.GraphSnapshot.read_from_parquet(
     end_node_column="to",
     rel_type_column="type"
 )
+
+# Or load into a builder for more control
+manager = rcp.RustyChickpeas()
+builder = manager.create_builder(version="v1.0")
+builder.load_nodes_from_parquet("nodes.parquet", node_id_column="id", label_columns=["label"])
+builder.load_relationships_from_parquet("relationships.parquet", 
+                                       start_node_column="from", 
+                                       end_node_column="to", 
+                                       rel_type_column="type")
+builder.finalize_into(manager)
+graph = manager.get_graph_snapshot("v1.0")
 ```
 
 ### Rust
