@@ -28,12 +28,6 @@ impl GraphSnapshot {
             .map(|idx| idx as u32)
     }
 
-    /// Get relationship type ID from string
-    /// This is the same as get_string_id but returns a RelationshipType
-    fn get_rel_type_id(&self, s: &str) -> Option<RelationshipType> {
-        self.get_string_id(s).map(RelationshipType::new)
-    }
-
     /// Get label from string
     fn label_from_str(&self, s: &str) -> Option<Label> {
         self.get_string_id(s).map(Label::new)
@@ -194,6 +188,7 @@ impl GraphSnapshot {
     }
 
     /// Get neighbors of a node (deprecated - use get_rels instead)
+    #[allow(deprecated)]
     #[deprecated(note = "Use get_rels instead")]
     fn get_neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
         match direction {
@@ -229,7 +224,9 @@ impl GraphSnapshot {
     fn get_relationships(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
         // GraphSnapshot doesn't have relationship IDs, so we return neighbor nodes
         // This matches the Graph API behavior where relationships are accessed via neighbors
-        self.get_neighbors(node_id, direction)
+        // Use get_rels instead of deprecated get_neighbors
+        let nodes = self.get_rels(node_id, direction, None)?;
+        Ok(nodes.into_iter().map(|n| n.node_id).collect())
     }
 
     /// Get relationships by type

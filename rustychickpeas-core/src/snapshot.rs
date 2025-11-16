@@ -445,11 +445,13 @@ mod tests {
             out_offsets[i + 1] = out_offsets[i] + builder.deg_out[i];
         }
         let mut out_nbrs = vec![0u32; m];
+        let mut out_types = vec![RelationshipType::new(0); m];
         let mut out_pos = vec![0u32; n];
-        for (u, v) in &builder.rels {
+        for ((u, v), rel_type) in builder.rels.iter().zip(builder.rel_types.iter()) {
             let u_idx = *u as usize;
             let pos = (out_offsets[u_idx] + out_pos[u_idx]) as usize;
             out_nbrs[pos] = *v;
+            out_types[pos] = *rel_type;
             out_pos[u_idx] += 1;
         }
         
@@ -458,11 +460,13 @@ mod tests {
             in_offsets[i + 1] = in_offsets[i] + builder.deg_in[i];
         }
         let mut in_nbrs = vec![0u32; m];
+        let mut in_types = vec![RelationshipType::new(0); m];
         let mut in_pos = vec![0u32; n];
-        for (u, v) in &builder.rels {
+        for ((u, v), rel_type) in builder.rels.iter().zip(builder.rel_types.iter()) {
             let v_idx = *v as usize;
             let pos = (in_offsets[v_idx] + in_pos[v_idx]) as usize;
             in_nbrs[pos] = *u;
+            in_types[pos] = *rel_type;
             in_pos[v_idx] += 1;
         }
         
@@ -530,8 +534,10 @@ mod tests {
             n_rels: m as u64,
             out_offsets,
             out_nbrs,
+            out_types,
             in_offsets,
             in_nbrs,
+            in_types,
             label_index,
             type_index,
             version: builder.version.clone(),
@@ -913,8 +919,10 @@ mod tests {
             n_rels: 0,
             out_offsets: vec![0, 0],
             out_nbrs: Vec::new(),
+            out_types: Vec::new(),
             in_offsets: vec![0, 0],
             in_nbrs: Vec::new(),
+            in_types: Vec::new(),
             label_index: HashMap::new(),
             type_index: HashMap::new(),
             version: builder.version.clone(),

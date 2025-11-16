@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_nodeset_roaring_insert() {
-        let mut rb = RoaringBitmap::new();
+        let rb = RoaringBitmap::new();
         let mut ns = NodeSet::new(rb);
         assert!(!ns.contains(1));
         assert!(ns.insert(1));

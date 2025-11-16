@@ -596,7 +596,6 @@ impl GraphBuilder {
 mod tests {
     use super::*;
     use crate::snapshot::GraphSnapshot;
-    use crate::types::RelationshipType;
 
     #[test]
     fn test_builder_new() {

@@ -3,6 +3,7 @@
 //! PyO3 bindings for the RustyChickpeas graph API
 
 #![allow(non_local_definitions)] // PyO3 requires impl blocks for pymethods
+#![allow(deprecated)] // Allow deprecated methods for backward compatibility
 
 use pyo3::prelude::*;
 
