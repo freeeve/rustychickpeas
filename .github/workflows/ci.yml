@@ -71,6 +71,7 @@ jobs:
       
       - name: Run Rust coverage
         run: |
+          mkdir -p coverage/rust
           cd rustychickpeas-core
           cargo tarpaulin \
             --exclude-files '*/tests/*' \
@@ -80,6 +81,11 @@ jobs:
             --out Lcov \
             --output-dir ../coverage/rust \
             --timeout 300
+      
+      - name: Verify coverage file exists
+        run: |
+          ls -la coverage/rust/ || echo "Coverage directory not found"
+          find . -name "lcov.info" -o -name "*.lcov" 2>/dev/null | head -5
       
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
