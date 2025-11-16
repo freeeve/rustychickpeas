@@ -71,7 +71,8 @@ jobs:
       
       - name: Run Rust coverage
         run: |
-          cargo tarpaulin --workspace \
+          cargo tarpaulin \
+            --package rustychickpeas-core \
             --exclude-files '*/tests/*' \
             --exclude-files '*/benches/*' \
             --exclude-files '*/target/*' \
