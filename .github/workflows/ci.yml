@@ -137,22 +137,27 @@ jobs:
           mkdir -p coverage/rust
           cd rustychickpeas-core
           # cargo-tarpaulin --out Lcov creates lcov.info in the workspace root
+          # Use --root to set the base path for relative file paths in LCOV
           cargo tarpaulin \
             --exclude-files '*/tests/*' \
             --exclude-files '*/benches/*' \
             --exclude-files '*/target/*' \
             --exclude-files '*/examples/*' \
             --out Lcov \
+            --root .. \
             --timeout 300
           # Move lcov.info from workspace root to coverage/rust/
           cd ..
           if [ -f lcov.info ]; then
-            mv lcov.info coverage/rust/lcov.info
-            echo "✓ Moved lcov.info from workspace root to coverage/rust/"
+            # Filter out any non-LCOV lines (log output, etc.) and ensure clean LCOV format
+            grep -E '^(SF:|TN:|FNF:|FNH:|FNDA:|DA:|LF:|LH:|BRDA:|BRF:|BRH:|end_of_record)' lcov.info > coverage/rust/lcov.info || mv lcov.info coverage/rust/lcov.info
+            echo "✓ Created lcov.info at coverage/rust/lcov.info"
             ls -lh coverage/rust/lcov.info
             # Verify it contains valid LCOV format
-            if grep -q "^SF:\|^TN:" coverage/rust/lcov.info; then
+            if grep -q "^SF:" coverage/rust/lcov.info; then
               echo "✓ Valid LCOV file with $(grep -c '^SF:' coverage/rust/lcov.info) source files"
+              echo "Sample file paths:"
+              grep "^SF:" coverage/rust/lcov.info | head -3
             else
               echo "⚠ WARNING: File exists but may not be valid LCOV format"
             fi
