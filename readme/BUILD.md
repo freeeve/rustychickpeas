@@ -9,14 +9,23 @@
    source ~/.cargo/env
    ```
 
-2. **Python 3.8+**: Required for building and testing
+2. **Python 3.10+**: Required for building and testing
    ```bash
    python3 --version
    ```
+   
+   **Supported Python Versions**: 3.10, 3.11, 3.12, 3.13, 3.14
+   
+   **Note**: Python 3.8 and 3.9 are **not supported**. The project requires Python 3.10 or later.
 
 3. **maturin**: Python package for building Rust extensions
    ```bash
    pip3 install maturin
+   ```
+   
+   **Note**: You may also need `pyarrow` for some tests:
+   ```bash
+   pip3 install pyarrow
    ```
 
 ## Building the Python Module
@@ -51,8 +60,10 @@ pip install -e .
 ### Install Test Dependencies
 
 ```bash
-pip3 install pytest
+pip3 install pytest pyarrow
 ```
+
+**Note**: `pyarrow` is required for Parquet-related tests.
 
 ### Run All Tests
 
@@ -129,6 +140,21 @@ If you encounter compilation errors:
 2. Update Rust: `rustup update`
 3. Clean and rebuild: `cargo clean && maturin develop`
 
+### Python Version Errors
+
+If you see errors about Python version:
+
+1. **Python 3.8/3.9 not supported**: The project requires Python 3.10 or later
+   ```bash
+   python3 --version  # Should show 3.10 or higher
+   ```
+2. **Python 3.13/3.14**: These versions work but use ABI3 compatibility mode. If you encounter issues, try Python 3.10-3.12 first.
+3. **Check your Python version**: Make sure `python3` points to a supported version
+   ```bash
+   which python3
+   python3 --version
+   ```
+
 ## Quick Start
 
 ```bash
@@ -138,8 +164,8 @@ cd rustychickpeas-python
 # Build and install
 maturin develop
 
-# Install pytest
-pip3 install pytest
+# Install test dependencies
+pip3 install pytest pyarrow
 
 # Run tests
 pytest tests/ -v
