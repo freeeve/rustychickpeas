@@ -136,38 +136,31 @@ jobs:
         run: |
           mkdir -p coverage/rust
           cd rustychickpeas-core
-          # cargo-tarpaulin --out Lcov outputs LCOV data to stdout, but also logs to stderr
-          # Capture stdout (LCOV data) to file, let stderr go to console for debugging
+          # cargo-tarpaulin --out Lcov creates lcov.info in the workspace root
           cargo tarpaulin \
             --exclude-files '*/tests/*' \
             --exclude-files '*/benches/*' \
             --exclude-files '*/target/*' \
             --exclude-files '*/examples/*' \
             --out Lcov \
-            --timeout 300 > ../coverage/rust/lcov.info 2>../coverage/rust/tarpaulin.log
+            --timeout 300
+          # Move lcov.info from workspace root to coverage/rust/
           cd ..
-          # Verify the file was created and has LCOV content
-          if [ -f coverage/rust/lcov.info ] && [ -s coverage/rust/lcov.info ]; then
-            # Check if file contains LCOV format (should start with SF: or TN:)
+          if [ -f lcov.info ]; then
+            mv lcov.info coverage/rust/lcov.info
+            echo "✓ Moved lcov.info from workspace root to coverage/rust/"
+            ls -lh coverage/rust/lcov.info
+            # Verify it contains valid LCOV format
             if grep -q "^SF:\|^TN:" coverage/rust/lcov.info; then
-              echo "✓ Created valid lcov.info at coverage/rust/lcov.info"
-              ls -lh coverage/rust/lcov.info
-              echo "LCOV file contains $(grep -c '^SF:' coverage/rust/lcov.info) source files"
+              echo "✓ Valid LCOV file with $(grep -c '^SF:' coverage/rust/lcov.info) source files"
             else
-              echo "⚠ WARNING: lcov.info exists but doesn't appear to be valid LCOV format"
-              echo "First 20 lines:"
-              head -20 coverage/rust/lcov.info
-              echo "This might still work for Coveralls, continuing..."
+              echo "⚠ WARNING: File exists but may not be valid LCOV format"
             fi
           else
-            echo "✗ ERROR: lcov.info not created or is empty"
+            echo "✗ ERROR: lcov.info not found in workspace root"
             echo "Current directory: $(pwd)"
-            echo "Files in coverage/rust/:"
-            ls -la coverage/rust/ || echo "coverage/rust/ doesn't exist"
-            if [ -f coverage/rust/tarpaulin.log ]; then
-              echo "Last 20 lines of tarpaulin.log:"
-              tail -20 coverage/rust/tarpaulin.log
-            fi
+            echo "Files in workspace root:"
+            ls -la *.info 2>/dev/null || echo "No .info files found"
             exit 1
           fi
       
