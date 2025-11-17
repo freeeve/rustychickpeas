@@ -22,6 +22,9 @@ jobs:
           - os: ubuntu-latest
             arch: x86_64
             python-version: "3.12"
+          - os: ubuntu-latest
+            arch: x86_64
+            python-version: "3.13"
           # macOS x86_64 (Intel)
           - os: macos-latest
             arch: x86_64
@@ -32,6 +35,9 @@ jobs:
           - os: macos-latest
             arch: x86_64
             python-version: "3.12"
+          - os: macos-latest
+            arch: x86_64
+            python-version: "3.13"
           # macOS arm64 (Apple Silicon)
           - os: macos-latest
             arch: arm64
@@ -42,6 +48,9 @@ jobs:
           - os: macos-latest
             arch: arm64
             python-version: "3.12"
+          - os: macos-latest
+            arch: arm64
+            python-version: "3.13"
           # Windows x86_64
           - os: windows-latest
             arch: x86_64
@@ -52,6 +61,9 @@ jobs:
           - os: windows-latest
             arch: x86_64
             python-version: "3.12"
+          - os: windows-latest
+            arch: x86_64
+            python-version: "3.13"
     
     steps:
       - uses: actions/checkout@v4
