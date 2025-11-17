@@ -61,6 +61,26 @@ RustyChickpeas is tested and supported on:
 **Limitations**:
 - ⚠️ **Linux aarch64** (ARM servers, e.g., AWS Graviton) - Not currently tested in CI. The Rust core should compile and work, but Python bindings require native runners or complex cross-compilation setup. Contributions welcome!
 
+## Python Version Support
+
+RustyChickpeas requires **Python >= 3.10** and is tested against Python 3.10, 3.11, 3.12, 3.13, and 3.14.
+
+### Supported Python Versions by Platform
+
+| Platform | Python Versions |
+|----------|----------------|
+| **Linux x86_64** | 3.10, 3.11, 3.12, 3.13, 3.14 |
+| **macOS x86_64** (Intel) | 3.11, 3.12, 3.13, 3.14 |
+| **macOS arm64** (Apple Silicon) | 3.10, 3.11, 3.12, 3.13, 3.14 |
+| **Windows x86_64** | 3.10, 3.11, 3.12, 3.13, 3.14 |
+
+**Note**: Python 3.10 is not available on macOS x86_64 runners due to dependency issues with the GitHub Actions environment. Python 3.10 works fine on macOS arm64 (native runners) and all other platforms.
+
+### PyO3 Compatibility
+
+- **Python 3.10-3.12**: Fully supported by PyO3 0.20.3
+- **Python 3.13-3.14**: Uses stable ABI compatibility mode (`PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`) since PyO3 0.20.3 doesn't officially support these versions yet. This works correctly but uses the stable ABI for forward compatibility.
+
 ## Quick Start
 
 ### Python
