@@ -13,7 +13,6 @@ documentation = "https://github.com/freeeve/rustychickpeas#readme"
 roaring = { workspace = true }
 thiserror = { workspace = true }
 lasso = { workspace = true }
-ahash = { workspace = true }
 parquet = { workspace = true }
 arrow = { workspace = true }
 bitvec = "1.0"

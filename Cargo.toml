@@ -16,7 +16,6 @@ license = "MIT"
 roaring = "0.11"
 thiserror = "2.0"
 lasso = "0.7"
-ahash = "0.8"
 parquet = "57.0"
 arrow = "57.0"
 
