@@ -104,6 +104,7 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: ${{ (matrix.python-version == '3.13' || matrix.python-version == '3.14') && '1' || '' }}
       
       - name: Generate SHA256 hashes
+        shell: bash
         run: |
           cd rustychickpeas-python/dist
           if [ "${{ runner.os }}" == "Windows" ]; then
@@ -178,6 +179,7 @@ jobs:
           cat pip-audit.json 2>/dev/null || cat pip-audit.txt || echo "Audit completed"
       
       - name: Print file hashes
+        shell: bash
         run: |
           cd dist
           echo "## Package Hashes (SHA256)"
