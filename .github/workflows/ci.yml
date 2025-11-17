@@ -136,31 +136,28 @@ jobs:
         run: |
           mkdir -p coverage/rust
           cd rustychickpeas-core
+          # cargo-tarpaulin --out Lcov outputs to stdout, redirect to file
           cargo tarpaulin \
             --exclude-files '*/tests/*' \
             --exclude-files '*/benches/*' \
             --exclude-files '*/target/*' \
             --exclude-files '*/examples/*' \
             --out Lcov \
-            --output-dir ../coverage/rust \
-            --timeout 300
-          # cargo-tarpaulin creates lcov.info in the workspace root, not in output-dir
+            --timeout 300 > ../coverage/rust/lcov.info 2>&1
           cd ..
-          if [ -f lcov.info ] && [ ! -f coverage/rust/lcov.info ]; then
-            mv lcov.info coverage/rust/lcov.info
-            echo "✓ Moved lcov.info from workspace root to coverage/rust/"
-          fi
-          # Verify the file exists after moving
-          if [ -f coverage/rust/lcov.info ]; then
-            echo "✓ Verified lcov.info exists at coverage/rust/lcov.info"
+          # Verify the file was created and has content
+          if [ -f coverage/rust/lcov.info ] && [ -s coverage/rust/lcov.info ]; then
+            echo "✓ Created lcov.info at coverage/rust/lcov.info"
             ls -lh coverage/rust/lcov.info
+            echo "First few lines of lcov.info:"
+            head -5 coverage/rust/lcov.info
           else
-            echo "✗ ERROR: lcov.info not found after moving"
+            echo "✗ ERROR: lcov.info not created or is empty"
             echo "Current directory: $(pwd)"
-            echo "Files in workspace root:"
-            ls -la *.info 2>/dev/null || echo "No .info files in root"
             echo "Files in coverage/rust/:"
             ls -la coverage/rust/ || echo "coverage/rust/ doesn't exist"
+            echo "Searching for lcov files:"
+            find . -name "*.lcov" -o -name "lcov.info" 2>/dev/null | head -10
             exit 1
           fi
       
