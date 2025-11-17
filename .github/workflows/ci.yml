@@ -150,19 +150,35 @@ jobs:
             mv lcov.info coverage/rust/lcov.info
             echo "✓ Moved lcov.info from workspace root to coverage/rust/"
           fi
+          # Verify the file exists after moving
+          if [ -f coverage/rust/lcov.info ]; then
+            echo "✓ Verified lcov.info exists at coverage/rust/lcov.info"
+            ls -lh coverage/rust/lcov.info
+          else
+            echo "✗ ERROR: lcov.info not found after moving"
+            echo "Current directory: $(pwd)"
+            echo "Files in workspace root:"
+            ls -la *.info 2>/dev/null || echo "No .info files in root"
+            echo "Files in coverage/rust/:"
+            ls -la coverage/rust/ || echo "coverage/rust/ doesn't exist"
+            exit 1
+          fi
       
       - name: Verify coverage file exists
         run: |
-          cd ..
-          ls -la coverage/rust/ || echo "Coverage directory not found"
-          find coverage/rust -name "*.lcov" -o -name "lcov.info" 2>/dev/null || echo "No LCOV files found"
-          # cargo-tarpaulin creates lcov.info in the output-dir
+          # Verify from workspace root
           if [ -f coverage/rust/lcov.info ]; then
-            echo "✓ Found lcov.info"
+            echo "✓ Found lcov.info at coverage/rust/lcov.info"
             ls -lh coverage/rust/lcov.info
+            echo "File size: $(stat -f%z coverage/rust/lcov.info 2>/dev/null || stat -c%s coverage/rust/lcov.info 2>/dev/null) bytes"
           else
-            echo "✗ lcov.info not found, listing all files:"
-            ls -la coverage/rust/
+            echo "✗ ERROR: lcov.info not found at coverage/rust/lcov.info"
+            echo "Current directory: $(pwd)"
+            echo "Contents of coverage/rust/:"
+            ls -la coverage/rust/ || echo "coverage/rust/ doesn't exist"
+            echo "Searching for lcov files:"
+            find . -name "*.lcov" -o -name "lcov.info" 2>/dev/null | head -10
+            exit 1
           fi
       
       - name: Upload to Coveralls
