@@ -1,9 +1,8 @@
-name: Publish to TestPyPI
+name: Publish to PyPI
 
 on:
   release:
     types: [published]
-  workflow_dispatch:
 
 jobs:
   build-and-publish:
@@ -98,8 +97,8 @@ jobs:
           cd rustychickpeas-python
           maturin build --release --out dist --sdist
         env:
-          # For TestPyPI: native wheels are fine (less portable but work for testing)
-          # For production PyPI, consider using manylinux Docker containers for better Linux compatibility
+          # Using native wheels for now. For better Linux compatibility, consider manylinux:
+          # MATURIN_PEP517_ARGS: "--manylinux=2014" (for older Linux compatibility)
           MATURIN_PEP517_ARGS: "--manylinux=off"
           # PyO3 0.20.3 doesn't officially support Python 3.13/3.14 yet, use stable ABI
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: ${{ (matrix.python-version == '3.13' || matrix.python-version == '3.14') && '1' || '' }}
@@ -127,14 +126,14 @@ jobs:
           overwrite: true
   
   publish:
-    name: Publish to TestPyPI
+    name: Publish to PyPI
     needs: build-and-publish
     runs-on: ubuntu-latest
-    # Allow both releases and manual workflow dispatch for testing
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Only publish on releases (not manual dispatch for production)
+    if: github.event_name == 'release'
     environment:
-      name: testpypi
-      url: https://test.pypi.org/p/rustychickpeas
+      name: pypi
+      url: https://pypi.org/project/rustychickpeas/
     # Required for PyPI Trusted Publishing (OIDC)
     permissions:
       id-token: write  # Required for OIDC token requests
@@ -201,7 +200,7 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
           echo "Package version: $version"
       
-      - name: Publish to TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           # Option 1: Trusted Publishing (recommended - see cursor_md/PYPI_TRUSTED_PUBLISHER.md)
@@ -209,9 +208,9 @@ jobs:
           # trusted-publishing: true
           
           # Option 2: API Token (fallback - works immediately)
-          password: ${{ secrets.TESTPYPI_API_TOKEN }}
+          password: ${{ secrets.PYPI_API_TOKEN }}
           
-          repository-url: https://test.pypi.org/legacy/
+          # Production PyPI (no repository-url needed, defaults to pypi.org)
           skip-existing: true
           print-hash: true 
       
