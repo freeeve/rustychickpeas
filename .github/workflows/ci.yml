@@ -147,12 +147,23 @@ jobs:
       
       - name: Verify coverage file exists
         run: |
+          cd ..
           ls -la coverage/rust/ || echo "Coverage directory not found"
-          find . -name "lcov.info" -o -name "*.lcov" 2>/dev/null | head -5
+          find coverage/rust -name "*.lcov" -o -name "lcov.info" 2>/dev/null || echo "No LCOV files found"
+          # cargo-tarpaulin creates lcov.info in the output-dir
+          if [ -f coverage/rust/lcov.info ]; then
+            echo "✓ Found lcov.info"
+            ls -lh coverage/rust/lcov.info
+          else
+            echo "✗ lcov.info not found, listing all files:"
+            ls -la coverage/rust/
+          fi
       
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: coverage/rust/lcov.info
+          flag-name: rust
+          parallel: false
 
