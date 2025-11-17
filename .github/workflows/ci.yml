@@ -144,6 +144,10 @@ jobs:
             --out Lcov \
             --output-dir ../coverage/rust \
             --timeout 300
+          # cargo-tarpaulin may create the file in the current directory, move it if needed
+          if [ -f lcov.info ] && [ ! -f ../coverage/rust/lcov.info ]; then
+            mv lcov.info ../coverage/rust/lcov.info
+          fi
       
       - name: Verify coverage file exists
         run: |
