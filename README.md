@@ -18,7 +18,7 @@ RustyChickpeas provides a high-performance, in-memory graph database API that:
 ✅ **Implementation Complete** - Core functionality implemented with comprehensive benchmarks and Python bindings.
 
 - ✅ Immutable GraphSnapshot with CSR adjacency and columnar properties
-- ✅ GraphSnapshotBuilder for efficient bulk loading with external ID mapping
+- ✅ GraphSnapshotBuilder for efficient bulk loading (requires u32 node IDs)
 - ✅ Parallel finalization using rayon for improved performance
 - ✅ Python bindings via PyO3
 - ✅ Bulk loading from Parquet files
@@ -28,7 +28,7 @@ See [rustychickpeas-core/benches/README.md](./rustychickpeas-core/benches/README
 ## Key Features
 
 - ✅ **Immutable GraphSnapshot** - Read-optimized graph with CSR adjacency and columnar properties
-- ✅ **GraphSnapshotBuilder** - Efficient bulk loading with external ID mapping (u64 → u32)
+- ✅ **GraphSnapshotBuilder** - Efficient bulk loading (requires u32 node IDs directly)
 - ✅ **RustyChickpeas Manager** - Version management for multiple graph snapshots
 - ✅ **Parallel Finalization** - Uses rayon to parallelize index building during finalization
 - ✅ Label and property support with inverted indexes
@@ -82,6 +82,14 @@ RustyChickpeas requires **Python >= 3.10** and is tested against Python 3.10, 3.
 
 - **Python 3.10-3.12**: Fully supported by PyO3 0.20.3
 - **Python 3.13-3.14**: Uses stable ABI compatibility mode (`PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`) since PyO3 0.20.3 doesn't officially support these versions yet. This works correctly but uses the stable ABI for forward compatibility.
+  
+  **Note for local development**: When using `cargo check` or `cargo build` with Python 3.13/3.14, you may need to set the environment variable:
+  ```bash
+  export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+  cargo check --package rustychickpeas-python
+  ```
+  
+  `maturin` builds automatically handle this via the `py-limited-api = "auto"` setting in `pyproject.toml`.
 
 ## Quick Start
 
@@ -120,22 +128,22 @@ builder.finalize_into(manager)
 graph = manager.get_graph_snapshot("v1.0")
 
 # Query nodes
-node = graph.get_node(0)  # Get Node object (external ID 1 maps to internal ID 0)
+node = graph.get_node(1)  # Get Node object (node ID 1)
 print(f"Node labels: {node.get_labels()}")  # ["Person"]
 print(f"Node property 'name': {node.get_property('name')}")  # "Alice"
 
 # Query relationships - get neighbor Node objects
-neighbors = graph.get_rels(0, rcp.Direction.Outgoing)
-print(f"Node 0 has {len(neighbors)} outgoing neighbors")
+neighbors = graph.get_neighbors(1, rcp.Direction.Outgoing)
+print(f"Node 1 has {len(neighbors)} outgoing neighbors")
 for neighbor in neighbors:
     print(f"  Neighbor ID: {neighbor.id()}, labels: {neighbor.get_labels()}")
 
 # Or get just the neighbor IDs
-neighbor_ids = node.get_rel_ids(rcp.Direction.Outgoing)
-print(f"Neighbor IDs: {neighbor_ids}")  # [1, 2]
+neighbor_ids = graph.get_neighbor_ids(1, rcp.Direction.Outgoing)
+print(f"Neighbor IDs: {neighbor_ids}")  # [2, 3]
 
 # Get relationships as Relationship objects (includes type, start/end nodes)
-relationships = node.get_rels(rcp.Direction.Outgoing)
+relationships = graph.get_rels(1, rcp.Direction.Outgoing)
 for rel in relationships:
     print(f"  {rel.get_type()}: {rel.get_start_node().id()} -> {rel.get_end_node().id()}")
 ```
@@ -157,8 +165,8 @@ builder.add_rel(1, 2, "KNOWS")
 graph = builder.finalize()
 
 # Query the graph
-node = graph.get_node(0)
-neighbors = node.get_rels(rcp.Direction.Outgoing)
+node = graph.get_node(1)
+neighbors = graph.get_neighbors(1, rcp.Direction.Outgoing)
 ```
 
 #### Loading from Parquet Files
@@ -200,7 +208,7 @@ let manager = RustyChickpeas::new();
 // Create a builder from the manager with version
 let mut builder = manager.create_builder(Some("v1.0"), None, None);
 
-// Add nodes and relationships
+// Add nodes and relationships (node IDs must be u32)
 builder.add_node(1, &["Person"]);
 builder.add_node(2, &["Person"]);
 builder.add_rel(1, 2, "KNOWS");
@@ -215,8 +223,8 @@ manager.add_snapshot(snapshot);
 let snapshot = manager.get_graph_snapshot("v1.0").unwrap();
 
 // Query the snapshot
-let neighbors = snapshot.get_out_neighbors(0);
-println!("Node 0 neighbors: {:?}", neighbors);
+let neighbors = snapshot.get_out_neighbors(1);
+println!("Node 1 neighbors: {:?}", neighbors);
 ```
 
 ## Version Management
@@ -296,8 +304,8 @@ For Python-specific performance tests, see [rustychickpeas-python/tests/benchmar
 
 ### Hard Limits
 
-- **Nodes**: Up to 2^32 - 1 (4,294,967,295 nodes) - Limited by `u32` NodeId used internally
-- **External Node IDs**: `u64` (up to 2^64 - 1) - Automatically mapped to internal `u32` by GraphSnapshotBuilder
+- **Nodes**: Up to 2^32 - 1 (4,294,967,295 nodes) - Limited by `u32` NodeId
+- **Node IDs**: Must be `u32` (0 to 2^32 - 1) - Users should map their own IDs to u32 if needed
 - **Relationships**: Up to 2^64 - 1 (18,446,744,073,709,551,615) - Limited by `u64` counter, but practically constrained by memory
 - **Unique Strings** (labels, relationship types, property keys): Up to 2^32 - 1 (4,294,967,295) - Limited by `u32` InternedStringId
 - **Properties per Node**: No hard limit, constrained by available memory

@@ -187,10 +187,9 @@ impl GraphSnapshot {
             .collect())
     }
 
-    /// Get neighbors of a node (deprecated - use get_rels instead)
-    #[allow(deprecated)]
-    #[deprecated(note = "Use get_rels instead")]
-    fn get_neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
+    /// Get neighbor node IDs of a node
+    /// Returns a list of node IDs for neighbors in the specified direction
+    fn get_neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
         match direction {
             Direction::Outgoing => {
                 Ok(self.snapshot.get_out_neighbors(node_id).to_vec())
@@ -205,6 +204,12 @@ impl GraphSnapshot {
                 Ok(neighbors)
             }
         }
+    }
+
+    /// Get neighbors of a node as Node objects
+    /// Returns a list of Node objects for neighbors in the specified direction
+    fn get_neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<Node>> {
+        self.get_rels(node_id, direction, None)
     }
 
     /// Get degree of a node

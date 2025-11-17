@@ -13,10 +13,6 @@ use roaring::RoaringBitmap;
 
 /// Graph builder for constructing immutable GraphSnapshot
 pub struct GraphBuilder {
-    // External ID -> internal NodeId mapping
-    pub(crate) ext2int: hashbrown::HashMap<u64, NodeId>,
-    pub(crate) next_id: NodeId,
-
     // Adjacency assembly (counts first, then fill)
     pub(crate) deg_out: Vec<u32>,
     pub(crate) deg_in: Vec<u32>,
@@ -55,8 +51,6 @@ impl GraphBuilder {
         let capacity_nodes = capacity_nodes.unwrap_or(DEFAULT_CAPACITY);
         let capacity_rels = capacity_rels.unwrap_or(DEFAULT_CAPACITY);
         Self {
-            ext2int: hashbrown::HashMap::with_capacity(capacity_nodes * 2),
-            next_id: 0,
             deg_out: vec![0; capacity_nodes],
             deg_in: vec![0; capacity_nodes],
             rels: Vec::with_capacity(capacity_rels),
@@ -90,74 +84,46 @@ impl GraphBuilder {
         self.version = Some(version.to_string());
     }
 
-    /// Get or create internal NodeId for external ID
+    /// Ensure capacity for a given node ID (auto-grow vectors if needed)
     #[inline]
-    pub(crate) fn id_of(&mut self, ext: u64) -> NodeId {
-        if let Some(&id) = self.ext2int.get(&ext) {
-            return id;
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        
-        // Auto-grow vectors if needed (doubling each time, up to u32::MAX)
-        if id as usize >= self.deg_out.len() {
+    fn ensure_capacity(&mut self, node_id: NodeId) {
+        if node_id as usize >= self.deg_out.len() {
             let max_size = u32::MAX as usize;
-            let new_size = ((id as usize + 1) * 2).min(max_size);
-            if new_size <= id as usize {
+            let new_size = ((node_id as usize + 1) * 2).min(max_size);
+            if new_size <= node_id as usize {
                 panic!("Maximum node limit (2^32 - 1) exceeded");
             }
             self.node_labels.resize(new_size, Vec::new());
             self.deg_out.resize(new_size, 0);
             self.deg_in.resize(new_size, 0);
         }
-        
-        self.ext2int.insert(ext, id);
-        id
-    }
-
-    /// Get internal NodeId for external ID (returns None if not found)
-    pub fn get_id(&self, ext: u64) -> Option<NodeId> {
-        self.ext2int.get(&ext).copied()
     }
 
     /// Add a node with labels
-    pub fn add_node(&mut self, ext: u64, labels: &[&str]) {
-        let id = self.id_of(ext);
-        // Ensure capacity (auto-grow, doubling each time, up to u32::MAX)
-        if id as usize >= self.node_labels.len() {
-            let max_size = u32::MAX as usize;
-            let new_size = ((id as usize + 1) * 2).min(max_size);
-            if new_size <= id as usize {
-                panic!("Maximum node limit (2^32 - 1) exceeded");
-            }
-            self.node_labels.resize(new_size, Vec::new());
-            self.deg_out.resize(new_size, 0);
-            self.deg_in.resize(new_size, 0);
-        }
+    /// 
+    /// # Arguments
+    /// * `node_id` - Node ID (must be u32, users should map their own IDs to u32)
+    /// * `labels` - Slice of label strings
+    pub fn add_node(&mut self, node_id: NodeId, labels: &[&str]) {
+        self.ensure_capacity(node_id);
         // Intern labels
         for &l in labels {
             let lid = self.interner.get_or_intern(l);
-            self.node_labels[id as usize].push(Label::new(lid));
+            self.node_labels[node_id as usize].push(Label::new(lid));
         }
     }
 
     /// Add a relationship
-    pub fn add_rel(&mut self, ext_u: u64, ext_v: u64, rel_type: &str) {
-        let u = self.id_of(ext_u);
-        let v = self.id_of(ext_v);
-        // Ensure capacity (auto-grow, doubling each time, up to u32::MAX)
-        let max_id = u.max(v) as usize;
-        if max_id >= self.deg_out.len() {
-            // Cap at u32::MAX (max NodeId)
-            let max_size = u32::MAX as usize;
-            let new_size = ((max_id + 1) * 2).min(max_size);
-            if new_size <= max_id {
-                panic!("Maximum node limit (2^32 - 1) exceeded");
-            }
-            self.node_labels.resize(new_size, Vec::new());
-            self.deg_out.resize(new_size, 0);
-            self.deg_in.resize(new_size, 0);
-        }
+    /// 
+    /// # Arguments
+    /// * `u` - Start node ID (must be u32)
+    /// * `v` - End node ID (must be u32)
+    /// * `rel_type` - Relationship type string
+    pub fn add_rel(&mut self, u: NodeId, v: NodeId, rel_type: &str) {
+        // Ensure capacity for both nodes
+        let max_id = u.max(v);
+        self.ensure_capacity(max_id);
+        
         self.deg_out[u as usize] += 1;
         self.deg_in[v as usize] += 1;
         self.rels.push((u, v));
@@ -167,36 +133,36 @@ impl GraphBuilder {
     }
 
     /// Set string property (interned)
-    pub fn set_prop_str(&mut self, ext: u64, key: &str, val: &str) {
+    pub fn set_prop_str(&mut self, node_id: NodeId, key: &str, val: &str) {
+        self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         let v = self.interner.get_or_intern(val);
-        let id = self.id_of(ext);
-        self.col_str.entry(k).or_default().push((id, v));
-        self.inv.entry((k, ValueId::Str(v))).or_default().push(id);
+        self.col_str.entry(k).or_default().push((node_id, v));
+        self.inv.entry((k, ValueId::Str(v))).or_default().push(node_id);
     }
 
     /// Set i64 property
-    pub fn set_prop_i64(&mut self, ext: u64, key: &str, val: i64) {
+    pub fn set_prop_i64(&mut self, node_id: NodeId, key: &str, val: i64) {
+        self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
-        self.col_i64.entry(k).or_default().push((id, val));
-        self.inv.entry((k, ValueId::I64(val))).or_default().push(id);
+        self.col_i64.entry(k).or_default().push((node_id, val));
+        self.inv.entry((k, ValueId::I64(val))).or_default().push(node_id);
     }
 
     /// Set f64 property
-    pub fn set_prop_f64(&mut self, ext: u64, key: &str, val: f64) {
+    pub fn set_prop_f64(&mut self, node_id: NodeId, key: &str, val: f64) {
+        self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
-        self.col_f64.entry(k).or_default().push((id, val));
-        self.inv.entry((k, ValueId::from_f64(val))).or_default().push(id);
+        self.col_f64.entry(k).or_default().push((node_id, val));
+        self.inv.entry((k, ValueId::from_f64(val))).or_default().push(node_id);
     }
 
     /// Set boolean property
-    pub fn set_prop_bool(&mut self, ext: u64, key: &str, val: bool) {
+    pub fn set_prop_bool(&mut self, node_id: NodeId, key: &str, val: bool) {
+        self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
-        self.col_bool.entry(k).or_default().push((id, val));
-        self.inv.entry((k, ValueId::Bool(val))).or_default().push(id);
+        self.col_bool.entry(k).or_default().push((node_id, val));
+        self.inv.entry((k, ValueId::Bool(val))).or_default().push(node_id);
     }
 
     /// Get property key ID for a string (returns None if key hasn't been interned yet)
@@ -206,29 +172,28 @@ impl GraphBuilder {
 
     /// Get property value for a node (before finalization)
     /// Returns None if property doesn't exist
-    pub fn get_prop(&self, ext: u64, key: &str) -> Option<ValueId> {
+    pub fn get_prop(&self, node_id: NodeId, key: &str) -> Option<ValueId> {
         let k = self.interner.get_or_intern(key);
-        let id = self.get_id(ext)?;
         
         // Search through staging property vectors
         // Note: This is O(n) per property key, but fine for pre-finalization queries
         if let Some(pairs) = self.col_str.get(&k) {
-            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == id) {
+            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::Str(*val));
             }
         }
         if let Some(pairs) = self.col_i64.get(&k) {
-            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == id) {
+            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::I64(*val));
             }
         }
         if let Some(pairs) = self.col_f64.get(&k) {
-            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == id) {
+            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::from_f64(*val));
             }
         }
         if let Some(pairs) = self.col_bool.get(&k) {
-            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == id) {
+            if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::Bool(*val));
             }
         }
@@ -237,17 +202,16 @@ impl GraphBuilder {
 
     /// Update property value (removes old value, adds new one)
     /// Useful for updating properties based on queries
-    pub fn update_prop_str(&mut self, ext: u64, key: &str, new_val: &str) {
+    pub fn update_prop_str(&mut self, node_id: NodeId, key: &str, new_val: &str) {
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
         
         // Remove old value from inverted index
         if let Some(pairs) = self.col_str.get_mut(&k) {
-            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == id) {
+            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 // Remove from inverted index
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::Str(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == id) {
+                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
                         bucket.remove(pos);
                     }
                 }
@@ -255,20 +219,19 @@ impl GraphBuilder {
         }
         
         // Add new value
-        self.set_prop_str(ext, key, new_val);
+        self.set_prop_str(node_id, key, new_val);
     }
 
     /// Update i64 property
-    pub fn update_prop_i64(&mut self, ext: u64, key: &str, new_val: i64) {
+    pub fn update_prop_i64(&mut self, node_id: NodeId, key: &str, new_val: i64) {
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
         
         // Remove old value
         if let Some(pairs) = self.col_i64.get_mut(&k) {
-            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == id) {
+            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::I64(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == id) {
+                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
                         bucket.remove(pos);
                     }
                 }
@@ -276,20 +239,19 @@ impl GraphBuilder {
         }
         
         // Add new value
-        self.set_prop_i64(ext, key, new_val);
+        self.set_prop_i64(node_id, key, new_val);
     }
 
     /// Update f64 property
-    pub fn update_prop_f64(&mut self, ext: u64, key: &str, new_val: f64) {
+    pub fn update_prop_f64(&mut self, node_id: NodeId, key: &str, new_val: f64) {
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
         
         // Remove old value
         if let Some(pairs) = self.col_f64.get_mut(&k) {
-            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == id) {
+            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::from_f64(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == id) {
+                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
                         bucket.remove(pos);
                     }
                 }
@@ -297,20 +259,19 @@ impl GraphBuilder {
         }
         
         // Add new value
-        self.set_prop_f64(ext, key, new_val);
+        self.set_prop_f64(node_id, key, new_val);
     }
 
     /// Update bool property
-    pub fn update_prop_bool(&mut self, ext: u64, key: &str, new_val: bool) {
+    pub fn update_prop_bool(&mut self, node_id: NodeId, key: &str, new_val: bool) {
         let k = self.interner.get_or_intern(key);
-        let id = self.id_of(ext);
         
         // Remove old value
         if let Some(pairs) = self.col_bool.get_mut(&k) {
-            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == id) {
+            if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::Bool(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == id) {
+                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
                         bucket.remove(pos);
                     }
                 }
@@ -318,12 +279,37 @@ impl GraphBuilder {
         }
         
         // Add new value
-        self.set_prop_bool(ext, key, new_val);
+        self.set_prop_bool(node_id, key, new_val);
     }
 
     /// Get the number of nodes added so far
+    /// This is the highest node ID + 1 (since node IDs are 0-indexed)
     pub fn node_count(&self) -> usize {
-        self.next_id as usize
+        // Find the maximum node ID that has been used
+        let max_node_id = self.node_labels.len()
+            .max(self.deg_out.len())
+            .max(self.deg_in.len())
+            .saturating_sub(1);
+        
+        // Count actual nodes (those with labels, edges, or properties)
+        let mut count = 0;
+        for i in 0..=max_node_id {
+            if i < self.node_labels.len() && !self.node_labels[i].is_empty() {
+                count += 1;
+            } else if i < self.deg_out.len() && (self.deg_out[i] > 0 || self.deg_in[i] > 0) {
+                count += 1;
+            } else {
+                // Check if node has properties
+                let has_props = self.col_i64.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
+                    || self.col_f64.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
+                    || self.col_bool.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
+                    || self.col_str.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId));
+                if has_props {
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 
     /// Get the number of relationships added so far
@@ -346,41 +332,33 @@ impl GraphBuilder {
     }
 
     /// Get node labels (before finalization)
-    pub fn get_node_labels(&self, ext: u64) -> Vec<String> {
-        if let Some(id) = self.get_id(ext) {
-            if let Some(labels) = self.node_labels.get(id as usize) {
-                labels.iter()
-                    .map(|l| self.interner.resolve(l.id()).to_string())
-                    .collect()
-            } else {
-                Vec::new()
-            }
+    pub fn get_node_labels(&self, node_id: NodeId) -> Vec<String> {
+        if let Some(labels) = self.node_labels.get(node_id as usize) {
+            labels.iter()
+                .map(|l| self.interner.resolve(l.id()).to_string())
+                .collect()
         } else {
             Vec::new()
         }
     }
 
     /// Get neighbors of a node (before finalization)
-    /// Returns (outgoing, incoming) neighbors
-    pub fn get_neighbors(&self, ext: u64) -> (Vec<NodeId>, Vec<NodeId>) {
-        if let Some(id) = self.get_id(ext) {
-            let mut outgoing = Vec::new();
-            let mut incoming = Vec::new();
-            
-            // Find outgoing neighbors (where this node is the start)
-            for (start, end) in &self.rels {
-                if *start == id {
-                    outgoing.push(*end);
-                }
-                if *end == id {
-                    incoming.push(*start);
-                }
+    /// Returns (outgoing, incoming) neighbors as node IDs
+    pub fn get_neighbor_ids(&self, node_id: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
+        let mut outgoing = Vec::new();
+        let mut incoming = Vec::new();
+        
+        // Find outgoing neighbors (where this node is the start)
+        for (start, end) in &self.rels {
+            if *start == node_id {
+                outgoing.push(*end);
             }
-            
-            (outgoing, incoming)
-        } else {
-            (Vec::new(), Vec::new())
+            if *end == node_id {
+                incoming.push(*start);
+            }
         }
+        
+        (outgoing, incoming)
     }
 
     /// Finalize the builder into an immutable GraphSnapshot
@@ -393,7 +371,24 @@ impl GraphBuilder {
     ///   If provided, these properties will be indexed upfront (faster queries, more memory).
     ///   If None, all properties will be indexed lazily on first access (saves memory).
     pub fn finalize(self, index_properties: Option<&[PropertyKey]>) -> GraphSnapshot {
-        let n = self.next_id as usize;
+        // Calculate the maximum node ID that has been used
+        // This is the maximum of: node_labels.len(), deg_out.len(), deg_in.len()
+        // and any node IDs in properties
+        let max_node_id_from_vecs = self.node_labels.len()
+            .max(self.deg_out.len())
+            .max(self.deg_in.len())
+            .saturating_sub(1);
+        
+        let max_node_id_from_props = self.col_i64.values()
+            .flat_map(|v| v.iter().map(|(nid, _)| *nid))
+            .chain(self.col_f64.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
+            .chain(self.col_bool.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
+            .chain(self.col_str.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
+            .max()
+            .map(|nid| nid as usize)
+            .unwrap_or(0);
+        
+        let n = (max_node_id_from_vecs.max(max_node_id_from_props) + 1).max(1);
         let m = self.rels.len();
 
         // --- Build CSR (outgoing) ---
@@ -615,7 +610,9 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(1, &["Person"]);
         assert_eq!(builder.node_count(), 1);
-        assert_eq!(builder.get_id(1), Some(0));
+        let labels = builder.get_node_labels(1);
+        assert_eq!(labels.len(), 1);
+        assert!(labels.contains(&"Person".to_string()));
     }
 
     #[test]

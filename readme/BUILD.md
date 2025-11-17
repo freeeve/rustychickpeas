@@ -148,7 +148,22 @@ If you see errors about Python version:
    ```bash
    python3 --version  # Should show 3.10 or higher
    ```
-2. **Python 3.13/3.14**: These versions work but use ABI3 compatibility mode. If you encounter issues, try Python 3.10-3.12 first.
+2. **Python 3.13/3.14**: These versions work but require the ABI3 forward compatibility flag:
+   ```bash
+   # For cargo check/build commands
+   export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+   cargo check --package rustychickpeas-python
+   
+   # For maturin builds, this is automatically handled
+   maturin develop --release
+   ```
+   
+   **Note**: You can add this to your shell config (`.bashrc`, `.zshrc`, etc.) if you're using Python 3.13/3.14:
+   ```bash
+   export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+   ```
+   
+   If you encounter issues, try Python 3.10-3.12 first (these don't need the flag).
 3. **Check your Python version**: Make sure `python3` points to a supported version
    ```bash
    which python3

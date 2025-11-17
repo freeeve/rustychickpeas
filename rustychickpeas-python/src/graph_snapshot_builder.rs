@@ -1,7 +1,7 @@
 //! GraphSnapshotBuilder Python wrapper
 
 use pyo3::prelude::*;
-use pyo3::types::PyBool;
+use pyo3::types::{PyBool, PyDict};
 use rustychickpeas_core::{GraphBuilder, ValueId};
 use crate::graph_snapshot::GraphSnapshot;
 use crate::rusty_chickpeas::RustyChickpeas;
@@ -27,30 +27,44 @@ impl GraphSnapshotBuilder {
     }
 
     /// Add a node with labels
-    fn add_node(&mut self, ext_id: u64, labels: Vec<String>) -> PyResult<()> {
+    /// 
+    /// # Arguments
+    /// * `node_id` - Node ID (must be u32, users should map their own IDs to u32)
+    /// * `labels` - List of label strings
+    fn add_node(&mut self, node_id: u32, labels: Vec<String>) -> PyResult<()> {
         let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-        self.builder.add_node(ext_id, &label_refs);
+        self.builder.add_node(node_id, &label_refs);
         Ok(())
     }
 
     /// Add a relationship
-    fn add_rel(&mut self, ext_u: u64, ext_v: u64, rel_type: String) -> PyResult<()> {
-        self.builder.add_rel(ext_u, ext_v, &rel_type);
+    /// 
+    /// # Arguments
+    /// * `u` - Start node ID (must be u32)
+    /// * `v` - End node ID (must be u32)
+    /// * `rel_type` - Relationship type string
+    fn add_rel(&mut self, u: u32, v: u32, rel_type: String) -> PyResult<()> {
+        self.builder.add_rel(u, v, &rel_type);
         Ok(())
     }
 
     /// Set property with automatic type detection
     /// Automatically calls the correct type-specific method based on the value type
-    fn set_prop(&mut self, ext_id: u64, key: String, value: &PyAny) -> PyResult<()> {
+    /// 
+    /// # Arguments
+    /// * `node_id` - Node ID (must be u32)
+    /// * `key` - Property key string
+    /// * `value` - Property value (str, int, float, or bool)
+    fn set_prop(&mut self, node_id: u32, key: String, value: &PyAny) -> PyResult<()> {
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
-            self.builder.set_prop_bool(ext_id, &key, b);
+            self.builder.set_prop_bool(node_id, &key, b);
         } else if let Ok(s) = value.extract::<String>() {
-            self.builder.set_prop_str(ext_id, &key, &s);
+            self.builder.set_prop_str(node_id, &key, &s);
         } else if let Ok(i) = value.extract::<i64>() {
-            self.builder.set_prop_i64(ext_id, &key, i);
+            self.builder.set_prop_i64(node_id, &key, i);
         } else if let Ok(f) = value.extract::<f64>() {
-            self.builder.set_prop_f64(ext_id, &key, f);
+            self.builder.set_prop_f64(node_id, &key, f);
         } else {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Property value must be str, int, float, or bool"
@@ -59,27 +73,63 @@ impl GraphSnapshotBuilder {
         Ok(())
     }
 
+    /// Set multiple properties at once from a dictionary
+    /// 
+    /// This is more efficient than calling set_prop() multiple times because
+    /// it reduces FFI overhead by batching all property updates in a single call.
+    /// 
+    /// # Arguments
+    /// * `node_id` - Node ID (must be u32)
+    /// * `properties` - Dictionary of property key-value pairs
+    /// 
+    /// # Example
+    /// ```python
+    /// builder.set_props(1, {"name": "Alice", "age": 30, "active": True})
+    /// ```
+    fn set_props(&mut self, node_id: u32, properties: &PyDict) -> PyResult<()> {
+        for (key_obj, value_obj) in properties {
+            let key: String = key_obj.extract()?;
+            let value: &PyAny = value_obj;
+
+            // Check bool first, as True/False can be extracted as int
+            if let Ok(b) = value.extract::<bool>() {
+                self.builder.set_prop_bool(node_id, &key, b);
+            } else if let Ok(s) = value.extract::<String>() {
+                self.builder.set_prop_str(node_id, &key, &s);
+            } else if let Ok(i) = value.extract::<i64>() {
+                self.builder.set_prop_i64(node_id, &key, i);
+            } else if let Ok(f) = value.extract::<f64>() {
+                self.builder.set_prop_f64(node_id, &key, f);
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    format!("Property value for key '{}' must be str, int, float, or bool", key)
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Set string property
-    fn set_prop_str(&mut self, ext_id: u64, key: String, value: String) -> PyResult<()> {
-        self.builder.set_prop_str(ext_id, &key, &value);
+    fn set_prop_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
+        self.builder.set_prop_str(node_id, &key, &value);
         Ok(())
     }
 
     /// Set i64 property
-    fn set_prop_i64(&mut self, ext_id: u64, key: String, value: i64) -> PyResult<()> {
-        self.builder.set_prop_i64(ext_id, &key, value);
+    fn set_prop_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
+        self.builder.set_prop_i64(node_id, &key, value);
         Ok(())
     }
 
     /// Set f64 property
-    fn set_prop_f64(&mut self, ext_id: u64, key: String, value: f64) -> PyResult<()> {
-        self.builder.set_prop_f64(ext_id, &key, value);
+    fn set_prop_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
+        self.builder.set_prop_f64(node_id, &key, value);
         Ok(())
     }
 
     /// Set boolean property
-    fn set_prop_bool(&mut self, ext_id: u64, key: String, value: bool) -> PyResult<()> {
-        self.builder.set_prop_bool(ext_id, &key, value);
+    fn set_prop_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
+        self.builder.set_prop_bool(node_id, &key, value);
         Ok(())
     }
 
@@ -90,7 +140,7 @@ impl GraphSnapshotBuilder {
         node_id_column: Option<String>,
         label_columns: Option<Vec<String>>,
         property_columns: Option<Vec<String>>,
-    ) -> PyResult<Vec<u64>> {
+    ) -> PyResult<Vec<u32>> {
         let label_cols = label_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         
@@ -113,7 +163,7 @@ impl GraphSnapshotBuilder {
         rel_type_column: Option<String>,
         property_columns: Option<Vec<String>>,
         fixed_rel_type: Option<String>,
-    ) -> PyResult<Vec<(u64, u64)>> {
+    ) -> PyResult<Vec<(u32, u32)>> {
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         
         self.builder
@@ -129,8 +179,8 @@ impl GraphSnapshotBuilder {
     }
 
     /// Get property value for a node (before finalization)
-    fn get_property(&self, ext_id: u64, key: String) -> PyResult<Option<PyObject>> {
-        let value_id = self.builder.get_prop(ext_id, &key);
+    fn get_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
+        let value_id = self.builder.get_prop(node_id, &key);
         
         Python::with_gil(|py| {
             if let Some(vid) = value_id {
@@ -152,16 +202,16 @@ impl GraphSnapshotBuilder {
 
     /// Update property with automatic type detection
     /// Automatically calls the correct type-specific method based on the value type
-    fn update_prop(&mut self, ext_id: u64, key: String, value: &PyAny) -> PyResult<()> {
+    fn update_prop(&mut self, node_id: u32, key: String, value: &PyAny) -> PyResult<()> {
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
-            self.builder.update_prop_bool(ext_id, &key, b);
+            self.builder.update_prop_bool(node_id, &key, b);
         } else if let Ok(s) = value.extract::<String>() {
-            self.builder.update_prop_str(ext_id, &key, &s);
+            self.builder.update_prop_str(node_id, &key, &s);
         } else if let Ok(i) = value.extract::<i64>() {
-            self.builder.update_prop_i64(ext_id, &key, i);
+            self.builder.update_prop_i64(node_id, &key, i);
         } else if let Ok(f) = value.extract::<f64>() {
-            self.builder.update_prop_f64(ext_id, &key, f);
+            self.builder.update_prop_f64(node_id, &key, f);
         } else {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Property value must be str, int, float, or bool"
@@ -171,31 +221,31 @@ impl GraphSnapshotBuilder {
     }
 
     /// Update string property (removes old, sets new)
-    fn update_property_str(&mut self, ext_id: u64, key: String, value: String) -> PyResult<()> {
-        self.builder.update_prop_str(ext_id, &key, &value);
+    fn update_property_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
+        self.builder.update_prop_str(node_id, &key, &value);
         Ok(())
     }
 
     /// Update i64 property
-    fn update_property_i64(&mut self, ext_id: u64, key: String, value: i64) -> PyResult<()> {
-        self.builder.update_prop_i64(ext_id, &key, value);
+    fn update_property_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
+        self.builder.update_prop_i64(node_id, &key, value);
         Ok(())
     }
 
     /// Update f64 property
-    fn update_property_f64(&mut self, ext_id: u64, key: String, value: f64) -> PyResult<()> {
-        self.builder.update_prop_f64(ext_id, &key, value);
+    fn update_property_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
+        self.builder.update_prop_f64(node_id, &key, value);
         Ok(())
     }
 
     /// Update boolean property
-    fn update_property_bool(&mut self, ext_id: u64, key: String, value: bool) -> PyResult<()> {
-        self.builder.update_prop_bool(ext_id, &key, value);
+    fn update_property_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
+        self.builder.update_prop_bool(node_id, &key, value);
         Ok(())
     }
 
     /// Get nodes with a specific property value (before finalization)
-    fn get_nodes_with_property(&self, key: String, value: &PyAny) -> PyResult<Vec<u64>> {
+    fn get_nodes_with_property(&self, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
         let prop_value = py_to_property_value(value)?;
         let value_id = match prop_value {
             rustychickpeas_core::PropertyValue::String(_s) => {
@@ -217,25 +267,19 @@ impl GraphSnapshotBuilder {
         };
         
         let node_ids = self.builder.get_nodes_with_property(&key, value_id);
-        // Convert internal NodeIds back to external IDs
-        // We need a reverse mapping - for now, return internal IDs
-        // TODO: Add ext2int reverse mapping or return external IDs
-        Ok(node_ids.iter().map(|&id| id as u64).collect())
+        Ok(node_ids)
     }
 
     /// Get node labels (before finalization)
-    fn get_node_labels(&self, ext_id: u64) -> PyResult<Vec<String>> {
-        Ok(self.builder.get_node_labels(ext_id))
+    fn get_node_labels(&self, node_id: u32) -> PyResult<Vec<String>> {
+        Ok(self.builder.get_node_labels(node_id))
     }
 
     /// Get neighbors of a node (before finalization)
-    /// Returns (outgoing, incoming) as tuple of lists
-    fn get_neighbors(&self, ext_id: u64) -> PyResult<(Vec<u64>, Vec<u64>)> {
-        let (out, inc) = self.builder.get_neighbors(ext_id);
-        // Convert to external IDs - for now return internal IDs
-        // TODO: Add reverse mapping
-        Ok((out.iter().map(|&id| id as u64).collect(),
-            inc.iter().map(|&id| id as u64).collect()))
+    /// Returns (outgoing, incoming) as tuple of lists of node IDs
+    fn get_neighbor_ids(&self, node_id: u32) -> PyResult<(Vec<u32>, Vec<u32>)> {
+        let (out, inc) = self.builder.get_neighbor_ids(node_id);
+        Ok((out, inc))
     }
 
     /// Set the version for this snapshot

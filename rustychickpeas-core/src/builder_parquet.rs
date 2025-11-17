@@ -16,7 +16,7 @@ impl GraphBuilder {
         node_id_column: Option<&str>,
         label_columns: Option<Vec<&str>>,
         property_columns: Option<Vec<&str>>,
-    ) -> Result<Vec<u64>> {
+    ) -> Result<Vec<u32>> {
         // Read Parquet file
         let file = File::open(path)
             .map_err(|e| GraphError::BulkLoadError(format!("Failed to open Parquet file: {}", e)))?;
@@ -70,26 +70,49 @@ impl GraphBuilder {
             }
 
             // Extract node IDs
-            let mut ext_ids = Vec::with_capacity(batch.num_rows());
+            let mut node_ids_batch = Vec::with_capacity(batch.num_rows());
             if let Some(idx) = node_id_idx {
                 let id_col = batch.column(idx);
+                // Support both Int64 and Int32 for node IDs
                 if let Some(int_array) = id_col.as_any().downcast_ref::<Int64Array>() {
                     for i in 0..batch.num_rows() {
                         if int_array.is_null(i) {
-                            ext_ids.push((row_offset + i) as u64 + 1); // Auto-generate
+                            let auto_id = (row_offset + i) as u32 + 1;
+                            node_ids_batch.push(auto_id);
                         } else {
-                            ext_ids.push(int_array.value(i) as u64);
+                            let val = int_array.value(i);
+                            if val < 0 || val > u32::MAX as i64 {
+                                return Err(GraphError::BulkLoadError(
+                                    format!("Node ID {} exceeds u32::MAX ({})", val, u32::MAX)
+                                ));
+                            }
+                            node_ids_batch.push(val as u32);
+                        }
+                    }
+                } else if let Some(int_array) = id_col.as_any().downcast_ref::<Int32Array>() {
+                    for i in 0..batch.num_rows() {
+                        if int_array.is_null(i) {
+                            let auto_id = (row_offset + i) as u32 + 1;
+                            node_ids_batch.push(auto_id);
+                        } else {
+                            let val = int_array.value(i);
+                            if val < 0 {
+                                return Err(GraphError::BulkLoadError(
+                                    format!("Node ID {} cannot be negative", val)
+                                ));
+                            }
+                            node_ids_batch.push(val as u32);
                         }
                     }
                 } else {
                     return Err(GraphError::BulkLoadError(
-                        "Node ID column must be Int64".to_string()
+                        "Node ID column must be Int64 or Int32".to_string()
                     ));
                 }
             } else {
                 // Auto-generate IDs
                 for i in 0..batch.num_rows() {
-                    ext_ids.push((row_offset + i) as u64 + 1);
+                    node_ids_batch.push((row_offset + i) as u32 + 1);
                 }
             }
 
@@ -115,33 +138,33 @@ impl GraphBuilder {
                     let field = schema.field(column_idx);
                     
                     for i in 0..batch.num_rows() {
-                        let ext_id = ext_ids[i];
+                        let node_id = node_ids_batch[i];
                         match field.data_type() {
                             DataType::Utf8 | DataType::LargeUtf8 => {
                                 if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
                                     if !string_array.is_null(i) {
-                                        self.set_prop_str(ext_id, prop_col, string_array.value(i));
+                                        self.set_prop_str(node_id, prop_col, string_array.value(i));
                                     }
                                 }
                             }
                             DataType::Int64 => {
                                 if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
                                     if !int_array.is_null(i) {
-                                        self.set_prop_i64(ext_id, prop_col, int_array.value(i));
+                                        self.set_prop_i64(node_id, prop_col, int_array.value(i));
                                     }
                                 }
                             }
                             DataType::Float64 => {
                                 if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
                                     if !float_array.is_null(i) {
-                                        self.set_prop_f64(ext_id, prop_col, float_array.value(i));
+                                        self.set_prop_f64(node_id, prop_col, float_array.value(i));
                                     }
                                 }
                             }
                             DataType::Boolean => {
                                 if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
                                     if !bool_array.is_null(i) {
-                                        self.set_prop_bool(ext_id, prop_col, bool_array.value(i));
+                                        self.set_prop_bool(node_id, prop_col, bool_array.value(i));
                                     }
                                 }
                             }
@@ -149,7 +172,7 @@ impl GraphBuilder {
                                 // Convert to string
                                 if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
                                     if !string_array.is_null(i) {
-                                        self.set_prop_str(ext_id, prop_col, string_array.value(i));
+                                        self.set_prop_str(node_id, prop_col, string_array.value(i));
                                     }
                                 }
                             }
@@ -159,10 +182,10 @@ impl GraphBuilder {
             }
 
             // Add nodes with labels
-            for (i, ext_id) in ext_ids.iter().enumerate() {
+            for (i, node_id) in node_ids_batch.iter().enumerate() {
                 let labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
-                self.add_node(*ext_id, &labels);
-                node_ids.push(*ext_id);
+                self.add_node(*node_id, &labels);
+                node_ids.push(*node_id);
             }
 
             row_offset += batch.num_rows();
@@ -183,7 +206,7 @@ impl GraphBuilder {
         rel_type_column: Option<&str>,
         property_columns: Option<Vec<&str>>,
         fixed_rel_type: Option<&str>,
-    ) -> Result<Vec<(u64, u64)>> {
+    ) -> Result<Vec<(u32, u32)>> {
         let file = File::open(path)
             .map_err(|e| GraphError::BulkLoadError(format!("Failed to open Parquet file: {}", e)))?;
         
@@ -265,11 +288,31 @@ impl GraphBuilder {
             // Support both Int64 and Int32 for node IDs (LDBC SNB uses both)
             if let Some(int_array) = start_col.as_any().downcast_ref::<Int64Array>() {
                 for i in 0..batch.num_rows() {
-                    start_nodes.push(if int_array.is_null(i) { None } else { Some(int_array.value(i) as u64) });
+                    if int_array.is_null(i) {
+                        start_nodes.push(None);
+                    } else {
+                        let val = int_array.value(i);
+                        if val < 0 || val > u32::MAX as i64 {
+                            return Err(GraphError::BulkLoadError(
+                                format!("Start node ID {} exceeds u32::MAX ({})", val, u32::MAX)
+                            ));
+                        }
+                        start_nodes.push(Some(val as u32));
+                    }
                 }
             } else if let Some(int_array) = start_col.as_any().downcast_ref::<Int32Array>() {
                 for i in 0..batch.num_rows() {
-                    start_nodes.push(if int_array.is_null(i) { None } else { Some(int_array.value(i) as u64) });
+                    if int_array.is_null(i) {
+                        start_nodes.push(None);
+                    } else {
+                        let val = int_array.value(i);
+                        if val < 0 {
+                            return Err(GraphError::BulkLoadError(
+                                format!("Start node ID {} cannot be negative", val)
+                            ));
+                        }
+                        start_nodes.push(Some(val as u32));
+                    }
                 }
             } else {
                 return Err(GraphError::BulkLoadError(
@@ -279,11 +322,31 @@ impl GraphBuilder {
 
             if let Some(int_array) = end_col.as_any().downcast_ref::<Int64Array>() {
                 for i in 0..batch.num_rows() {
-                    end_nodes.push(if int_array.is_null(i) { None } else { Some(int_array.value(i) as u64) });
+                    if int_array.is_null(i) {
+                        end_nodes.push(None);
+                    } else {
+                        let val = int_array.value(i);
+                        if val < 0 || val > u32::MAX as i64 {
+                            return Err(GraphError::BulkLoadError(
+                                format!("End node ID {} exceeds u32::MAX ({})", val, u32::MAX)
+                            ));
+                        }
+                        end_nodes.push(Some(val as u32));
+                    }
                 }
             } else if let Some(int_array) = end_col.as_any().downcast_ref::<Int32Array>() {
                 for i in 0..batch.num_rows() {
-                    end_nodes.push(if int_array.is_null(i) { None } else { Some(int_array.value(i) as u64) });
+                    if int_array.is_null(i) {
+                        end_nodes.push(None);
+                    } else {
+                        let val = int_array.value(i);
+                        if val < 0 {
+                            return Err(GraphError::BulkLoadError(
+                                format!("End node ID {} cannot be negative", val)
+                            ));
+                        }
+                        end_nodes.push(Some(val as u32));
+                    }
                 }
             } else {
                 return Err(GraphError::BulkLoadError(
