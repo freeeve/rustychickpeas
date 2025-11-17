@@ -162,21 +162,23 @@ jobs:
       
       - name: Generate SBOM (CycloneDX)
         run: |
+          mkdir -p reports
           cd dist
           # Generate SBOM for the source distribution
-          cyclonedx-py -o sbom.json -i rustychickpeas-*.tar.gz || echo "SBOM generation skipped (cyclonedx-py may not support source dists directly)"
+          cyclonedx-py -o ../reports/sbom.json -i rustychickpeas-*.tar.gz || echo "SBOM generation skipped (cyclonedx-py may not support source dists directly)"
           # Alternative: generate from installed package
-          pip install dist/*.whl 2>/dev/null || true
-          cyclonedx-py -o sbom.json || echo "SBOM generation completed"
-          cat sbom.json || echo "SBOM file not found"
+          pip install *.whl 2>/dev/null || true
+          cyclonedx-py -o ../reports/sbom.json || echo "SBOM generation completed"
+          cat ../reports/sbom.json || echo "SBOM file not found"
       
       - name: Run vulnerability scan (pip-audit)
         run: |
+          mkdir -p reports
           cd dist
           # Install the package temporarily for audit
           pip install --force-reinstall *.whl 2>/dev/null || pip install *.tar.gz
-          pip-audit --format=json --output=pip-audit.json || pip-audit --output=pip-audit.txt
-          cat pip-audit.json 2>/dev/null || cat pip-audit.txt || echo "Audit completed"
+          pip-audit --format=json --output=../reports/pip-audit.json || pip-audit --output=../reports/pip-audit.txt
+          cat ../reports/pip-audit.json 2>/dev/null || cat ../reports/pip-audit.txt || echo "Audit completed"
       
       - name: Print file hashes
         shell: bash
@@ -202,17 +204,25 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
           echo "Package version: $version"
       
+      - name: Verify distribution files
+        run: |
+          cd dist
+          echo "Files in dist/ before publishing:"
+          ls -lh
+          # Remove any non-distribution files (JSON, txt, etc.) that might have been created
+          find . -type f ! -name "*.whl" ! -name "*.tar.gz" -delete || true
+          echo "Files in dist/ after cleanup:"
+          ls -lh
+      
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # Option 1: Trusted Publishing (recommended - see cursor_md/PYPI_TRUSTED_PUBLISHER.md)
-          # Uncomment after setting up PyPI Trusted Publisher:
-          # trusted-publishing: true
-          
-          # Option 2: API Token (fallback - works immediately)
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          # Trusted Publishing (OIDC) - no API token needed
+          # Requires: PyPI Trusted Publisher configured at https://pypi.org/manage/project/rustychickpeas/settings/publishing/
+          trusted-publishing: true
           
           # Production PyPI (no repository-url needed, defaults to pypi.org)
+          # The action automatically publishes only .whl and .tar.gz files from dist/
           skip-existing: true
           print-hash: true 
       
