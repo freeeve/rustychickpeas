@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "High-performance in-memory graph database core implementation using RoaringBitmaps"
+repository = "https://github.com/freeeve/rustychickpeas"
+homepage = "https://github.com/freeeve/rustychickpeas"
+documentation = "https://github.com/freeeve/rustychickpeas#readme"
 
 [dependencies]
 roaring = { workspace = true }

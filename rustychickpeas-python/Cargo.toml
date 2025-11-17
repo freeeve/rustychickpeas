@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Python bindings for rustychickpeas-core via PyO3"
+repository = "https://github.com/freeeve/rustychickpeas"
+homepage = "https://github.com/freeeve/rustychickpeas"
+documentation = "https://github.com/freeeve/rustychickpeas#readme"
 
 [lib]
 name = "rustychickpeas"

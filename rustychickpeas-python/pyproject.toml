@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "rustychickpeas"
 version = "0.1.0"
 description = "High-performance in-memory graph API with RoaringBitmaps, Python bindings via PyO3"
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT OR Apache-2.0"}
 authors = [
