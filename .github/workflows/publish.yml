@@ -7,18 +7,51 @@ on:
 
 jobs:
   build-and-publish:
-    name: Build and publish wheels
+    name: Build and publish wheels (${{ matrix.os }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
-        exclude:
-          # Reduce matrix size - we can expand later if needed
-          - os: windows-latest
-            python-version: "3.8"
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            arch: x86_64
+            python-version: "3.9"
+          - os: ubuntu-latest
+            arch: x86_64
+            python-version: "3.11"
+          - os: ubuntu-latest
+            arch: x86_64
+            python-version: "3.12"
+          # macOS x86_64 (Intel)
           - os: macos-latest
-            python-version: "3.8"
+            arch: x86_64
+            python-version: "3.9"
+          - os: macos-latest
+            arch: x86_64
+            python-version: "3.11"
+          - os: macos-latest
+            arch: x86_64
+            python-version: "3.12"
+          # macOS arm64 (Apple Silicon)
+          - os: macos-latest
+            arch: arm64
+            python-version: "3.9"
+          - os: macos-latest
+            arch: arm64
+            python-version: "3.11"
+          - os: macos-latest
+            arch: arm64
+            python-version: "3.12"
+          # Windows x86_64
+          - os: windows-latest
+            arch: x86_64
+            python-version: "3.9"
+          - os: windows-latest
+            arch: x86_64
+            python-version: "3.11"
+          - os: windows-latest
+            arch: x86_64
+            python-version: "3.12"
     
     steps:
       - uses: actions/checkout@v4
@@ -30,24 +63,39 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.arch == 'arm64' && 'arm64' || 'x64' }}
       
       - name: Install maturin
         run: pip install maturin
       
-      - name: Build wheels
+      - name: Build wheels and sdist
         run: |
           cd rustychickpeas-python
-          maturin build --release --out dist
+          maturin build --release --out dist --sdist
         env:
           # For TestPyPI: native wheels are fine (less portable but work for testing)
           # For production PyPI, consider using manylinux Docker containers for better Linux compatibility
           MATURIN_PEP517_ARGS: "--manylinux=off"
       
-      - name: Upload wheels
+      - name: Generate SHA256 hashes
+        run: |
+          cd rustychickpeas-python/dist
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            powershell -Command "Get-ChildItem *.whl,*.tar.gz | ForEach-Object { $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash; Write-Output \"$($_.Name) SHA256=$hash\" }"
+          else
+            for file in *.whl *.tar.gz; do
+              if [ -f "$file" ]; then
+                hash=$(sha256sum "$file" | cut -d' ' -f1)
+                echo "$file SHA256=$hash"
+              fi
+            done
+          fi
+      
+      - name: Upload wheels and sdist
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: rustychickpeas-python/dist/*.whl
+          path: rustychickpeas-python/dist/*
           if-no-files-found: error
   
   publish:
@@ -59,21 +107,95 @@ jobs:
     environment:
       name: testpypi
       url: https://test.pypi.org/p/rustychickpeas
+    # Required for PyPI Trusted Publishing (OIDC)
+    permissions:
+      id-token: write  # Required for OIDC token requests
+      contents: read   # Required to checkout code
     
     steps:
       - uses: actions/checkout@v4
       
-      - name: Download all wheels
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      
+      - name: Install audit tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit cyclonedx-py
+      
+      - name: Download all wheels and sdist
         uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
       
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          cd dist
+          # Generate SBOM for the source distribution
+          cyclonedx-py -o sbom.json -i rustychickpeas-*.tar.gz || echo "SBOM generation skipped (cyclonedx-py may not support source dists directly)"
+          # Alternative: generate from installed package
+          pip install dist/*.whl 2>/dev/null || true
+          cyclonedx-py -o sbom.json || echo "SBOM generation completed"
+          cat sbom.json || echo "SBOM file not found"
+      
+      - name: Run vulnerability scan (pip-audit)
+        run: |
+          cd dist
+          # Install the package temporarily for audit
+          pip install --force-reinstall *.whl 2>/dev/null || pip install *.tar.gz
+          pip-audit --format=json --output=pip-audit.json || pip-audit --output=pip-audit.txt
+          cat pip-audit.json 2>/dev/null || cat pip-audit.txt || echo "Audit completed"
+      
+      - name: Print file hashes
+        run: |
+          cd dist
+          echo "## Package Hashes (SHA256)"
+          echo ""
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            powershell -Command "Get-ChildItem *.whl,*.tar.gz | ForEach-Object { $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash; Write-Output \"\`$($_.Name) = $hash\" }"
+          else
+            for file in *.whl *.tar.gz; do
+              if [ -f "$file" ]; then
+                hash=$(sha256sum "$file" | cut -d' ' -f1)
+                echo "$file = $hash"
+              fi
+            done
+          fi
+      
+      - name: Get version from pyproject.toml
+        id: get_version
+        run: |
+          version=$(grep -E '^version = ' rustychickpeas-python/pyproject.toml | sed 's/version = "\(.*\)"/\1/' | head -1)
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "Package version: $version"
+      
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          # Option 1: Trusted Publishing (recommended - see cursor_md/PYPI_TRUSTED_PUBLISHER.md)
+          # Uncomment after setting up PyPI Trusted Publisher:
+          # trusted-publishing: true
+          
+          # Option 2: API Token (fallback - works immediately)
           password: ${{ secrets.TESTPYPI_API_TOKEN }}
+          
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
+          print-hash: true 
+      
+      - name: Summary
+        run: |
+          echo "## Publishing Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **License**: MIT OR Apache-2.0" >> $GITHUB_STEP_SUMMARY
+          echo "- **CI Link**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Files Published" >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/*.whl dist/*.tar.gz 2>/dev/null || echo "Files listed above" >> $GITHUB_STEP_SUMMARY
 

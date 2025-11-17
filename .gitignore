@@ -68,3 +68,7 @@ test_*.parquet
 # LDBC data (large files)
 ldbc_data/
 cursor_md/
+
+# GPG keys (public keys are safe to share, but keeping private)
+*.asc
+.gnupg-keygen-batch

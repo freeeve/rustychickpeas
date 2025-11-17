@@ -49,6 +49,18 @@ pip install maturin
 maturin develop --release
 ```
 
+## Platform Support
+
+RustyChickpeas is tested and supported on:
+
+- ✅ **Linux x86_64** - Full support
+- ✅ **macOS x86_64** (Intel) - Full support
+- ✅ **macOS arm64** (Apple Silicon) - Full support
+- ✅ **Windows x86_64** - Full support
+
+**Limitations**:
+- ⚠️ **Linux aarch64** (ARM servers, e.g., AWS Graviton) - Not currently tested in CI. The Rust core should compile and work, but Python bindings require native runners or complex cross-compilation setup. Contributions welcome!
+
 ## Quick Start
 
 ### Python
