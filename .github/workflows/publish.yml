@@ -68,6 +68,10 @@ jobs:
       - name: Install maturin
         run: pip install maturin
       
+      - name: Copy README for sdist
+        run: |
+          cp README.md rustychickpeas-python/README.md
+      
       - name: Build wheels and sdist
         run: |
           cd rustychickpeas-python
