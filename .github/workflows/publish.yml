@@ -231,7 +231,7 @@ jobs:
           echo "## Publishing Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **License**: MIT OR Apache-2.0" >> $GITHUB_STEP_SUMMARY
+          echo "- **License**: MIT" >> $GITHUB_STEP_SUMMARY
           echo "- **CI Link**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Tag**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
