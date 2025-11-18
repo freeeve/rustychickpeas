@@ -73,11 +73,14 @@ def test_add_relationship():
     assert snapshot.n_rels() == 1
     
     # Check relationships (using node IDs 0->1)
+    # get_neighbors() returns Node objects, not IDs
     neighbors = snapshot.get_neighbors(0, Direction.Outgoing)
-    assert 1 in neighbors
+    assert len(neighbors) == 1
+    assert neighbors[0].id() == 1
     
     neighbors = snapshot.get_neighbors(1, Direction.Incoming)
-    assert 0 in neighbors
+    assert len(neighbors) == 1
+    assert neighbors[0].id() == 0
 
 
 def test_set_node_property():
