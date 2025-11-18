@@ -138,7 +138,9 @@ jobs:
           cd rustychickpeas-core
           # cargo-tarpaulin --out Lcov creates lcov.info in the workspace root
           # Use --root to set the base path for relative file paths in LCOV
+          # Use --package to only test rustychickpeas-core (exclude Python bindings which need Python)
           cargo tarpaulin \
+            --package rustychickpeas-core \
             --exclude-files '*/tests/*' \
             --exclude-files '*/benches/*' \
             --exclude-files '*/target/*' \
