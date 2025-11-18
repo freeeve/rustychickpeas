@@ -210,13 +210,12 @@ impl GraphBuilder {
         self.node_col_str.entry(k).or_default().push((node_id, v));
         let push_time = start.map(|s| s.elapsed());
         
-        let start = if should_time { Some(std::time::Instant::now()) } else { None };
-        self.inv.entry((k, ValueId::Str(v))).or_default().push(node_id);
-        let inv_time = start.map(|s| s.elapsed());
+        // Inverted index is now built lazily on first query (see get_nodes_with_property)
+        // This significantly speeds up bulk loading
         
         if should_time && count < 10 {
-            eprintln!("[RUST TIMING] set_prop_str #{}: ensure={:?}, key={:?}, val={:?}, push={:?}, inv={:?}", 
-                count, ensure_time, key_time, val_time, push_time, inv_time);
+            eprintln!("[RUST TIMING] set_prop_str #{}: ensure={:?}, key={:?}, val={:?}, push={:?}", 
+                count, ensure_time, key_time, val_time, push_time);
         }
     }
 
@@ -225,7 +224,7 @@ impl GraphBuilder {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         self.node_col_i64.entry(k).or_default().push((node_id, val));
-        self.inv.entry((k, ValueId::I64(val))).or_default().push(node_id);
+        // Inverted index is now built lazily on first query (see get_nodes_with_property)
     }
 
     /// Set f64 property
@@ -233,7 +232,7 @@ impl GraphBuilder {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         self.node_col_f64.entry(k).or_default().push((node_id, val));
-        self.inv.entry((k, ValueId::from_f64(val))).or_default().push(node_id);
+        // Inverted index is now built lazily on first query (see get_nodes_with_property)
     }
 
     /// Set boolean property
@@ -241,7 +240,7 @@ impl GraphBuilder {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         self.node_col_bool.entry(k).or_default().push((node_id, val));
-        self.inv.entry((k, ValueId::Bool(val))).or_default().push(node_id);
+        // Inverted index is now built lazily on first query (see get_nodes_with_property)
     }
 
     /// Find relationship index by (u, v, rel_type)
@@ -331,20 +330,14 @@ impl GraphBuilder {
     pub fn update_prop_str(&mut self, node_id: NodeId, key: &str, new_val: &str) {
         let k = self.interner.get_or_intern(key);
         
-        // Remove old value from inverted index
+        // Remove old value from property column
         if let Some(pairs) = self.node_col_str.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
-                let old_val = pairs.remove(pos).1;
-                // Remove from inverted index
-                if let Some(bucket) = self.inv.get_mut(&(k, ValueId::Str(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
-                        bucket.remove(pos);
-                    }
-                }
+                pairs.remove(pos);
             }
         }
         
-        // Add new value
+        // Add new value (inverted index is built lazily, so no need to update it)
         self.set_prop_str(node_id, key, new_val);
     }
 
@@ -352,19 +345,14 @@ impl GraphBuilder {
     pub fn update_prop_i64(&mut self, node_id: NodeId, key: &str, new_val: i64) {
         let k = self.interner.get_or_intern(key);
         
-        // Remove old value
+        // Remove old value from property column
         if let Some(pairs) = self.node_col_i64.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
-                let old_val = pairs.remove(pos).1;
-                if let Some(bucket) = self.inv.get_mut(&(k, ValueId::I64(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
-                        bucket.remove(pos);
-                    }
-                }
+                pairs.remove(pos);
             }
         }
         
-        // Add new value
+        // Add new value (inverted index is built lazily, so no need to update it)
         self.set_prop_i64(node_id, key, new_val);
     }
 
@@ -372,19 +360,14 @@ impl GraphBuilder {
     pub fn update_prop_f64(&mut self, node_id: NodeId, key: &str, new_val: f64) {
         let k = self.interner.get_or_intern(key);
         
-        // Remove old value
+        // Remove old value from property column
         if let Some(pairs) = self.node_col_f64.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
-                let old_val = pairs.remove(pos).1;
-                if let Some(bucket) = self.inv.get_mut(&(k, ValueId::from_f64(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
-                        bucket.remove(pos);
-                    }
-                }
+                pairs.remove(pos);
             }
         }
         
-        // Add new value
+        // Add new value (inverted index is built lazily, so no need to update it)
         self.set_prop_f64(node_id, key, new_val);
     }
 
@@ -392,19 +375,14 @@ impl GraphBuilder {
     pub fn update_prop_bool(&mut self, node_id: NodeId, key: &str, new_val: bool) {
         let k = self.interner.get_or_intern(key);
         
-        // Remove old value
+        // Remove old value from property column
         if let Some(pairs) = self.node_col_bool.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
-                let old_val = pairs.remove(pos).1;
-                if let Some(bucket) = self.inv.get_mut(&(k, ValueId::Bool(old_val))) {
-                    if let Some(pos) = bucket.iter().position(|&nid| nid == node_id) {
-                        bucket.remove(pos);
-                    }
-                }
+                pairs.remove(pos);
             }
         }
         
-        // Add new value
+        // Add new value (inverted index is built lazily, so no need to update it)
         self.set_prop_bool(node_id, key, new_val);
     }
 
@@ -449,12 +427,60 @@ impl GraphBuilder {
     }
 
     /// Get nodes with a specific property value (before finalization)
-    /// Uses the inverted index built during property insertion
+    /// Builds the inverted index lazily on first access for this key/value
     pub fn get_nodes_with_property(&self, key: &str, value: ValueId) -> Vec<NodeId> {
         let k = self.interner.get_or_intern(key);
-        self.inv.get(&(k, value))
-            .map(|bucket| bucket.clone())
-            .unwrap_or_default()
+        
+        // Check if already in inverted index (lazy building)
+        if let Some(bucket) = self.inv.get(&(k, value)) {
+            return bucket.clone();
+        }
+        
+        // Build inverted index lazily by scanning property columns
+        // This is slower on first access but much faster during bulk loading
+        let mut nodes = Vec::new();
+        
+        // Check i64 column
+        if let Some(pairs) = self.node_col_i64.get(&k) {
+            for (node_id, val) in pairs {
+                if ValueId::I64(*val) == value {
+                    nodes.push(*node_id);
+                }
+            }
+        }
+        
+        // Check f64 column
+        if let Some(pairs) = self.node_col_f64.get(&k) {
+            for (node_id, val) in pairs {
+                if ValueId::from_f64(*val) == value {
+                    nodes.push(*node_id);
+                }
+            }
+        }
+        
+        // Check bool column
+        if let Some(pairs) = self.node_col_bool.get(&k) {
+            for (node_id, val) in pairs {
+                if ValueId::Bool(*val) == value {
+                    nodes.push(*node_id);
+                }
+            }
+        }
+        
+        // Check str column
+        if let Some(pairs) = self.node_col_str.get(&k) {
+            for (node_id, val_id) in pairs {
+                if ValueId::Str(*val_id) == value {
+                    nodes.push(*node_id);
+                }
+            }
+        }
+        
+        // Cache the result in inverted index for future queries
+        // Note: We need mutable access, but this is a read-only method
+        // For now, we'll just return the result without caching
+        // The inverted index will be built during finalize() if needed
+        nodes
     }
 
     /// Get node labels (before finalization)
@@ -651,6 +677,81 @@ impl GraphBuilder {
             })
             .collect();
 
+        // --- Build property indexes (optional, for specified keys) ---
+        // Do this BEFORE moving property columns, so we can read from them
+        let mut prop_index: hashbrown::HashMap<PropertyKey, hashbrown::HashMap<ValueId, NodeSet>> = hashbrown::HashMap::new();
+        
+        if let Some(keys_to_index) = index_properties {
+            // Build indexes for specified property keys from property columns
+            // Since we're not building inv during property setting, we need to build it from columns
+            use rayon::prelude::*;
+            
+            // Build inverted index from property columns
+            let mut inv_map: hashbrown::HashMap<(PropertyKey, ValueId), Vec<NodeId>> = hashbrown::HashMap::new();
+            
+            // Process i64 columns
+            for (key, pairs) in &self.node_col_i64 {
+                if keys_to_index.contains(key) {
+                    for (node_id, val) in pairs {
+                        inv_map.entry((*key, ValueId::I64(*val))).or_default().push(*node_id);
+                    }
+                }
+            }
+            
+            // Process f64 columns
+            for (key, pairs) in &self.node_col_f64 {
+                if keys_to_index.contains(key) {
+                    for (node_id, val) in pairs {
+                        inv_map.entry((*key, ValueId::from_f64(*val))).or_default().push(*node_id);
+                    }
+                }
+            }
+            
+            // Process bool columns
+            for (key, pairs) in &self.node_col_bool {
+                if keys_to_index.contains(key) {
+                    for (node_id, val) in pairs {
+                        inv_map.entry((*key, ValueId::Bool(*val))).or_default().push(*node_id);
+                    }
+                }
+            }
+            
+            // Process str columns
+            for (key, pairs) in &self.node_col_str {
+                if keys_to_index.contains(key) {
+                    for (node_id, val_id) in pairs {
+                        inv_map.entry((*key, ValueId::Str(*val_id))).or_default().push(*node_id);
+                    }
+                }
+            }
+            
+            // Group by property key first
+            let mut by_key: hashbrown::HashMap<PropertyKey, Vec<(ValueId, Vec<NodeId>)>> = hashbrown::HashMap::new();
+            for ((key, val_id), bucket) in inv_map {
+                if keys_to_index.contains(&key) {
+                    by_key.entry(key).or_default().push((val_id, bucket));
+                }
+            }
+            
+            // Build indexes in parallel for each key
+            let by_key_vec: Vec<(PropertyKey, Vec<(ValueId, Vec<NodeId>)>)> = by_key.into_iter().collect();
+            let prop_index_vec: Vec<(PropertyKey, hashbrown::HashMap<ValueId, NodeSet>)> = by_key_vec
+                .into_par_iter()
+                .map(|(key, buckets)| {
+                    let mut key_index: hashbrown::HashMap<ValueId, NodeSet> = hashbrown::HashMap::new();
+                    for (val_id, mut bucket) in buckets {
+                        bucket.sort_unstable();
+                        bucket.dedup();
+                        let bitmap = RoaringBitmap::from_sorted_iter(bucket.into_iter()).unwrap();
+                        key_index.insert(val_id, NodeSet::new(bitmap));
+                    }
+                    (key, key_index)
+                })
+                .collect();
+            
+            prop_index.extend(prop_index_vec);
+        }
+        
         // --- Build property columns ---
         let mut columns: HashMap<PropertyKey, Column> = HashMap::new();
         
@@ -818,40 +919,6 @@ impl GraphBuilder {
             }
         }
 
-        // --- Build property indexes (optional, for specified keys) ---
-        let mut prop_index: hashbrown::HashMap<PropertyKey, hashbrown::HashMap<ValueId, NodeSet>> = hashbrown::HashMap::new();
-        
-        if let Some(keys_to_index) = index_properties {
-            // Build indexes for specified property keys using inv buckets (faster than scanning columns)
-            use rayon::prelude::*;
-            let inv_vec: Vec<((PropertyKey, ValueId), Vec<NodeId>)> = self.inv.into_iter().collect();
-            
-            // Group by property key first
-            let mut by_key: hashbrown::HashMap<PropertyKey, Vec<(ValueId, Vec<NodeId>)>> = hashbrown::HashMap::new();
-            for ((key, val_id), bucket) in inv_vec {
-                if keys_to_index.contains(&key) {
-                    by_key.entry(key).or_default().push((val_id, bucket));
-                }
-            }
-            
-            // Build indexes in parallel for each key
-            let by_key_vec: Vec<(PropertyKey, Vec<(ValueId, Vec<NodeId>)>)> = by_key.into_iter().collect();
-            let prop_index_vec: Vec<(PropertyKey, hashbrown::HashMap<ValueId, NodeSet>)> = by_key_vec
-                .into_par_iter()
-                .map(|(key, buckets)| {
-                    let mut key_index: hashbrown::HashMap<ValueId, NodeSet> = hashbrown::HashMap::new();
-                    for (val_id, mut bucket) in buckets {
-                        bucket.sort_unstable();
-                        bucket.dedup();
-                        let bitmap = RoaringBitmap::from_sorted_iter(bucket.into_iter()).unwrap();
-                        key_index.insert(val_id, NodeSet::new(bitmap));
-                    }
-                    (key, key_index)
-                })
-                .collect();
-            
-            prop_index.extend(prop_index_vec);
-        }
         // If index_properties is None, indexes will be built lazily on first access
 
         // --- Atoms (interned strings) ---

@@ -176,6 +176,7 @@ impl GraphBuilder {
 
         // Stream batches and process them immediately (no accumulation in memory)
         let mut node_ids = Vec::new();
+        let mut seen_node_ids = std::collections::HashSet::new(); // Track seen node IDs for O(1) lookup
         let mut row_offset = 0;
         let mut first_batch = true;
 
@@ -260,7 +261,12 @@ impl GraphBuilder {
             // Process each row with deduplication if enabled
             // First, extract unique property values for deduplication
             // OPTIMIZATION: Pre-compute column indices once per batch instead of per row
-            let mut dedup_keys_per_row: Vec<Option<crate::types::DedupKey>> = vec![None; batch.num_rows()];
+            // Only allocate dedup_keys_per_row if deduplication is enabled
+            let mut dedup_keys_per_row: Vec<Option<crate::types::DedupKey>> = if unique_properties.is_some() {
+                vec![None; batch.num_rows()]
+            } else {
+                Vec::new() // Empty vec when deduplication is disabled
+            };
             if let Some(ref unique_props) = unique_properties {
                 // Pre-compute column indices and arrays for unique properties
                 let mut dedup_columns: Vec<(usize, &arrow::datatypes::Field, arrow::array::ArrayRef)> = Vec::new();
@@ -366,31 +372,33 @@ impl GraphBuilder {
             let mut processed_in_dedup: std::collections::HashSet<usize> = std::collections::HashSet::new();
             let mut dedup_updates: Vec<(usize, u32, Vec<String>)> = Vec::new(); // (row_index, existing_node_id, merged_labels)
             
-            // First pass: check for duplicates and prepare updates
+            // First pass: check for duplicates and prepare updates (only if deduplication is enabled)
             // OPTIMIZATION: Use a HashSet to track which node_ids we've already seen labels for
             let mut labels_cache: hashbrown::HashMap<u32, Vec<String>> = hashbrown::HashMap::new();
-            for i in 0..batch.num_rows() {
-                if let Some(Some(ref dedup_key)) = dedup_keys_per_row.get(i) {
-                    if let Some(&existing_node_id) = self.dedup_map.get(dedup_key) {
-                        // Use existing node_id, merge labels
-                        node_ids_batch[i] = existing_node_id;
-                        // Get or compute existing labels (cache to avoid repeated lookups)
-                        let existing_labels = labels_cache.entry(existing_node_id).or_insert_with(|| {
-                            self.get_node_labels(existing_node_id)
-                        });
-                        let new_labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
-                        // Merge labels efficiently
-                        for label in &new_labels {
-                            if !existing_labels.iter().any(|l| l == label) {
-                                existing_labels.push(label.to_string());
+            if !dedup_keys_per_row.is_empty() {
+                for i in 0..batch.num_rows() {
+                    if let Some(Some(ref dedup_key)) = dedup_keys_per_row.get(i) {
+                        if let Some(&existing_node_id) = self.dedup_map.get(dedup_key) {
+                            // Use existing node_id, merge labels
+                            node_ids_batch[i] = existing_node_id;
+                            // Get or compute existing labels (cache to avoid repeated lookups)
+                            let existing_labels = labels_cache.entry(existing_node_id).or_insert_with(|| {
+                                self.get_node_labels(existing_node_id)
+                            });
+                            let new_labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
+                            // Merge labels efficiently
+                            for label in &new_labels {
+                                if !existing_labels.iter().any(|l| l == label) {
+                                    existing_labels.push(label.to_string());
+                                }
                             }
+                            dedup_updates.push((i, existing_node_id, existing_labels.clone()));
+                            processed_in_dedup.insert(i);
+                        } else {
+                            // First time seeing this combination, add to map
+                            // OPTIMIZATION: DedupKey uses Copy for small tuples, so cloning is cheap
+                            self.dedup_map.insert(dedup_key.clone(), node_ids_batch[i]);
                         }
-                        dedup_updates.push((i, existing_node_id, existing_labels.clone()));
-                        processed_in_dedup.insert(i);
-                    } else {
-                        // First time seeing this combination, add to map
-                        // OPTIMIZATION: DedupKey uses Copy for small tuples, so cloning is cheap
-                        self.dedup_map.insert(dedup_key.clone(), node_ids_batch[i]);
                     }
                 }
             }
@@ -478,7 +486,8 @@ impl GraphBuilder {
                     self.add_node(*node_id, &labels);
                 }
                 // Only add to node_ids if this is the first time we're seeing this node_id
-                if !node_ids.contains(node_id) {
+                // Use HashSet for O(1) lookup instead of Vec.contains() which is O(n)
+                if seen_node_ids.insert(*node_id) {
                     node_ids.push(*node_id);
                 }
             }
