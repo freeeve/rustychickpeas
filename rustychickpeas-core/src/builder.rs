@@ -568,40 +568,39 @@ impl GraphBuilder {
         
         // Count actual nodes (those with labels, edges, or properties)
         // This is important for sparse graphs where node IDs may have gaps
-        // Use a HashSet for O(1) insertion and O(n) counting, much faster than a large vector
-        use std::collections::HashSet;
-        let mut nodes_with_data = HashSet::new();
+        // Use RoaringBitmap for O(1) insertion and efficient counting - more memory efficient than HashSet
+        let mut nodes_with_data = RoaringBitmap::new();
         
         // Mark nodes with labels
         for (i, labels) in self.node_labels.iter().enumerate().take(max_used_node_id + 1) {
             if !labels.is_empty() {
-                nodes_with_data.insert(i);
+                nodes_with_data.insert(i as u32);
             }
         }
         
         // Mark nodes with edges
         for i in 0..=max_node_id_from_edges {
             if i < self.deg_out.len() && (self.deg_out[i] > 0 || self.deg_in[i] > 0) {
-                nodes_with_data.insert(i);
+                nodes_with_data.insert(i as u32);
             }
         }
         
         // Mark nodes with properties
         for (nid, _) in self.node_col_i64.values().flat_map(|v| v.iter()) {
-            nodes_with_data.insert(*nid as usize);
+            nodes_with_data.insert(*nid);
         }
         for (nid, _) in self.node_col_f64.values().flat_map(|v| v.iter()) {
-            nodes_with_data.insert(*nid as usize);
+            nodes_with_data.insert(*nid);
         }
         for (nid, _) in self.node_col_bool.values().flat_map(|v| v.iter()) {
-            nodes_with_data.insert(*nid as usize);
+            nodes_with_data.insert(*nid);
         }
         for (nid, _) in self.node_col_str.values().flat_map(|v| v.iter()) {
-            nodes_with_data.insert(*nid as usize);
+            nodes_with_data.insert(*nid);
         }
         
         // Count nodes with data
-        let actual_node_count = nodes_with_data.len();
+        let actual_node_count = nodes_with_data.len() as usize;
         
         // Use max_used_node_id + 1 for array sizing (CSR needs dense arrays)
         // But store actual_node_count as n_nodes

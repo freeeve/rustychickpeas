@@ -12,6 +12,7 @@ use std::fs::File;
 use std::sync::Arc;
 use hashbrown::HashMap;
 use futures::TryStreamExt;
+use roaring::RoaringBitmap;
 
 /// Enum to handle both sync (local file) and async (S3) Parquet readers
 enum ParquetReaderEnum {
@@ -176,7 +177,7 @@ impl GraphBuilder {
 
         // Stream batches and process them immediately (no accumulation in memory)
         let mut node_ids = Vec::new();
-        let mut seen_node_ids = std::collections::HashSet::new(); // Track seen node IDs for O(1) lookup
+        let mut seen_node_ids = RoaringBitmap::new(); // Track seen node IDs with bitmap (memory efficient, fast)
         let mut row_offset = 0;
         let mut first_batch = true;
 
@@ -486,7 +487,7 @@ impl GraphBuilder {
                     self.add_node(*node_id, &labels);
                 }
                 // Only add to node_ids if this is the first time we're seeing this node_id
-                // Use HashSet for O(1) lookup instead of Vec.contains() which is O(n)
+                // Use RoaringBitmap for O(1) lookup - more memory efficient than HashSet for dense IDs
                 if seen_node_ids.insert(*node_id) {
                     node_ids.push(*node_id);
                 }
