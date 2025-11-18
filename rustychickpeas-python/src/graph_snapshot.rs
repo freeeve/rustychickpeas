@@ -315,7 +315,7 @@ impl GraphSnapshot {
         let mut nodes = HashSet::new();
         
         // Add nodes with labels
-        for (label, node_set) in &self.snapshot.label_index {
+        for (_label, node_set) in &self.snapshot.label_index {
             for node_id in node_set.iter() {
                 nodes.insert(node_id);
             }
