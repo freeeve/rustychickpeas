@@ -13,8 +13,13 @@ documentation = "https://github.com/freeeve/rustychickpeas#readme"
 roaring = { workspace = true }
 thiserror = { workspace = true }
 lasso = { workspace = true }
-parquet = { workspace = true }
+parquet = { workspace = true, features = ["async", "object_store"] }
 arrow = { workspace = true }
+object_store = { version = "0.12", features = ["aws", "gcp", "azure"] }
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+bytes = "1.5"
+futures = "0.3"
 bitvec = "1.0"
 hashbrown = "0.16"
 rayon = "1.8"
@@ -22,6 +27,8 @@ rayon = "1.8"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 rand = "0.8"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+serde_json = "1.0"
 tempfile = "3.8"
 
 [[bench]]

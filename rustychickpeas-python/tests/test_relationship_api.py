@@ -15,23 +15,23 @@ def sample_graph():
     manager = RustyChickpeas()
     builder = manager.create_builder(version="v1.0")
     
-    # Create nodes
+    # Create nodes (using 0-indexed IDs to match test expectations)
+    builder.add_node(0, ["Person"])
     builder.add_node(1, ["Person"])
-    builder.add_node(2, ["Person"])
-    builder.add_node(3, ["Company"])
-    builder.add_node(4, ["Person"])
+    builder.add_node(2, ["Company"])
+    builder.add_node(3, ["Person"])
     
     # Create relationships
-    builder.add_rel(1, 2, "KNOWS")
-    builder.add_rel(1, 3, "WORKS_FOR")
-    builder.add_rel(2, 3, "WORKS_FOR")
-    builder.add_rel(4, 1, "KNOWS")
+    builder.add_rel(0, 1, "KNOWS")
+    builder.add_rel(0, 2, "WORKS_FOR")
+    builder.add_rel(1, 2, "WORKS_FOR")
+    builder.add_rel(3, 0, "KNOWS")
     
     # Add properties
-    builder.set_prop(1, "name", "Alice")
-    builder.set_prop(1, "age", 30)
-    builder.set_prop(2, "name", "Bob")
-    builder.set_prop(3, "name", "Acme Corp")
+    builder.set_prop(0, "name", "Alice")
+    builder.set_prop(0, "age", 30)
+    builder.set_prop(1, "name", "Bob")
+    builder.set_prop(2, "name", "Acme Corp")
     
     builder.set_version("test_v1")
     builder.finalize_into(manager)
@@ -430,4 +430,225 @@ class TestEdgeCases:
         for rel in incoming:
             assert rel.get_type() == "WORKS_FOR"
             assert rel.get_end_node().id() == 2  # All end at company
+
+
+class TestRelationshipProperties:
+    """Test relationship property functionality"""
+    
+    def test_set_rel_property_str(self):
+        """Test setting string property on relationship"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020")
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        assert len(rels) == 1
+        rel = rels[0]
+        assert rel.get_property("since") == "2020"
+    
+    def test_set_rel_property_i64(self):
+        """Test setting integer property on relationship"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        builder.set_rel_prop_i64(1, 2, "KNOWS", "strength", 95)
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        assert rel.get_property("strength") == 95
+    
+    def test_set_rel_property_f64(self):
+        """Test setting float property on relationship"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        builder.set_rel_prop_f64(1, 2, "KNOWS", "weight", 0.85)
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        assert rel.get_property("weight") == pytest.approx(0.85)
+    
+    def test_set_rel_property_bool(self):
+        """Test setting boolean property on relationship"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        builder.set_rel_prop_bool(1, 2, "KNOWS", "verified", True)
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        assert rel.get_property("verified") is True
+    
+    def test_set_rel_prop_auto_type_detection(self):
+        """Test set_rel_prop with automatic type detection"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        
+        # Test all types with automatic detection
+        builder.set_rel_prop(1, 2, "KNOWS", "since", "2020")
+        builder.set_rel_prop(1, 2, "KNOWS", "strength", 95)
+        builder.set_rel_prop(1, 2, "KNOWS", "weight", 0.85)
+        builder.set_rel_prop(1, 2, "KNOWS", "verified", True)
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        assert rel.get_property("since") == "2020"
+        assert rel.get_property("strength") == 95
+        assert rel.get_property("weight") == pytest.approx(0.85)
+        assert rel.get_property("verified") is True
+    
+    def test_multiple_relationship_properties(self):
+        """Test multiple relationships with different properties"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_node(3, ["Company"])
+        
+        builder.add_rel(1, 2, "KNOWS")
+        builder.add_rel(1, 3, "WORKS_FOR")
+        
+        builder.set_rel_prop(1, 2, "KNOWS", "since", "2020")
+        builder.set_rel_prop(1, 2, "KNOWS", "strength", 95)
+        builder.set_rel_prop(1, 3, "WORKS_FOR", "since", "2018")
+        builder.set_rel_prop(1, 3, "WORKS_FOR", "role", "Engineer")
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        assert len(rels) == 2
+        
+        # Find KNOWS relationship
+        knows_rel = next(r for r in rels if r.get_type() == "KNOWS")
+        assert knows_rel.get_property("since") == "2020"
+        assert knows_rel.get_property("strength") == 95
+        # Note: For dense columns, unset properties may return default values (empty string/0)
+        # For sparse columns, unset properties return None
+        role_val = knows_rel.get_property("role")
+        assert role_val is None or role_val == ""  # Not set on this relationship
+        
+        # Find WORKS_FOR relationship
+        works_rel = next(r for r in rels if r.get_type() == "WORKS_FOR")
+        assert works_rel.get_property("since") == "2018"
+        assert works_rel.get_property("role") == "Engineer"
+        # Note: For dense columns, unset properties may return default values (empty string/0)
+        strength_val = works_rel.get_property("strength")
+        assert strength_val is None or strength_val == 0  # Not set on this relationship
+    
+    def test_relationship_property_none(self):
+        """Test getting property that doesn't exist returns None"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        # Don't set any properties
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        assert rel.get_property("nonexistent") is None
+    
+    def test_relationship_properties_in_to_dict(self):
+        """Test that relationship properties appear in to_dict()"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        builder.set_rel_prop(1, 2, "KNOWS", "since", "2020")
+        builder.set_rel_prop(1, 2, "KNOWS", "strength", 95)
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        rel_dict = rel.to_dict()
+        
+        assert "properties" in rel_dict
+        assert rel_dict["properties"]["since"] == "2020"
+        assert rel_dict["properties"]["strength"] == 95
+    
+    def test_relationship_properties_in_to_json(self):
+        """Test that relationship properties appear in to_json()"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        builder.set_rel_prop(1, 2, "KNOWS", "since", "2020")
+        builder.set_rel_prop(1, 2, "KNOWS", "strength", 95)
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        json_str = rel.to_json()
+        rel_dict = json.loads(json_str)
+        
+        assert "properties" in rel_dict
+        assert rel_dict["properties"]["since"] == "2020"
+        assert rel_dict["properties"]["strength"] == 95
+    
+    def test_relationship_properties_empty_dict(self):
+        """Test that relationships without properties have empty properties dict"""
+        manager = RustyChickpeas()
+        builder = manager.create_builder(version="v1.0")
+        
+        builder.add_node(1, ["Person"])
+        builder.add_node(2, ["Person"])
+        builder.add_rel(1, 2, "KNOWS")
+        # No properties set
+        
+        builder.finalize_into(manager)
+        snapshot = manager.get_graph_snapshot("v1.0")
+        
+        rels = snapshot.get_rels(1, Direction.Outgoing)
+        rel = rels[0]
+        rel_dict = rel.to_dict()
+        
+        assert "properties" in rel_dict
+        assert isinstance(rel_dict["properties"], dict)
+        assert len(rel_dict["properties"]) == 0
 

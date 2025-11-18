@@ -25,17 +25,28 @@ pub struct GraphBuilder {
     // Version tracking (at snapshot level, not per node/relationship)
     pub(crate) version: Option<String>,
 
-    // Properties (staging). Per key we'll choose dense or sparse.
-    pub(crate) col_i64: hashbrown::HashMap<PropertyKey, Vec<(NodeId, i64)>>,
-    pub(crate) col_f64: hashbrown::HashMap<PropertyKey, Vec<(NodeId, f64)>>,
-    pub(crate) col_bool: hashbrown::HashMap<PropertyKey, Vec<(NodeId, bool)>>,
-    pub(crate) col_str: hashbrown::HashMap<PropertyKey, Vec<(NodeId, u32)>>, // Interned
+    // Node properties (staging). Per key we'll choose dense or sparse.
+    pub(crate) node_col_i64: hashbrown::HashMap<PropertyKey, Vec<(NodeId, i64)>>,
+    pub(crate) node_col_f64: hashbrown::HashMap<PropertyKey, Vec<(NodeId, f64)>>,
+    pub(crate) node_col_bool: hashbrown::HashMap<PropertyKey, Vec<(NodeId, bool)>>,
+    pub(crate) node_col_str: hashbrown::HashMap<PropertyKey, Vec<(NodeId, u32)>>, // Interned
+
+    // Relationship properties (staging). Indexed by relationship position in rels vector.
+    pub(crate) rel_col_i64: hashbrown::HashMap<PropertyKey, Vec<(usize, i64)>>, // usize = index in rels
+    pub(crate) rel_col_f64: hashbrown::HashMap<PropertyKey, Vec<(usize, f64)>>,
+    pub(crate) rel_col_bool: hashbrown::HashMap<PropertyKey, Vec<(usize, bool)>>,
+    pub(crate) rel_col_str: hashbrown::HashMap<PropertyKey, Vec<(usize, u32)>>, // Interned
 
     // Inverted buckets (value -> appended NodeId), to be sorted once
     pub(crate) inv: hashbrown::HashMap<(PropertyKey, ValueId), Vec<NodeId>>,
 
     // Interner (for keys + values)
     pub(crate) interner: StringInterner,
+
+    // Deduplication configuration and map: unique property values -> node_id
+    // This persists across multiple file loads and regular builder operations to enable deduplication
+    pub(crate) dedup_unique_properties: Option<Vec<PropertyKey>>, // Property keys to use for deduplication
+    pub(crate) dedup_map: hashbrown::HashMap<crate::types::DedupKey, NodeId>,
 }
 
 impl GraphBuilder {
@@ -57,12 +68,18 @@ impl GraphBuilder {
             node_labels: vec![Vec::new(); capacity_nodes],
             rel_types: Vec::with_capacity(capacity_rels),
             version: None,
-            col_i64: hashbrown::HashMap::new(),
-            col_f64: hashbrown::HashMap::new(),
-            col_bool: hashbrown::HashMap::new(),
-            col_str: hashbrown::HashMap::new(),
+            node_col_i64: hashbrown::HashMap::new(),
+            node_col_f64: hashbrown::HashMap::new(),
+            node_col_bool: hashbrown::HashMap::new(),
+            node_col_str: hashbrown::HashMap::new(),
+            rel_col_i64: hashbrown::HashMap::new(),
+            rel_col_f64: hashbrown::HashMap::new(),
+            rel_col_bool: hashbrown::HashMap::new(),
+            rel_col_str: hashbrown::HashMap::new(),
             inv: hashbrown::HashMap::new(),
             interner: StringInterner::new(),
+            dedup_unique_properties: None,
+            dedup_map: hashbrown::HashMap::new(),
         }
     }
 
@@ -84,18 +101,56 @@ impl GraphBuilder {
         self.version = Some(version.to_string());
     }
 
+    /// Enable node deduplication based on unique property keys
+    /// 
+    /// When enabled, nodes with the same values for the specified properties will be merged.
+    /// The first node encountered with a given combination of property values will be used,
+    /// and subsequent nodes with the same values will have their labels and properties merged into it.
+    /// 
+    /// # Arguments
+    /// * `unique_properties` - List of property key names to use for deduplication
+    /// 
+    /// # Example
+    /// ```
+    /// use rustychickpeas_core::builder::GraphBuilder;
+    /// let mut builder = GraphBuilder::new(None, None);
+    /// builder.enable_node_deduplication(vec!["email", "username"]);
+    /// // Now adding nodes with the same email+username will be merged
+    /// ```
+    pub fn enable_node_deduplication(&mut self, unique_properties: Vec<&str>) {
+        self.dedup_unique_properties = Some(
+            unique_properties
+                .iter()
+                .map(|key| self.interner.get_or_intern(key))
+                .collect()
+        );
+    }
+
+    /// Disable node deduplication
+    pub fn disable_node_deduplication(&mut self) {
+        self.dedup_unique_properties = None;
+        self.dedup_map.clear();
+    }
+
     /// Ensure capacity for a given node ID (auto-grow vectors if needed)
     #[inline]
     fn ensure_capacity(&mut self, node_id: NodeId) {
         if node_id as usize >= self.deg_out.len() {
+            let old_len = self.deg_out.len();
             let max_size = u32::MAX as usize;
             let new_size = ((node_id as usize + 1) * 2).min(max_size);
             if new_size <= node_id as usize {
                 panic!("Maximum node limit (2^32 - 1) exceeded");
             }
+            let resize_start = std::time::Instant::now();
             self.node_labels.resize(new_size, Vec::new());
             self.deg_out.resize(new_size, 0);
             self.deg_in.resize(new_size, 0);
+            let resize_time = resize_start.elapsed();
+            if resize_time.as_millis() > 10 {
+                eprintln!("[RUST TIMING] ensure_capacity resize: {} -> {} nodes took {:?}", 
+                    old_len, new_size, resize_time);
+            }
         }
     }
 
@@ -134,18 +189,42 @@ impl GraphBuilder {
 
     /// Set string property (interned)
     pub fn set_prop_str(&mut self, node_id: NodeId, key: &str, val: &str) {
+        // Use a static to track if we should print timing (only for first few calls)
+        static CALL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let should_time = count < 1000;
+        
+        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         self.ensure_capacity(node_id);
+        let ensure_time = start.map(|s| s.elapsed());
+        
+        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         let k = self.interner.get_or_intern(key);
+        let key_time = start.map(|s| s.elapsed());
+        
+        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         let v = self.interner.get_or_intern(val);
-        self.col_str.entry(k).or_default().push((node_id, v));
+        let val_time = start.map(|s| s.elapsed());
+        
+        let start = if should_time { Some(std::time::Instant::now()) } else { None };
+        self.node_col_str.entry(k).or_default().push((node_id, v));
+        let push_time = start.map(|s| s.elapsed());
+        
+        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         self.inv.entry((k, ValueId::Str(v))).or_default().push(node_id);
+        let inv_time = start.map(|s| s.elapsed());
+        
+        if should_time && count < 10 {
+            eprintln!("[RUST TIMING] set_prop_str #{}: ensure={:?}, key={:?}, val={:?}, push={:?}, inv={:?}", 
+                count, ensure_time, key_time, val_time, push_time, inv_time);
+        }
     }
 
     /// Set i64 property
     pub fn set_prop_i64(&mut self, node_id: NodeId, key: &str, val: i64) {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
-        self.col_i64.entry(k).or_default().push((node_id, val));
+        self.node_col_i64.entry(k).or_default().push((node_id, val));
         self.inv.entry((k, ValueId::I64(val))).or_default().push(node_id);
     }
 
@@ -153,7 +232,7 @@ impl GraphBuilder {
     pub fn set_prop_f64(&mut self, node_id: NodeId, key: &str, val: f64) {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
-        self.col_f64.entry(k).or_default().push((node_id, val));
+        self.node_col_f64.entry(k).or_default().push((node_id, val));
         self.inv.entry((k, ValueId::from_f64(val))).or_default().push(node_id);
     }
 
@@ -161,8 +240,55 @@ impl GraphBuilder {
     pub fn set_prop_bool(&mut self, node_id: NodeId, key: &str, val: bool) {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
-        self.col_bool.entry(k).or_default().push((node_id, val));
+        self.node_col_bool.entry(k).or_default().push((node_id, val));
         self.inv.entry((k, ValueId::Bool(val))).or_default().push(node_id);
+    }
+
+    /// Find relationship index by (u, v, rel_type)
+    /// Returns None if relationship not found
+    fn find_rel_index(&self, u: NodeId, v: NodeId, rel_type: &str) -> Option<usize> {
+        let type_id = self.interner.get(rel_type)?;
+        let rel_type_obj = RelationshipType::new(type_id);
+        self.rels.iter()
+            .enumerate()
+            .find(|(idx, &(start, end))| {
+                start == u && end == v && self.rel_types[*idx] == rel_type_obj
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    /// Set string property on a relationship
+    /// Finds the relationship by (u, v, rel_type) and sets the property
+    pub fn set_rel_prop_str(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: &str) {
+        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
+            let k = self.interner.get_or_intern(key);
+            let v = self.interner.get_or_intern(val);
+            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
+        }
+    }
+
+    /// Set i64 property on a relationship
+    pub fn set_rel_prop_i64(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: i64) {
+        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
+            let k = self.interner.get_or_intern(key);
+            self.rel_col_i64.entry(k).or_default().push((rel_idx, val));
+        }
+    }
+
+    /// Set f64 property on a relationship
+    pub fn set_rel_prop_f64(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: f64) {
+        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
+            let k = self.interner.get_or_intern(key);
+            self.rel_col_f64.entry(k).or_default().push((rel_idx, val));
+        }
+    }
+
+    /// Set boolean property on a relationship
+    pub fn set_rel_prop_bool(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: bool) {
+        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
+            let k = self.interner.get_or_intern(key);
+            self.rel_col_bool.entry(k).or_default().push((rel_idx, val));
+        }
     }
 
     /// Get property key ID for a string (returns None if key hasn't been interned yet)
@@ -177,22 +303,22 @@ impl GraphBuilder {
         
         // Search through staging property vectors
         // Note: This is O(n) per property key, but fine for pre-finalization queries
-        if let Some(pairs) = self.col_str.get(&k) {
+        if let Some(pairs) = self.node_col_str.get(&k) {
             if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::Str(*val));
             }
         }
-        if let Some(pairs) = self.col_i64.get(&k) {
+        if let Some(pairs) = self.node_col_i64.get(&k) {
             if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::I64(*val));
             }
         }
-        if let Some(pairs) = self.col_f64.get(&k) {
+        if let Some(pairs) = self.node_col_f64.get(&k) {
             if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::from_f64(*val));
             }
         }
-        if let Some(pairs) = self.col_bool.get(&k) {
+        if let Some(pairs) = self.node_col_bool.get(&k) {
             if let Some((_, val)) = pairs.iter().find(|(nid, _)| *nid == node_id) {
                 return Some(ValueId::Bool(*val));
             }
@@ -206,7 +332,7 @@ impl GraphBuilder {
         let k = self.interner.get_or_intern(key);
         
         // Remove old value from inverted index
-        if let Some(pairs) = self.col_str.get_mut(&k) {
+        if let Some(pairs) = self.node_col_str.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 // Remove from inverted index
@@ -227,7 +353,7 @@ impl GraphBuilder {
         let k = self.interner.get_or_intern(key);
         
         // Remove old value
-        if let Some(pairs) = self.col_i64.get_mut(&k) {
+        if let Some(pairs) = self.node_col_i64.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::I64(old_val))) {
@@ -247,7 +373,7 @@ impl GraphBuilder {
         let k = self.interner.get_or_intern(key);
         
         // Remove old value
-        if let Some(pairs) = self.col_f64.get_mut(&k) {
+        if let Some(pairs) = self.node_col_f64.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::from_f64(old_val))) {
@@ -267,7 +393,7 @@ impl GraphBuilder {
         let k = self.interner.get_or_intern(key);
         
         // Remove old value
-        if let Some(pairs) = self.col_bool.get_mut(&k) {
+        if let Some(pairs) = self.node_col_bool.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 let old_val = pairs.remove(pos).1;
                 if let Some(bucket) = self.inv.get_mut(&(k, ValueId::Bool(old_val))) {
@@ -300,10 +426,10 @@ impl GraphBuilder {
                 count += 1;
             } else {
                 // Check if node has properties
-                let has_props = self.col_i64.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
-                    || self.col_f64.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
-                    || self.col_bool.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
-                    || self.col_str.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId));
+                let has_props = self.node_col_i64.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
+                    || self.node_col_f64.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
+                    || self.node_col_bool.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId))
+                    || self.node_col_str.values().any(|v| v.iter().any(|(nid, _)| *nid == i as NodeId));
                 if has_props {
                     count += 1;
                 }
@@ -372,23 +498,88 @@ impl GraphBuilder {
     ///   If None, all properties will be indexed lazily on first access (saves memory).
     pub fn finalize(self, index_properties: Option<&[PropertyKey]>) -> GraphSnapshot {
         // Calculate the maximum node ID that has been used
-        // This is the maximum of: node_labels.len(), deg_out.len(), deg_in.len()
-        // and any node IDs in properties
-        let max_node_id_from_vecs = self.node_labels.len()
-            .max(self.deg_out.len())
-            .max(self.deg_in.len())
-            .saturating_sub(1);
+        // We need to find the actual maximum node ID, not just the vector length
+        // (vectors may be pre-allocated with capacity)
         
-        let max_node_id_from_props = self.col_i64.values()
+        // Find the maximum node ID from properties (these are actual node IDs)
+        let max_node_id_from_props = self.node_col_i64.values()
             .flat_map(|v| v.iter().map(|(nid, _)| *nid))
-            .chain(self.col_f64.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
-            .chain(self.col_bool.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
-            .chain(self.col_str.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
+            .chain(self.node_col_f64.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
+            .chain(self.node_col_bool.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
+            .chain(self.node_col_str.values().flat_map(|v| v.iter().map(|(nid, _)| *nid)))
             .max()
             .map(|nid| nid as usize)
             .unwrap_or(0);
         
-        let n = (max_node_id_from_vecs.max(max_node_id_from_props) + 1).max(1);
+        // Find the maximum node ID from relationships
+        let max_node_id_from_rels = self.rels.iter()
+            .flat_map(|(u, v)| [*u as usize, *v as usize])
+            .max()
+            .unwrap_or(0);
+        
+        // Find the maximum node ID that has labels
+        let max_node_id_from_labels = self.node_labels.iter()
+            .enumerate()
+            .filter(|(_, labels)| !labels.is_empty())
+            .map(|(i, _)| i)
+            .max()
+            .unwrap_or(0);
+        
+        // Find the maximum node ID that has edges
+        let max_node_id_from_edges = self.deg_out.iter()
+            .enumerate()
+            .chain(self.deg_in.iter().enumerate())
+            .filter(|(_, &deg)| deg > 0)
+            .map(|(i, _)| i)
+            .max()
+            .unwrap_or(0);
+        
+        // The actual maximum node ID is the max of all these
+        let max_used_node_id = max_node_id_from_props
+            .max(max_node_id_from_rels)
+            .max(max_node_id_from_labels)
+            .max(max_node_id_from_edges);
+        
+        // Count actual nodes (those with labels, edges, or properties)
+        // This is important for sparse graphs where node IDs may have gaps
+        // Use a HashSet for O(1) insertion and O(n) counting, much faster than a large vector
+        use std::collections::HashSet;
+        let mut nodes_with_data = HashSet::new();
+        
+        // Mark nodes with labels
+        for (i, labels) in self.node_labels.iter().enumerate().take(max_used_node_id + 1) {
+            if !labels.is_empty() {
+                nodes_with_data.insert(i);
+            }
+        }
+        
+        // Mark nodes with edges
+        for i in 0..=max_node_id_from_edges {
+            if i < self.deg_out.len() && (self.deg_out[i] > 0 || self.deg_in[i] > 0) {
+                nodes_with_data.insert(i);
+            }
+        }
+        
+        // Mark nodes with properties
+        for (nid, _) in self.node_col_i64.values().flat_map(|v| v.iter()) {
+            nodes_with_data.insert(*nid as usize);
+        }
+        for (nid, _) in self.node_col_f64.values().flat_map(|v| v.iter()) {
+            nodes_with_data.insert(*nid as usize);
+        }
+        for (nid, _) in self.node_col_bool.values().flat_map(|v| v.iter()) {
+            nodes_with_data.insert(*nid as usize);
+        }
+        for (nid, _) in self.node_col_str.values().flat_map(|v| v.iter()) {
+            nodes_with_data.insert(*nid as usize);
+        }
+        
+        // Count nodes with data
+        let actual_node_count = nodes_with_data.len();
+        
+        // Use max_used_node_id + 1 for array sizing (CSR needs dense arrays)
+        // But store actual_node_count as n_nodes
+        let n = (max_used_node_id + 1).max(1);
         let m = self.rels.len();
 
         // --- Build CSR (outgoing) ---
@@ -399,12 +590,15 @@ impl GraphBuilder {
         let mut out_nbrs = vec![0u32; m];
         let mut out_types = vec![RelationshipType::new(0); m]; // Parallel array for types
         let mut out_pos = vec![0u32; n]; // Track position per node
+        // Mapping from builder rel index to final CSR position
+        let mut builder_to_csr: Vec<usize> = vec![0; m];
         // Zip rels with their types to keep them together
-        for ((u, v), rel_type) in self.rels.iter().zip(self.rel_types.iter()) {
+        for (builder_idx, ((u, v), rel_type)) in self.rels.iter().zip(self.rel_types.iter()).enumerate() {
             let u_idx = *u as usize;
             let pos = (out_offsets[u_idx] + out_pos[u_idx]) as usize;
             out_nbrs[pos] = *v;
             out_types[pos] = *rel_type; // Store relationship type
+            builder_to_csr[builder_idx] = pos; // Map builder index to CSR position
             out_pos[u_idx] += 1;
         }
 
@@ -436,6 +630,7 @@ impl GraphBuilder {
             .into_iter()
             .map(|(label, mut nodes)| {
                 nodes.sort_unstable();
+                nodes.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(nodes.into_iter()).unwrap();
                 (label, NodeSet::new(bitmap))
             })
@@ -450,6 +645,7 @@ impl GraphBuilder {
             .into_iter()
             .map(|(rel_type, mut rel_ids)| {
                 rel_ids.sort_unstable();
+                rel_ids.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(rel_ids.into_iter()).unwrap();
                 (rel_type, NodeSet::new(bitmap))
             })
@@ -462,7 +658,7 @@ impl GraphBuilder {
         let threshold = (n as f64 * 0.8) as usize;
         
         // i64 columns
-        for (key, pairs) in self.col_i64 {
+        for (key, pairs) in self.node_col_i64 {
             if pairs.len() >= threshold {
                 // Dense
                 let mut col = vec![0i64; n];
@@ -479,7 +675,7 @@ impl GraphBuilder {
         }
         
         // f64 columns
-        for (key, pairs) in self.col_f64 {
+        for (key, pairs) in self.node_col_f64 {
             if pairs.len() >= threshold {
                 // Dense
                 let mut col = vec![0.0f64; n];
@@ -496,7 +692,7 @@ impl GraphBuilder {
         }
         
         // bool columns
-        for (key, pairs) in self.col_bool {
+        for (key, pairs) in self.node_col_bool {
             if pairs.len() >= threshold {
                 // Dense
                 let mut col = bitvec::vec::BitVec::repeat(false, n);
@@ -513,7 +709,7 @@ impl GraphBuilder {
         }
         
         // str columns (interned)
-        for (key, pairs) in self.col_str {
+        for (key, pairs) in self.node_col_str {
             if pairs.len() >= threshold {
                 // Dense
                 let mut col = vec![0u32; n];
@@ -526,6 +722,99 @@ impl GraphBuilder {
                 let mut pairs = pairs;
                 pairs.sort_unstable_by_key(|(id, _)| *id);
                 columns.insert(key, Column::SparseStr(pairs));
+            }
+        }
+
+        // --- Build relationship property columns ---
+        // Convert relationship property staging vectors to columns
+        // Use same threshold logic: dense if >80% of relationships have the property
+        let rel_threshold = (m as f64 * 0.8) as usize;
+        let mut rel_columns: HashMap<PropertyKey, Column> = HashMap::new();
+
+        // i64 relationship columns
+        for (key, pairs) in self.rel_col_i64 {
+            // Map from builder index to CSR position
+            let mut csr_pairs: Vec<(usize, i64)> = pairs.into_iter()
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .collect();
+            
+            if csr_pairs.len() >= rel_threshold {
+                // Dense
+                let mut col = vec![0i64; m];
+                for (csr_pos, val) in csr_pairs {
+                    col[csr_pos] = val;
+                }
+                rel_columns.insert(key, Column::DenseI64(col));
+            } else {
+                // Sparse - convert usize to u32 for storage
+                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
+                let sparse: Vec<(u32, i64)> = csr_pairs.into_iter()
+                    .map(|(pos, val)| (pos as u32, val))
+                    .collect();
+                rel_columns.insert(key, Column::SparseI64(sparse));
+            }
+        }
+
+        // f64 relationship columns
+        for (key, pairs) in self.rel_col_f64 {
+            let mut csr_pairs: Vec<(usize, f64)> = pairs.into_iter()
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .collect();
+            
+            if csr_pairs.len() >= rel_threshold {
+                let mut col = vec![0.0f64; m];
+                for (csr_pos, val) in csr_pairs {
+                    col[csr_pos] = val;
+                }
+                rel_columns.insert(key, Column::DenseF64(col));
+            } else {
+                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
+                let sparse: Vec<(u32, f64)> = csr_pairs.into_iter()
+                    .map(|(pos, val)| (pos as u32, val))
+                    .collect();
+                rel_columns.insert(key, Column::SparseF64(sparse));
+            }
+        }
+
+        // bool relationship columns
+        for (key, pairs) in self.rel_col_bool {
+            let mut csr_pairs: Vec<(usize, bool)> = pairs.into_iter()
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .collect();
+            
+            if csr_pairs.len() >= rel_threshold {
+                let mut col = bitvec::vec::BitVec::repeat(false, m);
+                for (csr_pos, val) in csr_pairs {
+                    col.set(csr_pos, val);
+                }
+                rel_columns.insert(key, Column::DenseBool(col));
+            } else {
+                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
+                let sparse: Vec<(u32, bool)> = csr_pairs.into_iter()
+                    .map(|(pos, val)| (pos as u32, val))
+                    .collect();
+                rel_columns.insert(key, Column::SparseBool(sparse));
+            }
+        }
+
+        // str relationship columns (interned)
+        for (key, pairs) in self.rel_col_str {
+            let mut csr_pairs: Vec<(usize, u32)> = pairs.into_iter()
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .collect();
+            
+            if csr_pairs.len() >= rel_threshold {
+                let mut col = vec![0u32; m];
+                for (csr_pos, val) in csr_pairs {
+                    col[csr_pos] = val;
+                }
+                rel_columns.insert(key, Column::DenseStr(col));
+            } else {
+                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
+                let sparse: Vec<(u32, u32)> = csr_pairs.into_iter()
+                    .map(|(pos, val)| (pos as u32, val))
+                    .collect();
+                rel_columns.insert(key, Column::SparseStr(sparse));
             }
         }
 
@@ -553,6 +842,7 @@ impl GraphBuilder {
                     let mut key_index: hashbrown::HashMap<ValueId, NodeSet> = hashbrown::HashMap::new();
                     for (val_id, mut bucket) in buckets {
                         bucket.sort_unstable();
+                        bucket.dedup();
                         let bitmap = RoaringBitmap::from_sorted_iter(bucket.into_iter()).unwrap();
                         key_index.insert(val_id, NodeSet::new(bitmap));
                     }
@@ -569,7 +859,7 @@ impl GraphBuilder {
         let atoms = Atoms::new(self.interner.into_vec());
 
         GraphSnapshot {
-            n_nodes: n as u32,
+            n_nodes: actual_node_count as u32,
             n_rels: m as u64,
             out_offsets,
             out_nbrs,
@@ -581,6 +871,7 @@ impl GraphBuilder {
             type_index,
             version: self.version.clone(),
             columns,
+            rel_columns,
             prop_index: std::sync::Mutex::new(prop_index),
             atoms,
         }
@@ -590,7 +881,6 @@ impl GraphBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::GraphSnapshot;
 
     #[test]
     fn test_builder_new() {
@@ -712,17 +1002,17 @@ mod tests {
         builder.add_rel(1, 2, "KNOWS");
         builder.add_rel(3, 1, "KNOWS");
         
-        let (outgoing, incoming) = builder.get_neighbors(1);
+        let (outgoing, incoming) = builder.get_neighbor_ids(1);
         assert_eq!(outgoing.len(), 1);
-        assert_eq!(outgoing[0], 1); // Node 2 has internal ID 1
+        assert_eq!(outgoing[0], 2); // Node 2
         assert_eq!(incoming.len(), 1);
-        assert_eq!(incoming[0], 2); // Node 3 has internal ID 2
+        assert_eq!(incoming[0], 3); // Node 3
     }
 
     #[test]
     fn test_get_neighbors_nonexistent() {
         let builder = GraphBuilder::new(Some(10), Some(10));
-        let (outgoing, incoming) = builder.get_neighbors(999);
+        let (outgoing, incoming) = builder.get_neighbor_ids(999);
         assert_eq!(outgoing.len(), 0);
         assert_eq!(incoming.len(), 0);
     }
@@ -791,7 +1081,7 @@ mod tests {
         }
         // This should create a dense column
         // We can't test finalize() directly due to into_vec() issue, but we can verify the data is there
-        assert_eq!(builder.col_i64.len(), 1);
+        assert_eq!(builder.node_col_i64.len(), 1);
     }
 
     #[test]
@@ -813,21 +1103,21 @@ mod tests {
     #[test]
     fn test_get_nodes_with_property() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
+        builder.add_node(0, &["Person"]);
         builder.add_node(1, &["Person"]);
         builder.add_node(2, &["Person"]);
-        builder.add_node(3, &["Person"]);
+        builder.set_prop_i64(0, "age", 30);
         builder.set_prop_i64(1, "age", 30);
-        builder.set_prop_i64(2, "age", 30);
-        builder.set_prop_i64(3, "age", 25);
+        builder.set_prop_i64(2, "age", 25);
         
         let nodes = builder.get_nodes_with_property("age", ValueId::I64(30));
         assert_eq!(nodes.len(), 2);
-        assert!(nodes.contains(&0)); // Node 1 has internal ID 0
-        assert!(nodes.contains(&1)); // Node 2 has internal ID 1
+        assert!(nodes.contains(&0));
+        assert!(nodes.contains(&1));
         
         let nodes = builder.get_nodes_with_property("age", ValueId::I64(25));
         assert_eq!(nodes.len(), 1);
-        assert!(nodes.contains(&2)); // Node 3 has internal ID 2
+        assert!(nodes.contains(&2));
         
         // Non-existent property value
         let nodes = builder.get_nodes_with_property("age", ValueId::I64(99));
@@ -837,8 +1127,8 @@ mod tests {
     #[test]
     fn test_get_nodes_with_property_f64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
-        builder.set_prop_f64(1, "score", 95.5);
+        builder.add_node(0, &["Person"]);
+        builder.set_prop_f64(0, "score", 95.5);
         
         let nodes = builder.get_nodes_with_property("score", ValueId::from_f64(95.5));
         assert_eq!(nodes.len(), 1);
@@ -848,40 +1138,39 @@ mod tests {
     #[test]
     fn test_get_nodes_with_property_bool() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
-        builder.set_prop_bool(1, "active", true);
+        builder.add_node(0, &["Person"]);
+        builder.set_prop_bool(0, "active", true);
         
         let nodes = builder.get_nodes_with_property("active", ValueId::Bool(true));
         assert_eq!(nodes.len(), 1);
         assert!(nodes.contains(&0));
     }
 
-    // TODO: Fix lasso into_vec() issue - these tests fail due to string interner extraction
-    // #[test]
-    // fn test_finalize_simple() {
-    //     let mut builder = GraphBuilder::new(Some(10), Some(10));
-    //     builder.add_node(1, &["Person"]);
-    //     builder.add_node(2, &["Person"]);
-    //     builder.add_rel(1, 2, "KNOWS");
-    //     
-    //     let snapshot = builder.finalize(None);
-    //     assert_eq!(snapshot.n_nodes, 2);
-    //     assert_eq!(snapshot.n_rels, 1);
-    // }
+    #[test]
+    fn test_finalize_simple() {
+        let mut builder = GraphBuilder::new(Some(10), Some(10));
+        builder.add_node(0, &["Person"]);
+        builder.add_node(1, &["Person"]);
+        builder.add_rel(0, 1, "KNOWS");
+        
+        let snapshot = builder.finalize(None);
+        assert_eq!(snapshot.n_nodes, 2);
+        assert_eq!(snapshot.n_rels, 1);
+    }
 
-    // #[test]
-    // fn test_finalize_with_properties() {
-    //     let mut builder = GraphBuilder::new(Some(10), Some(10));
-    //     builder.add_node(1, &["Person"]);
-    //     builder.set_prop_str(1, "name", "Alice");
-    //     
-    //     // Get the key before finalize consumes the builder
-    //     let name_key = builder.get_property_key_id("name").unwrap();
-    //     
-    //     let snapshot = builder.finalize(None);
-    //     assert_eq!(snapshot.n_nodes, 1);
-    //     
-    //     // Check that property is accessible
-    //     assert!(snapshot.columns.contains_key(&name_key));
-    // }
+    #[test]
+    fn test_finalize_with_properties() {
+        let mut builder = GraphBuilder::new(Some(10), Some(10));
+        builder.add_node(0, &["Person"]);
+        builder.set_prop_str(0, "name", "Alice");
+        
+        // Get the key before finalize consumes the builder
+        let name_key = builder.get_property_key_id("name").unwrap();
+        
+        let snapshot = builder.finalize(None);
+        assert_eq!(snapshot.n_nodes, 1);
+        
+        // Check that property is accessible
+        assert!(snapshot.columns.contains_key(&name_key));
+    }
 }

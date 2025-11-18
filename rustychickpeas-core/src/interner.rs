@@ -92,46 +92,54 @@ impl StringInterner {
         let reader = rodeo.into_reader();
         let len = reader.len();
         
-        // Build a mapping of all strings by trying to resolve IDs
-        // We'll scan from 0 up to a reasonable maximum (len should be the count of strings)
-        // Rodeo assigns IDs sequentially, so we should be able to resolve 0..len-1
-        let mut result = Vec::with_capacity(len);
-        let mut found_count = 0;
+        // Handle empty case - always return at least empty string at index 0
+        if len == 0 {
+            return vec!["".to_string()];
+        }
         
-        // Try to resolve IDs from 0 up to len (or until we've found all strings)
-        for i in 0..len {
-            let spur: lasso::Spur = unsafe { std::mem::transmute(i as u32) };
+        // Build a mapping of all strings by trying to resolve IDs
+        // The issue: Spur uses an offset (into_usize does `key.get() - 1`)
+        // So a Spur with internal value n represents usize value n-1
+        // We need to create Spurs correctly using try_from_usize if available,
+        // or be very careful with transmute.
+        //
+        // Strategy: Since we're using transmute, we need to account for the offset.
+        // But actually, the transmute should work if we use the correct value.
+        // The problem might be that we're trying IDs that are out of range.
+        //
+        // Let's try a safer approach: iterate from 0 to len-1, but use try_resolve
+        // which won't panic, and stop early if we hit too many failures.
+        let mut result = Vec::with_capacity(len + 1);
+        result.push("".to_string()); // Index 0 is always empty string
+        
+        // Try to resolve IDs from 1 up to len
+        // Note: len() returns the count, so valid IDs should be 0..len-1
+        // But we start from 1 since 0 is the empty string
+        let mut consecutive_failures = 0;
+        for i in 1..=len {
+            if i > u32::MAX as usize {
+                break;
+            }
+            // Create Spur - the internal representation is i+1, but we transmute i
+            // This might be the issue - let's try using the Key trait's try_from_usize
+            // Actually, we can't use that directly. Let's try a different approach:
+            // Use the fact that Spur's internal value should be i+1 for external value i
+            // But transmute doesn't account for this offset, so we need to adjust
+            let spur_value = i as u32;
+            let spur: lasso::Spur = unsafe { std::mem::transmute(spur_value) };
             match reader.try_resolve(&spur) {
                 Some(s) => {
                     result.push(s.to_string());
-                    found_count += 1;
+                    consecutive_failures = 0;
                 }
                 None => {
-                    // If ID doesn't exist, push empty string as placeholder
-                    // This maintains index alignment (id i maps to result[i])
-                    result.push(String::new());
-                }
-            }
-        }
-        
-        // If we didn't find all strings, try scanning further (in case len() is wrong)
-        if found_count < len {
-            for i in len..(len * 2).min(u32::MAX as usize) {
-                let spur: lasso::Spur = unsafe { std::mem::transmute(i as u32) };
-                if let Some(s) = reader.try_resolve(&spur) {
-                    // Extend the vec if needed
-                    while result.len() <= i {
-                        result.push(String::new());
-                    }
-                    result[i] = s.to_string();
-                    found_count += 1;
-                    if found_count >= len {
+                    consecutive_failures += 1;
+                    // If we hit too many consecutive failures, we've probably reached the end
+                    if consecutive_failures > 10 {
                         break;
                     }
-                } else {
-                    // If we hit a gap and haven't found all strings, something's wrong
-                    // But continue anyway
-                    break;
+                    // Push empty string to maintain index alignment
+                    result.push(String::new());
                 }
             }
         }

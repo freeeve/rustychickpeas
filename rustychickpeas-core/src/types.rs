@@ -1,5 +1,7 @@
 //! Core types for the graph API
 
+use crate::snapshot::ValueId;
+
 /// Interned string ID
 /// u32 allows up to 4.3 billion unique strings
 pub type InternedStringId = u32;
@@ -25,6 +27,19 @@ pub enum Direction {
     Both,
 }
 
+/// Relationship deduplication strategy
+/// Controls how relationships are deduplicated when loading from Parquet
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationshipDeduplication {
+    /// Create all relationships, no deduplication
+    CreateAll,
+    /// Deduplicate by relationship type only (one relationship per type between two nodes)
+    CreateUniqueByRelType,
+    /// Deduplicate by relationship type and specified key properties
+    /// Relationships are unique per (start_node, end_node, rel_type, key_properties)
+    CreateUniqueByRelTypeAndKeyProperties,
+}
+
 /// Label for nodes
 /// Uses interned string ID for memory efficiency
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +57,34 @@ impl Label {
     /// Resolve the label to a string (requires access to the interner)
     pub fn as_str<'a>(&self, interner: &'a crate::interner::StringInterner) -> String {
         interner.resolve(self.0)
+    }
+}
+
+/// Efficient key type for deduplication
+/// Uses tuples for small numbers of properties (fast hashing) and falls back to Vec for larger
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DedupKey {
+    Single(ValueId),
+    Pair(ValueId, ValueId),
+    Triple(ValueId, ValueId, ValueId),
+    Quad(ValueId, ValueId, ValueId, ValueId),
+    Quint(ValueId, ValueId, ValueId, ValueId, ValueId),
+    Many(Vec<ValueId>),
+}
+
+impl DedupKey {
+    /// Create a DedupKey from a slice of ValueIds
+    /// Uses efficient tuple types for small numbers
+    pub fn from_slice(values: &[ValueId]) -> Self {
+        match values.len() {
+            0 => DedupKey::Many(Vec::new()),
+            1 => DedupKey::Single(values[0]),
+            2 => DedupKey::Pair(values[0], values[1]),
+            3 => DedupKey::Triple(values[0], values[1], values[2]),
+            4 => DedupKey::Quad(values[0], values[1], values[2], values[3]),
+            5 => DedupKey::Quint(values[0], values[1], values[2], values[3], values[4]),
+            _ => DedupKey::Many(values.to_vec()),
+        }
     }
 }
 

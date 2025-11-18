@@ -133,6 +133,50 @@ impl GraphSnapshotBuilder {
         Ok(())
     }
 
+    /// Set string property on a relationship
+    /// Finds the relationship by (u, v, rel_type) and sets the property
+    fn set_rel_prop_str(&mut self, u: u32, v: u32, rel_type: String, key: String, value: String) -> PyResult<()> {
+        self.builder.set_rel_prop_str(u, v, &rel_type, &key, &value);
+        Ok(())
+    }
+
+    /// Set i64 property on a relationship
+    fn set_rel_prop_i64(&mut self, u: u32, v: u32, rel_type: String, key: String, value: i64) -> PyResult<()> {
+        self.builder.set_rel_prop_i64(u, v, &rel_type, &key, value);
+        Ok(())
+    }
+
+    /// Set f64 property on a relationship
+    fn set_rel_prop_f64(&mut self, u: u32, v: u32, rel_type: String, key: String, value: f64) -> PyResult<()> {
+        self.builder.set_rel_prop_f64(u, v, &rel_type, &key, value);
+        Ok(())
+    }
+
+    /// Set boolean property on a relationship
+    fn set_rel_prop_bool(&mut self, u: u32, v: u32, rel_type: String, key: String, value: bool) -> PyResult<()> {
+        self.builder.set_rel_prop_bool(u, v, &rel_type, &key, value);
+        Ok(())
+    }
+
+    /// Set property on a relationship with automatic type detection
+    fn set_rel_prop(&mut self, u: u32, v: u32, rel_type: String, key: String, value: &PyAny) -> PyResult<()> {
+        // Check bool first, as True/False can be extracted as int
+        if let Ok(b) = value.extract::<bool>() {
+            self.builder.set_rel_prop_bool(u, v, &rel_type, &key, b);
+        } else if let Ok(s) = value.extract::<String>() {
+            self.builder.set_rel_prop_str(u, v, &rel_type, &key, &s);
+        } else if let Ok(i) = value.extract::<i64>() {
+            self.builder.set_rel_prop_i64(u, v, &rel_type, &key, i);
+        } else if let Ok(f) = value.extract::<f64>() {
+            self.builder.set_rel_prop_f64(u, v, &rel_type, &key, f);
+        } else {
+            return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "Property value must be str, int, float, or bool"
+            ));
+        }
+        Ok(())
+    }
+
     /// Load nodes from a Parquet file into the builder
     fn load_nodes_from_parquet(
         &mut self,
@@ -140,9 +184,11 @@ impl GraphSnapshotBuilder {
         node_id_column: Option<String>,
         label_columns: Option<Vec<String>>,
         property_columns: Option<Vec<String>>,
+        unique_properties: Option<Vec<String>>,
     ) -> PyResult<Vec<u32>> {
         let label_cols = label_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let unique_props = unique_properties.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         
         self.builder
             .load_nodes_from_parquet(
@@ -150,6 +196,7 @@ impl GraphSnapshotBuilder {
                 node_id_column.as_deref(),
                 label_cols,
                 prop_cols,
+                unique_props,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
@@ -163,8 +210,15 @@ impl GraphSnapshotBuilder {
         rel_type_column: Option<String>,
         property_columns: Option<Vec<String>>,
         fixed_rel_type: Option<String>,
+        deduplication: Option<String>,
     ) -> PyResult<Vec<(u32, u32)>> {
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let dedup = deduplication.as_ref().and_then(|s| match s.as_str() {
+            "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
+            "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
+            "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            _ => None,
+        });
         
         self.builder
             .load_relationships_from_parquet(
@@ -174,6 +228,7 @@ impl GraphSnapshotBuilder {
                 rel_type_column.as_deref(),
                 prop_cols,
                 fixed_rel_type.as_deref(),
+                dedup,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }

@@ -158,8 +158,11 @@ pub struct GraphSnapshot {
     pub version: Option<String>,
 
     // --- Properties ---
-    /// Column registry: property key -> column storage
+    /// Column registry: property key -> column storage (for nodes)
     pub columns: HashMap<PropertyKey, Column>,
+    /// Column registry: property key -> column storage (for relationships)
+    /// Relationships are indexed by their position in the outgoing CSR array
+    pub rel_columns: HashMap<PropertyKey, Column>,
 
     // --- Inverted property index (lazy-initialized) ---
     /// Lazy-initialized inverted index: property_key -> (value_id -> nodes with that property value)
@@ -226,6 +229,7 @@ impl GraphSnapshot {
         let mut key_index_final: HashMap<ValueId, NodeSet> = HashMap::new();
         for (val_id, mut node_ids) in key_index {
             node_ids.sort_unstable();
+            node_ids.dedup();
             let bitmap = RoaringBitmap::from_sorted_iter(node_ids.into_iter()).unwrap();
             key_index_final.insert(val_id, NodeSet::new(bitmap));
         }
@@ -248,6 +252,7 @@ impl GraphSnapshot {
             type_index: HashMap::new(),
             version: None,
             columns: HashMap::new(),
+            rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(vec!["".to_string()]),
         }
@@ -336,6 +341,18 @@ impl GraphSnapshot {
     /// Get property value for a node
     pub fn get_property(&self, node_id: NodeId, key: PropertyKey) -> Option<ValueId> {
         self.columns.get(&key)?.get(node_id)
+    }
+
+    /// Get property value for a relationship
+    /// 
+    /// # Arguments
+    /// * `rel_csr_pos` - Relationship position in the outgoing CSR array (0 to n_rels-1)
+    /// * `key` - Property key ID
+    /// 
+    /// # Returns
+    /// Property value if found, None otherwise
+    pub fn get_rel_property(&self, rel_csr_pos: u32, key: PropertyKey) -> Option<ValueId> {
+        self.rel_columns.get(&key)?.get(rel_csr_pos)
     }
 
     /// Get nodes with a specific label
@@ -427,16 +444,21 @@ mod tests {
     // This works around the into_vec() issue by manually creating atoms
     fn create_test_snapshot() -> GraphSnapshot {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
+        builder.add_node(0, &["Person"]);
         builder.add_node(1, &["Person"]);
-        builder.add_node(2, &["Person"]);
-        builder.add_node(3, &["Company"]);
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(2, 3, "WORKS_FOR");
-        builder.set_prop_str(1, "name", "Alice");
-        builder.set_prop_i64(1, "age", 30);
+        builder.add_node(2, &["Company"]);
+        builder.add_rel(0, 1, "KNOWS");
+        builder.add_rel(1, 2, "WORKS_FOR");
+        builder.set_prop_str(0, "name", "Alice");
+        builder.set_prop_i64(0, "age", 30);
         
         // Manually create snapshot to avoid into_vec() issue
-        let n = builder.next_id as usize;
+        // Calculate n based on max node ID used (nodes are 0, 1, 2, so n should be 3)
+        let max_node_id = builder.node_labels.len()
+            .max(builder.deg_out.len())
+            .max(builder.deg_in.len())
+            .saturating_sub(1);
+        let n = (max_node_id + 1).max(3); // Ensure at least 3 for test nodes 0,1,2
         let m = builder.rels.len();
         
         // Build CSR
@@ -482,6 +504,7 @@ mod tests {
             .into_iter()
             .map(|(label, mut nodes)| {
                 nodes.sort_unstable();
+                nodes.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(nodes.into_iter()).unwrap();
                 (label, NodeSet::new(bitmap))
             })
@@ -496,6 +519,7 @@ mod tests {
             .into_iter()
             .map(|(rel_type, mut rel_ids)| {
                 rel_ids.sort_unstable();
+                rel_ids.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(rel_ids.into_iter()).unwrap();
                 (rel_type, NodeSet::new(bitmap))
             })
@@ -506,12 +530,12 @@ mod tests {
         let name_key = builder.interner.get_or_intern("name");
         let age_key = builder.interner.get_or_intern("age");
         
-        if let Some(pairs) = builder.col_str.get(&name_key) {
+        if let Some(pairs) = builder.node_col_str.get(&name_key) {
             let mut pairs = pairs.clone();
             pairs.sort_unstable_by_key(|(id, _)| *id);
             columns.insert(name_key, Column::SparseStr(pairs));
         }
-        if let Some(pairs) = builder.col_i64.get(&age_key) {
+        if let Some(pairs) = builder.node_col_i64.get(&age_key) {
             let mut pairs = pairs.clone();
             pairs.sort_unstable_by_key(|(id, _)| *id);
             columns.insert(age_key, Column::SparseI64(pairs));
@@ -542,6 +566,7 @@ mod tests {
             type_index,
             version: builder.version.clone(),
             columns,
+            rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
             atoms,
         }
@@ -902,10 +927,14 @@ mod tests {
     fn test_snapshot_with_version() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.set_version("v1.0");
-        builder.add_node(1, &["Person"]);
+        builder.add_node(0, &["Person"]);
         
         // Manually create snapshot with version
-        let n = builder.next_id as usize;
+        let max_node_id = builder.node_labels.len()
+            .max(builder.deg_out.len())
+            .max(builder.deg_in.len())
+            .saturating_sub(1);
+        let n = (max_node_id + 1).max(2); // Ensure at least 2 for test node 0
         let mut atoms_vec = vec!["".to_string()];
         let interner_len = builder.interner.len();
         for i in 1..interner_len {
@@ -927,6 +956,7 @@ mod tests {
             type_index: HashMap::new(),
             version: builder.version.clone(),
             columns: HashMap::new(),
+            rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(atoms_vec),
         };

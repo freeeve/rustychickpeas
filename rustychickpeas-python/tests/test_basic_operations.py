@@ -139,9 +139,10 @@ def test_get_all_nodes():
     manager = RustyChickpeas()
     builder = manager.create_builder(version="v1.0")
     
+    # Use 0-indexed node IDs (API now requires u32 IDs directly)
+    builder.add_node(0, ["Person"])
     builder.add_node(1, ["Person"])
-    builder.add_node(2, ["Person"])
-    builder.add_node(3, ["Admin"])
+    builder.add_node(2, ["Admin"])
     
     builder.set_version("test_v1")
     builder.finalize_into(manager)
@@ -151,7 +152,7 @@ def test_get_all_nodes():
     
     all_nodes = snapshot.get_all_nodes()
     assert len(all_nodes) == 3
-    # GraphSnapshot returns internal IDs (0, 1, 2)
+    # GraphSnapshot returns node IDs (0, 1, 2)
     assert 0 in all_nodes
     assert 1 in all_nodes
     assert 2 in all_nodes

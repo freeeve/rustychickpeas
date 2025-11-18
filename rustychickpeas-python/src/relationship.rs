@@ -1,7 +1,7 @@
 //! Relationship Python wrapper
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict};
 use rustychickpeas_core::GraphSnapshot as CoreGraphSnapshot;
 use crate::node::Node;
 
@@ -93,6 +93,45 @@ impl Relationship {
         self.rel_index
     }
 
+    /// Get property value for this relationship
+    fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
+        // Find property key ID - return None if key doesn't exist
+        let key_id = match self.snapshot.atoms.strings.iter()
+            .position(|s| s == &key)
+            .map(|idx| idx as u32) {
+            Some(id) => id,
+            None => return Ok(None), // Key doesn't exist, property doesn't exist
+        };
+        
+        // Get property value using outgoing CSR position (rel_index)
+        // Note: For incoming relationships, we still use rel_index as the CSR position
+        // because relationship properties are indexed by their position in the outgoing CSR
+        let value_id = self.snapshot.get_rel_property(self.rel_index, key_id);
+        
+        Python::with_gil(|py| {
+            if let Some(vid) = value_id {
+                match vid {
+                    rustychickpeas_core::ValueId::Str(sid) => {
+                        if let Some(s) = self.snapshot.resolve_string(sid) {
+                            Ok(Some(s.to_object(py)))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    rustychickpeas_core::ValueId::I64(i) => Ok(Some(i.to_object(py))),
+                    rustychickpeas_core::ValueId::F64(bits) => {
+                        Ok(Some(f64::from_bits(bits).to_object(py)))
+                    }
+                    rustychickpeas_core::ValueId::Bool(b) => {
+                        Ok(Some(PyBool::new(py, b).into_py(py)))
+                    }
+                }
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
     /// Convert relationship to a Python dict (zero-allocation where possible)
     /// Returns a dict with: id, type, start_node, end_node, properties (nested)
     fn to_dict(&self) -> PyResult<PyObject> {
@@ -113,9 +152,16 @@ impl Relationship {
             dict.set_item("end_node", end_node.id_internal())?;
             
             // Add properties (nested in properties dict)
-            // Empty for now - GraphSnapshot doesn't support relationship properties yet
             let properties = PyDict::new(py);
-            // TODO: When relationship properties are supported, iterate through them here
+            // Get all relationship properties by iterating through rel_columns
+            // This is a bit inefficient but works for now
+            for (key_id, _column) in &self.snapshot.rel_columns {
+                if let Some(key_str) = self.snapshot.resolve_string(*key_id) {
+                    if let Ok(Some(value)) = self.get_property(key_str.to_string()) {
+                        properties.set_item(key_str, value)?;
+                    }
+                }
+            }
             dict.set_item("properties", properties)?;
             
             Ok(dict.into())

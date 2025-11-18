@@ -119,7 +119,9 @@ impl GraphSnapshot {
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (node_id, direction, rel_types=None))]
-    fn get_rels(&self, node_id: u32, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Node>> {
+    fn get_rels(&self, node_id: u32, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
+        use rustychickpeas_core::types::RelationshipType;
+        
         if node_id >= self.snapshot.n_nodes {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes - 1)
@@ -142,49 +144,69 @@ impl GraphSnapshot {
             Some(ids)
         }).flatten();
 
-        let neighbor_ids = match direction {
-            Direction::Outgoing => {
-                if let Some(type_ids) = rel_type_ids.as_ref() {
-                    self.snapshot.get_out_neighbors_by_type(node_id, type_ids)
-                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
-                    // Filter was provided but no types found - return empty
-                    Vec::new()
-                } else {
-                    self.snapshot.get_out_neighbors(node_id).to_vec()
-                }
-            }
-            Direction::Incoming => {
-                if let Some(type_ids) = rel_type_ids.as_ref() {
-                    self.snapshot.get_in_neighbors_by_type(node_id, type_ids)
-                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
-                    // Filter was provided but no types found - return empty
-                    Vec::new()
-                } else {
-                    self.snapshot.get_in_neighbors(node_id).to_vec()
-                }
-            }
-            Direction::Both => {
-                let mut neighbors = Vec::new();
-                if let Some(type_ids) = rel_type_ids.as_ref() {
-                    neighbors.extend(self.snapshot.get_out_neighbors_by_type(node_id, type_ids));
-                    neighbors.extend(self.snapshot.get_in_neighbors_by_type(node_id, type_ids));
-                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
-                    // Filter was provided but no types found - return empty
-                    // neighbors is already empty
-                } else {
-                    neighbors.extend_from_slice(self.snapshot.get_out_neighbors(node_id));
-                    neighbors.extend_from_slice(self.snapshot.get_in_neighbors(node_id));
-                }
-                neighbors
-            }
-        };
+        let mut relationships = Vec::new();
 
-        Ok(neighbor_ids.into_iter()
-            .map(|id| Node {
-                snapshot: self.snapshot.clone(),
-                node_id: id,
-            })
-            .collect())
+        // Handle outgoing relationships
+        if matches!(direction, Direction::Outgoing | Direction::Both) {
+            let start = self.snapshot.out_offsets[node_id as usize] as usize;
+            let end = self.snapshot.out_offsets[node_id as usize + 1] as usize;
+            
+            for (idx, (&_neighbor, &rel_type)) in self.snapshot.out_nbrs[start..end]
+                .iter()
+                .zip(self.snapshot.out_types[start..end].iter())
+                .enumerate()
+            {
+                let rel_csr_index = start + idx;
+                
+                // Apply type filter if provided
+                if let Some(ref type_ids) = rel_type_ids {
+                    if !type_ids.contains(&rel_type) {
+                        continue;
+                    }
+                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
+                    // Filter was provided but no types found - skip
+                    continue;
+                }
+                
+                relationships.push(Relationship {
+                    snapshot: self.snapshot.clone(),
+                    rel_index: rel_csr_index as u32,
+                    is_outgoing: true,
+                });
+            }
+        }
+
+        // Handle incoming relationships
+        if matches!(direction, Direction::Incoming | Direction::Both) {
+            let start = self.snapshot.in_offsets[node_id as usize] as usize;
+            let end = self.snapshot.in_offsets[node_id as usize + 1] as usize;
+            
+            for (idx, (&_neighbor, &rel_type)) in self.snapshot.in_nbrs[start..end]
+                .iter()
+                .zip(self.snapshot.in_types[start..end].iter())
+                .enumerate()
+            {
+                let rel_csr_index = start + idx;
+                
+                // Apply type filter if provided
+                if let Some(ref type_ids) = rel_type_ids {
+                    if !type_ids.contains(&rel_type) {
+                        continue;
+                    }
+                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
+                    // Filter was provided but no types found - skip
+                    continue;
+                }
+                
+                relationships.push(Relationship {
+                    snapshot: self.snapshot.clone(),
+                    rel_index: rel_csr_index as u32,
+                    is_outgoing: false,
+                });
+            }
+        }
+
+        Ok(relationships)
     }
 
     /// Get neighbor node IDs of a node
@@ -209,7 +231,37 @@ impl GraphSnapshot {
     /// Get neighbors of a node as Node objects
     /// Returns a list of Node objects for neighbors in the specified direction
     fn get_neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<Node>> {
-        self.get_rels(node_id, direction, None)
+        // Get relationships and extract neighbor node IDs
+        let rels = self.get_rels(node_id, direction, None)?;
+        let mut neighbor_ids = Vec::new();
+        
+        for rel in rels {
+            let neighbor_id = if rel.is_outgoing {
+                // For outgoing relationships, the end node is in out_nbrs
+                let idx = rel.rel_index as usize;
+                if idx < self.snapshot.out_nbrs.len() {
+                    self.snapshot.out_nbrs[idx]
+                } else {
+                    continue; // Skip invalid relationship
+                }
+            } else {
+                // For incoming relationships, the start node (neighbor) is in in_nbrs
+                let idx = rel.rel_index as usize;
+                if idx < self.snapshot.in_nbrs.len() {
+                    self.snapshot.in_nbrs[idx]
+                } else {
+                    continue; // Skip invalid relationship
+                }
+            };
+            neighbor_ids.push(neighbor_id);
+        }
+        
+        Ok(neighbor_ids.into_iter()
+            .map(|id| Node {
+                snapshot: self.snapshot.clone(),
+                node_id: id,
+            })
+            .collect())
     }
 
     /// Get degree of a node
@@ -227,11 +279,8 @@ impl GraphSnapshot {
     /// Get relationships of a node (returns neighbor node IDs, not relationship IDs)
     /// Note: GraphSnapshot doesn't track relationship IDs, only node-to-node connections
     fn get_relationships(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
-        // GraphSnapshot doesn't have relationship IDs, so we return neighbor nodes
-        // This matches the Graph API behavior where relationships are accessed via neighbors
-        // Use get_rels instead of deprecated get_neighbors
-        let nodes = self.get_rels(node_id, direction, None)?;
-        Ok(nodes.into_iter().map(|n| n.node_id).collect())
+        // Use get_neighbor_ids which directly returns node IDs
+        self.get_neighbor_ids(node_id, direction)
     }
 
     /// Get relationships by type
@@ -260,9 +309,72 @@ impl GraphSnapshot {
         Ok(relationships)
     }
 
-    /// Get all nodes (returns all node IDs from 0 to n_nodes-1)
+    /// Get all nodes (returns all node IDs that have data: labels, edges, or properties)
     fn get_all_nodes(&self) -> PyResult<Vec<u32>> {
-        Ok((0..self.snapshot.n_nodes).collect())
+        use std::collections::HashSet;
+        let mut nodes = HashSet::new();
+        
+        // Add nodes with labels
+        for (label, node_set) in &self.snapshot.label_index {
+            for node_id in node_set.iter() {
+                nodes.insert(node_id);
+            }
+        }
+        
+        // Add nodes with edges (check CSR arrays)
+        // Nodes with outgoing edges
+        for node_id in 0..self.snapshot.out_offsets.len().saturating_sub(1) {
+            let start = self.snapshot.out_offsets[node_id] as usize;
+            let end = self.snapshot.out_offsets[node_id + 1] as usize;
+            if start < end {
+                nodes.insert(node_id as u32);
+            }
+        }
+        
+        // Nodes with incoming edges
+        for node_id in 0..self.snapshot.in_offsets.len().saturating_sub(1) {
+            let start = self.snapshot.in_offsets[node_id] as usize;
+            let end = self.snapshot.in_offsets[node_id + 1] as usize;
+            if start < end {
+                nodes.insert(node_id as u32);
+            }
+        }
+        
+        // Add nodes with properties
+        for column in self.snapshot.columns.values() {
+            match column {
+                rustychickpeas_core::Column::DenseI64(_) | rustychickpeas_core::Column::DenseF64(_) | 
+                rustychickpeas_core::Column::DenseBool(_) | rustychickpeas_core::Column::DenseStr(_) => {
+                    // Dense columns: all nodes from 0 to n_nodes-1 have this property
+                    // But we only want nodes that actually have data, so skip dense columns
+                    // (they're dense because most nodes have the property, but we can't tell which ones)
+                }
+                rustychickpeas_core::Column::SparseI64(pairs) => {
+                    for (node_id, _) in pairs {
+                        nodes.insert(*node_id);
+                    }
+                }
+                rustychickpeas_core::Column::SparseF64(pairs) => {
+                    for (node_id, _) in pairs {
+                        nodes.insert(*node_id);
+                    }
+                }
+                rustychickpeas_core::Column::SparseBool(pairs) => {
+                    for (node_id, _) in pairs {
+                        nodes.insert(*node_id);
+                    }
+                }
+                rustychickpeas_core::Column::SparseStr(pairs) => {
+                    for (node_id, _) in pairs {
+                        nodes.insert(*node_id);
+                    }
+                }
+            }
+        }
+        
+        let mut result: Vec<u32> = nodes.into_iter().collect();
+        result.sort_unstable();
+        Ok(result)
     }
 
     /// Get all relationships as Relationship objects
