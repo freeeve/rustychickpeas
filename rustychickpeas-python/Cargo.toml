@@ -16,4 +16,5 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 rustychickpeas-core = { path = "../rustychickpeas-core" }
 pyo3 = { workspace = true }
+roaring = "0.11"
 

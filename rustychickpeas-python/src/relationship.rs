@@ -19,7 +19,7 @@ pub struct Relationship {
 #[pymethods]
 impl Relationship {
     /// Get the start node (source) of this relationship
-    fn get_start_node(&self) -> PyResult<Node> {
+    fn start_node(&self) -> PyResult<Node> {
         let start_id = if self.is_outgoing {
             // For outgoing relationships, find which node has this relationship
             // We need to find the node whose offset range contains rel_index
@@ -41,7 +41,7 @@ impl Relationship {
     }
 
     /// Get the end node (destination) of this relationship
-    fn get_end_node(&self) -> PyResult<Node> {
+    fn end_node(&self) -> PyResult<Node> {
         let end_id = if self.is_outgoing {
             // For outgoing relationships, the end node is in out_nbrs
             if self.rel_index as usize >= self.snapshot.out_nbrs.len() {
@@ -62,7 +62,7 @@ impl Relationship {
     }
 
     /// Get the relationship type
-    fn get_type(&self) -> PyResult<String> {
+    fn reltype(&self) -> PyResult<String> {
         let rel_type = if self.is_outgoing {
             if self.rel_index as usize >= self.snapshot.out_types.len() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -96,17 +96,10 @@ impl Relationship {
     /// Get property value for this relationship
     fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
         // Find property key ID - return None if key doesn't exist
-        let key_id = match self.snapshot.atoms.strings.iter()
-            .position(|s| s == &key)
-            .map(|idx| idx as u32) {
-            Some(id) => id,
-            None => return Ok(None), // Key doesn't exist, property doesn't exist
-        };
-        
         // Get property value using outgoing CSR position (rel_index)
         // Note: For incoming relationships, we still use rel_index as the CSR position
         // because relationship properties are indexed by their position in the outgoing CSR
-        let value_id = self.snapshot.get_rel_property(self.rel_index, key_id);
+        let value_id = self.snapshot.relationship_property(self.rel_index, &key);
         
         Python::with_gil(|py| {
             if let Some(vid) = value_id {
@@ -142,12 +135,12 @@ impl Relationship {
             dict.set_item("id", self.rel_index)?;
             
             // Add type
-            let rel_type = self.get_type()?;
+            let rel_type = self.reltype()?;
             dict.set_item("type", rel_type)?;
             
             // Add start and end nodes (as IDs)
-            let start_node = self.get_start_node()?;
-            let end_node = self.get_end_node()?;
+            let start_node = self.start_node()?;
+            let end_node = self.end_node()?;
             dict.set_item("start_node", start_node.id_internal())?;
             dict.set_item("end_node", end_node.id_internal())?;
             

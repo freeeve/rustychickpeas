@@ -180,16 +180,16 @@ def test_builder_bulk_load(num_nodes=1000000, num_relationships=1000000):
         
         builder_total_time = node_load_time + rel_load_time + finalize_time
         
-        snapshot = manager.get_graph_snapshot("v1.0")
+        snapshot = manager.graph_snapshot("v1.0")
         assert snapshot is not None, "Snapshot should be in manager"
         
         print(f"Nodes loaded: {len(node_ids):,} in {node_load_time:.3f}s")
         print(f"Relationships loaded: {len(rel_ids):,} in {rel_load_time:.3f}s")
         print(f"Finalization: {finalize_time:.3f}s")
         print(f"Total time: {builder_total_time:.3f}s")
-        print(f"Nodes: {snapshot.n_nodes():,}")
-        print(f"Relationships: {snapshot.n_rels():,}")
-        print(f"Overall rate: {(snapshot.n_nodes() + snapshot.n_rels()) / builder_total_time:,.0f} entities/sec")
+        print(f"Nodes: {snapshot.node_count():,}")
+        print(f"Relationships: {snapshot.relationship_count():,}")
+        print(f"Overall rate: {(snapshot.node_count() + snapshot.relationship_count()) / builder_total_time:,.0f} entities/sec")
         
         # Test read_from_parquet convenience method
         print("\n--- read_from_parquet convenience method ---")
@@ -208,9 +208,9 @@ def test_builder_bulk_load(num_nodes=1000000, num_relationships=1000000):
         convenience_time = time.time() - start
         
         print(f"Snapshot created in {convenience_time:.3f}s")
-        print(f"Nodes: {snapshot2.n_nodes():,}")
-        print(f"Relationships: {snapshot2.n_rels():,}")
-        print(f"Overall rate: {(snapshot2.n_nodes() + snapshot2.n_rels()) / convenience_time:,.0f} entities/sec")
+        print(f"Nodes: {snapshot2.node_count():,}")
+        print(f"Relationships: {snapshot2.relationship_count():,}")
+        print(f"Overall rate: {(snapshot2.node_count() + snapshot2.relationship_count()) / convenience_time:,.0f} entities/sec")
         
         # Comparison
         print("\n" + "=" * 70)

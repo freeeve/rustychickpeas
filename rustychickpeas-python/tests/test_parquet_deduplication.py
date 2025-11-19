@@ -93,18 +93,18 @@ class TestNodeDeduplication:
             
             # Finalize
             builder.finalize_into(manager)
-            graph = manager.get_graph_snapshot("test_v1")
+            graph = manager.graph_snapshot("test_v1")
             
             # Should have 4 unique nodes (alice, bob, charlie, dave)
             # alice@example.com appears in both files but should be deduplicated
-            assert graph.n_nodes() == 4
+            assert graph.node_count() == 4
             
             # Check that alice@example.com node has properties from both files
             # (The last loaded properties should be present)
             # Find node with email "alice@example.com"
             alice_found = False
-            for node_id in range(graph.n_nodes()):
-                node = graph.get_node(node_id)
+            for node_id in range(graph.node_count()):
+                node = graph.node(node_id)
                 email = node.get_property("email")
                 if email == "alice@example.com":
                     alice_found = True
@@ -158,10 +158,10 @@ class TestNodeDeduplication:
             )
             
             builder.finalize_into(manager)
-            graph = manager.get_graph_snapshot("test_v2")
+            graph = manager.graph_snapshot("test_v2")
             
             # Should have 3 nodes (alice with phone 555-0100, bob, alice with phone 555-9999)
-            assert graph.n_nodes() == 3
+            assert graph.node_count() == 3
     
     def test_node_deduplication_no_unique_properties(self):
         """Test that without unique_properties, all nodes are loaded"""
@@ -200,11 +200,11 @@ class TestNodeDeduplication:
             )
             
             builder.finalize_into(manager)
-            graph = manager.get_graph_snapshot("test_v3")
+            graph = manager.graph_snapshot("test_v3")
             
             # Should have 2 nodes (same IDs are updated, not duplicated)
             # Without deduplication, loading the same node ID twice just updates the same node
-            assert graph.n_nodes() == 2
+            assert graph.node_count() == 2
 
 
 class TestRelationshipDeduplication:
@@ -250,16 +250,16 @@ class TestRelationshipDeduplication:
             )
             
             builder.finalize_into(manager)
-            graph = manager.get_graph_snapshot("test_v4")
+            graph = manager.graph_snapshot("test_v4")
             
             # Should have 3 relationships (all created)
-            assert graph.n_rels() == 3
+            assert graph.relationship_count() == 3
             
             # Node 1 should have 2 outgoing relationships to node 2
-            node1 = graph.get_node(1)
-            rels = node1.get_rels(rcp.Direction.Outgoing)
+            node1 = graph.node(1)
+            rels = node1.relationships(rcp.Direction.Outgoing)
             assert len(rels) == 2
-            assert all(rel.get_end_node().id() == 2 for rel in rels)
+            assert all(rel.end_node().id() == 2 for rel in rels)
     
     def test_relationship_deduplication_unique_by_type(self):
         """Test CreateUniqueByRelType - one relationship per type between two nodes"""
@@ -299,16 +299,16 @@ class TestRelationshipDeduplication:
             )
             
             builder.finalize_into(manager)
-            graph = manager.get_graph_snapshot("test_v5")
+            graph = manager.graph_snapshot("test_v5")
             
             # Should have 3 relationships (1->2 KNOWS deduplicated, 1->3 LIKES, 2->3 KNOWS)
-            assert graph.n_rels() == 3
+            assert graph.relationship_count() == 3
             
             # Node 1 should have 2 outgoing relationships (one KNOWS to 2, one LIKES to 3)
-            node1 = graph.get_node(1)
-            rels = node1.get_rels(rcp.Direction.Outgoing)
+            node1 = graph.node(1)
+            rels = node1.relationships(rcp.Direction.Outgoing)
             assert len(rels) == 2
-            rel_types = [rel.get_type() for rel in rels]
+            rel_types = [rel.reltype() for rel in rels]
             assert "KNOWS" in rel_types
             assert "LIKES" in rel_types
     
@@ -353,11 +353,11 @@ class TestRelationshipDeduplication:
             )
             
             builder.finalize_into(manager)
-            graph = manager.get_graph_snapshot("test_v6")
+            graph = manager.graph_snapshot("test_v6")
             
             # With CreateUniqueByRelType, should have 2 relationships
             # (1->2 KNOWS deduplicated, 1->3 KNOWS)
-            assert graph.n_rels() == 2
+            assert graph.relationship_count() == 2
 
 
 if __name__ == "__main__":

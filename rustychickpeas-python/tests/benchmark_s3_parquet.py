@@ -327,7 +327,7 @@ def benchmark_s3_load(nodes_s3_path, rels_s3_path):
     gc.collect()
     log_memory("After finalization GC")
     
-    snapshot_opt = manager.get_graph_snapshot("s3_test_v1")
+    snapshot_opt = manager.graph_snapshot("s3_test_v1")
     if snapshot_opt is None:
         raise RuntimeError("Failed to retrieve snapshot")
     snapshot = snapshot_opt
@@ -338,8 +338,8 @@ def benchmark_s3_load(nodes_s3_path, rels_s3_path):
     print(f"\n{'='*70}")
     print(f"Summary (S3 Load)")
     print(f"{'='*70}")
-    print(f"Total nodes: {snapshot.n_nodes():,}")
-    print(f"Total relationships: {snapshot.n_rels():,}")
+    print(f"Total nodes: {snapshot.node_count():,}")
+    print(f"Total relationships: {snapshot.relationship_count():,}")
     print(f"Total entities loaded: {total_entities:,}")
     print(f"\nTiming:")
     print(f"  Node loading (S3): {nodes_load_time:.2f}s")

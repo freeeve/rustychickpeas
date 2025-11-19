@@ -106,12 +106,12 @@ manager = rcp.RustyChickpeas()
 # Create a builder with a version
 builder = manager.create_builder(version="v1.0")
 
-# Add nodes with labels
-builder.add_node(1, ["Person"])
-builder.add_node(2, ["Person"])
-builder.add_node(3, ["Company"])
+# Add nodes with labels (node_id is optional - auto-generates if not provided)
+builder.add_node(["Person"], node_id=1)
+builder.add_node(["Person"], node_id=2)
+builder.add_node(["Company"], node_id=3)
 
-# Add relationships
+# Add relationships (node IDs are required)
 builder.add_rel(1, 2, "KNOWS")
 builder.add_rel(1, 3, "WORKS_FOR")
 
@@ -125,27 +125,30 @@ builder.set_prop(3, "name", "Acme Corp")
 builder.finalize_into(manager)
 
 # Retrieve snapshot by version
-graph = manager.get_graph_snapshot("v1.0")
+graph = manager.graph_snapshot("v1.0")
+
+# Get graph statistics
+print(f"Graph has {graph.node_count()} nodes and {graph.relationship_count()} relationships")
 
 # Query nodes
-node = graph.get_node(1)  # Get Node object (node ID 1)
-print(f"Node labels: {node.get_labels()}")  # ["Person"]
+node = graph.node(1)  # Get Node object (node ID 1)
+print(f"Node labels: {node.labels()}")  # ["Person"]
 print(f"Node property 'name': {node.get_property('name')}")  # "Alice"
 
 # Query relationships - get neighbor Node objects
-neighbors = graph.get_neighbors(1, rcp.Direction.Outgoing)
+neighbors = graph.neighbors(1, rcp.Direction.Outgoing)
 print(f"Node 1 has {len(neighbors)} outgoing neighbors")
 for neighbor in neighbors:
-    print(f"  Neighbor ID: {neighbor.id()}, labels: {neighbor.get_labels()}")
+    print(f"  Neighbor ID: {neighbor.id()}, labels: {neighbor.labels()}")
 
 # Or get just the neighbor IDs
-neighbor_ids = graph.get_neighbor_ids(1, rcp.Direction.Outgoing)
+neighbor_ids = graph.neighbor_ids(1, rcp.Direction.Outgoing)
 print(f"Neighbor IDs: {neighbor_ids}")  # [2, 3]
 
 # Get relationships as Relationship objects (includes type, start/end nodes)
-relationships = graph.get_rels(1, rcp.Direction.Outgoing)
+relationships = graph.relationships(1, rcp.Direction.Outgoing)
 for rel in relationships:
-    print(f"  {rel.get_type()}: {rel.get_start_node().id()} -> {rel.get_end_node().id()}")
+    print(f"  {rel.reltype()}: {rel.start_node().id()} -> {rel.end_node().id()}")
 ```
 
 #### Standalone Usage (without Manager)
@@ -157,16 +160,16 @@ import rustychickpeas as rcp
 builder = rcp.GraphSnapshotBuilder(version="v1.0")
 
 # Add nodes and relationships
-builder.add_node(1, ["Person"])
-builder.add_node(2, ["Person"])
+builder.add_node(["Person"], node_id=1)
+builder.add_node(["Person"], node_id=2)
 builder.add_rel(1, 2, "KNOWS")
 
 # Finalize into a snapshot
 graph = builder.finalize()
 
 # Query the graph
-node = graph.get_node(1)
-neighbors = graph.get_neighbors(1, rcp.Direction.Outgoing)
+node = graph.node(1)
+neighbors = graph.neighbors(1, rcp.Direction.Outgoing)
 ```
 
 #### Loading from Parquet Files
@@ -194,7 +197,7 @@ builder.load_relationships_from_parquet("relationships.parquet",
                                        end_node_column="to", 
                                        rel_type_column="type")
 builder.finalize_into(manager)
-graph = manager.get_graph_snapshot("v1.0")
+graph = manager.graph_snapshot("v1.0")
 ```
 
 ### Rust
@@ -208,9 +211,10 @@ let manager = RustyChickpeas::new();
 // Create a builder from the manager with version
 let mut builder = manager.create_builder(Some("v1.0"), None, None);
 
-// Add nodes and relationships (node IDs must be u32)
-builder.add_node(1, &["Person"]);
-builder.add_node(2, &["Person"]);
+// Add nodes and relationships (node_id is optional - auto-generates if None)
+builder.add_node(Some(1), &["Person"]);
+builder.add_node(Some(2), &["Person"]);
+// Relationships require explicit node IDs
 builder.add_rel(1, 2, "KNOWS");
 
 // Finalize the builder
@@ -220,10 +224,10 @@ let snapshot = builder.finalize(None);
 manager.add_snapshot(snapshot);
 
 // Retrieve the snapshot by version
-let snapshot = manager.get_graph_snapshot("v1.0").unwrap();
+let snapshot = manager.graph_snapshot("v1.0").unwrap();
 
 // Query the snapshot
-let neighbors = snapshot.get_out_neighbors(1);
+let neighbors = snapshot.out_neighbors(1);
 println!("Node 1 neighbors: {:?}", neighbors);
 ```
 
@@ -250,8 +254,8 @@ builder2 = manager.create_builder(version="v2.0")
 builder2.finalize_into(manager)
 
 # Retrieve snapshots by version
-v1_snapshot = manager.get_graph_snapshot("v1.0")
-v2_snapshot = manager.get_graph_snapshot("v2.0")
+v1_snapshot = manager.graph_snapshot("v1.0")
+v2_snapshot = manager.graph_snapshot("v2.0")
 
 # List all versions
 versions = manager.versions()  # ["v1.0", "v2.0"]
@@ -263,7 +267,7 @@ versions = manager.versions()  # ["v1.0", "v2.0"]
 
 2. **Storage**: After calling `builder.finalize()`, add the snapshot to the manager using `manager.add_snapshot(snapshot)`. The snapshot will be stored under its version (if set) or "latest" if no version is set.
 
-3. **Retrieval**: Use `manager.get_graph_snapshot(version_string)` to retrieve a snapshot by version.
+3. **Retrieval**: Use `manager.graph_snapshot(version_string)` to retrieve a snapshot by version.
 
 4. **Version Storage**: Versions are stored as strings and can be any identifier you choose (e.g., "v1.0", "2024-01-01", "production").
 
@@ -285,6 +289,16 @@ builder = manager.create_builder(version="v1.0")
 
 # Large graph - specify capacity hint to avoid reallocations
 builder = manager.create_builder(version="v1.0", capacity_nodes=10_000_000, capacity_rels=50_000_000)
+```
+
+## API Naming Conventions
+
+RustyChickpeas follows Pythonic naming conventions with clear, descriptive method names:
+
+```python
+# Get graph statistics
+nodes = graph.node_count()
+relationships = graph.relationship_count()
 ```
 
 ## Performance

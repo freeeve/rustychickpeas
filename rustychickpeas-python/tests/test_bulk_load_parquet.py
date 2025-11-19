@@ -72,11 +72,11 @@ def test_bulk_load_nodes():
         builder.finalize_into(manager)
         
         # Retrieve snapshot
-        snapshot = manager.get_graph_snapshot("test_v1")
+        snapshot = manager.graph_snapshot("test_v1")
         assert snapshot is not None, "Snapshot should be stored in manager"
         
         print(f"\nSnapshot stored with version: test_v1")
-        print(f"Total nodes in snapshot: {snapshot.n_nodes():,}")
+        print(f"Total nodes in snapshot: {snapshot.node_count():,}")
         
         # Verify some nodes
         if node_ids:
@@ -140,12 +140,12 @@ def test_bulk_load_relationships():
         builder.finalize_into(manager)
         
         # Retrieve snapshot
-        snapshot = manager.get_graph_snapshot("test_v2")
+        snapshot = manager.graph_snapshot("test_v2")
         assert snapshot is not None, "Snapshot should be stored in manager"
         
         print(f"\nSnapshot stored with version: test_v2")
-        print(f"Total nodes: {snapshot.n_nodes():,}")
-        print(f"Total relationships: {snapshot.n_rels():,}")
+        print(f"Total nodes: {snapshot.node_count():,}")
+        print(f"Total relationships: {snapshot.relationship_count():,}")
         
         # Clean up
         os.unlink(nodes_file)
@@ -185,9 +185,9 @@ def test_read_from_parquet():
         load_time = time.time() - start
         
         print(f"Loaded snapshot in {load_time:.3f}s")
-        print(f"Nodes: {snapshot.n_nodes():,}")
-        print(f"Relationships: {snapshot.n_rels():,}")
-        print(f"Overall rate: {(snapshot.n_nodes() + snapshot.n_rels()) / load_time:,.0f} entities/sec")
+        print(f"Nodes: {snapshot.node_count():,}")
+        print(f"Relationships: {snapshot.relationship_count():,}")
+        print(f"Overall rate: {(snapshot.node_count() + snapshot.relationship_count()) / load_time:,.0f} entities/sec")
         
         # Clean up
         os.unlink(nodes_file)

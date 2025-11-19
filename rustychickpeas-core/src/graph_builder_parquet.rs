@@ -1,8 +1,9 @@
 //! Parquet reading support for GraphBuilder
 
-use crate::builder::GraphBuilder;
+use crate::graph_builder::GraphBuilder;
 use crate::error::{Result, GraphError};
-use crate::snapshot::{GraphSnapshot, ValueId};
+use crate::graph_snapshot::{GraphSnapshot, ValueId};
+use crate::types::NodeId;
 use arrow::array::*;
 use arrow::datatypes::*;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -178,7 +179,6 @@ impl GraphBuilder {
         // Stream batches and process them immediately (no accumulation in memory)
         let mut node_ids = Vec::new();
         let mut seen_node_ids = RoaringBitmap::new(); // Track seen node IDs with bitmap (memory efficient, fast)
-        let mut row_offset = 0;
         let mut first_batch = true;
 
         while let Some(batch_result) = reader.next() {
@@ -197,16 +197,15 @@ impl GraphBuilder {
                 first_batch = false;
             }
 
-            // Extract node IDs
-            let mut node_ids_batch = Vec::with_capacity(batch.num_rows());
+            // Extract node IDs (optional - None means auto-generate)
+            let mut node_ids_batch: Vec<Option<NodeId>> = Vec::with_capacity(batch.num_rows());
             if let Some(idx) = node_id_idx {
                 let id_col = batch.column(idx);
                 // Support both Int64 and Int32 for node IDs
                 if let Some(int_array) = id_col.as_any().downcast_ref::<Int64Array>() {
                     for i in 0..batch.num_rows() {
                         if int_array.is_null(i) {
-                            let auto_id = (row_offset + i) as u32 + 1;
-                            node_ids_batch.push(auto_id);
+                            node_ids_batch.push(None); // Auto-generate
                         } else {
                             let val = int_array.value(i);
                             if val < 0 || val > u32::MAX as i64 {
@@ -214,14 +213,13 @@ impl GraphBuilder {
                                     format!("Node ID {} exceeds u32::MAX ({})", val, u32::MAX)
                                 ));
                             }
-                            node_ids_batch.push(val as u32);
+                            node_ids_batch.push(Some(val as u32));
                         }
                     }
                 } else if let Some(int_array) = id_col.as_any().downcast_ref::<Int32Array>() {
                     for i in 0..batch.num_rows() {
                         if int_array.is_null(i) {
-                            let auto_id = (row_offset + i) as u32 + 1;
-                            node_ids_batch.push(auto_id);
+                            node_ids_batch.push(None); // Auto-generate
                         } else {
                             let val = int_array.value(i);
                             if val < 0 {
@@ -229,7 +227,7 @@ impl GraphBuilder {
                                     format!("Node ID {} cannot be negative", val)
                                 ));
                             }
-                            node_ids_batch.push(val as u32);
+                            node_ids_batch.push(Some(val as u32));
                         }
                     }
                 } else {
@@ -238,9 +236,9 @@ impl GraphBuilder {
                     ));
                 }
             } else {
-                // Auto-generate IDs
-                for i in 0..batch.num_rows() {
-                    node_ids_batch.push((row_offset + i) as u32 + 1);
+                // No ID column - all auto-generate
+                for _i in 0..batch.num_rows() {
+                    node_ids_batch.push(None);
                 }
             }
 
@@ -381,10 +379,10 @@ impl GraphBuilder {
                     if let Some(Some(ref dedup_key)) = dedup_keys_per_row.get(i) {
                         if let Some(&existing_node_id) = self.dedup_map.get(dedup_key) {
                             // Use existing node_id, merge labels
-                            node_ids_batch[i] = existing_node_id;
+                            node_ids_batch[i] = Some(existing_node_id);
                             // Get or compute existing labels (cache to avoid repeated lookups)
                             let existing_labels = labels_cache.entry(existing_node_id).or_insert_with(|| {
-                                self.get_node_labels(existing_node_id)
+                                self.node_labels(existing_node_id)
                             });
                             let new_labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
                             // Merge labels efficiently
@@ -397,8 +395,19 @@ impl GraphBuilder {
                             processed_in_dedup.insert(i);
                         } else {
                             // First time seeing this combination, add to map
+                            // Need to get or generate the node ID first
+                            let node_id = node_ids_batch[i].unwrap_or_else(|| {
+                                // Auto-generate if not set
+                                let id = self.next_node_id;
+                                self.next_node_id = id.wrapping_add(1);
+                                if self.next_node_id == 0 {
+                                    panic!("Node ID counter wrapped around (exceeded u32::MAX)");
+                                }
+                                id
+                            });
+                            node_ids_batch[i] = Some(node_id);
                             // OPTIMIZATION: DedupKey uses Copy for small tuples, so cloning is cheap
-                            self.dedup_map.insert(dedup_key.clone(), node_ids_batch[i]);
+                            self.dedup_map.insert(dedup_key.clone(), node_id);
                         }
                     }
                 }
@@ -407,27 +416,32 @@ impl GraphBuilder {
             // Second pass: apply deduplication updates (now we can call self methods)
             for (_i, existing_node_id, merged_labels) in dedup_updates {
                 let labels_refs: Vec<&str> = merged_labels.iter().map(|s| s.as_str()).collect();
-                self.add_node(existing_node_id, &labels_refs);
+                self.add_node(Some(existing_node_id), &labels_refs);
             }
 
             // Extract properties (after deduplication, so properties go to correct node_id)
-            let prop_start = std::time::Instant::now();
-            let mut prop_times = std::collections::HashMap::new();
             for prop_col in &prop_cols {
-                let col_start = std::time::Instant::now();
                 if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == prop_col) {
                     let column = batch.column(column_idx);
                     let field = schema.field(column_idx);
                     
-                    let mut set_count = 0;
                     for i in 0..batch.num_rows() {
-                        let node_id = node_ids_batch[i]; // Use deduplicated ID
+                        // Get node ID (auto-generate if None)
+                        let node_id = node_ids_batch[i].unwrap_or_else(|| {
+                            // Auto-generate if not set
+                            let id = self.next_node_id;
+                            self.next_node_id = id.wrapping_add(1);
+                            if self.next_node_id == 0 {
+                                panic!("Node ID counter wrapped around (exceeded u32::MAX)");
+                            }
+                            node_ids_batch[i] = Some(id); // Update the batch
+                            id
+                        });
                         match field.data_type() {
                             DataType::Utf8 | DataType::LargeUtf8 => {
                                 if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
                                     if !string_array.is_null(i) {
                                         self.set_prop_str(node_id, prop_col, string_array.value(i));
-                                        set_count += 1;
                                     }
                                 }
                             }
@@ -435,7 +449,6 @@ impl GraphBuilder {
                                 if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
                                     if !int_array.is_null(i) {
                                         self.set_prop_i64(node_id, prop_col, int_array.value(i));
-                                        set_count += 1;
                                     }
                                 }
                             }
@@ -443,7 +456,6 @@ impl GraphBuilder {
                                 if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
                                     if !float_array.is_null(i) {
                                         self.set_prop_f64(node_id, prop_col, float_array.value(i));
-                                        set_count += 1;
                                     }
                                 }
                             }
@@ -451,7 +463,6 @@ impl GraphBuilder {
                                 if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
                                     if !bool_array.is_null(i) {
                                         self.set_prop_bool(node_id, prop_col, bool_array.value(i));
-                                        set_count += 1;
                                     }
                                 }
                             }
@@ -460,40 +471,32 @@ impl GraphBuilder {
                                 if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
                                     if !string_array.is_null(i) {
                                         self.set_prop_str(node_id, prop_col, string_array.value(i));
-                                        set_count += 1;
                                     }
                                 }
                             }
                         }
                     }
-                    let col_time = col_start.elapsed();
-                    prop_times.insert(prop_col.to_string(), (col_time, set_count));
-                }
-            }
-            let prop_total = prop_start.elapsed();
-            if row_offset == 0 || (row_offset % 100000 == 0 && row_offset > 0) {
-                eprintln!("[RUST TIMING] Batch at row {}: Properties took {:.3}s total", row_offset, prop_total.as_secs_f64());
-                for (col, (time, count)) in &prop_times {
-                    eprintln!("[RUST TIMING]   {}: {:.3}s for {} values ({:.0} ops/sec)", 
-                        col, time.as_secs_f64(), count, *count as f64 / time.as_secs_f64().max(0.0001));
                 }
             }
 
             // Add nodes with labels (after deduplication)
             // Skip nodes that were already processed in the deduplication step
-            for (i, node_id) in node_ids_batch.iter().enumerate() {
+            for i in 0..node_ids_batch.len() {
                 if !processed_in_dedup.contains(&i) {
                     let labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
-                    self.add_node(*node_id, &labels);
+                    let actual_id = self.add_node(node_ids_batch[i], &labels);
+                    // Update the batch with the actual ID (in case it was auto-generated)
+                    node_ids_batch[i] = Some(actual_id);
                 }
                 // Only add to node_ids if this is the first time we're seeing this node_id
                 // Use RoaringBitmap for O(1) lookup - more memory efficient than HashSet for dense IDs
-                if seen_node_ids.insert(*node_id) {
-                    node_ids.push(*node_id);
+                if let Some(node_id) = node_ids_batch[i] {
+                    if seen_node_ids.insert(node_id) {
+                        node_ids.push(node_id);
+                    }
                 }
             }
 
-            row_offset += batch.num_rows();
         }
 
         Ok(node_ids)
@@ -930,7 +933,7 @@ pub fn read_from_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::ValueId;
+    use crate::graph_snapshot::ValueId;
     use tempfile::TempDir;
     use parquet::file::properties::WriterProperties;
     use parquet::arrow::ArrowWriter;
@@ -1027,10 +1030,10 @@ mod tests {
         assert_eq!(builder.node_count(), 5);
         
         // Check that properties were loaded
-        assert_eq!(builder.get_prop(1, "name"), Some(ValueId::Str(builder.interner.get_or_intern("Alice"))));
-        assert_eq!(builder.get_prop(1, "age"), Some(ValueId::I64(30)));
-        assert_eq!(builder.get_prop(1, "score"), Some(ValueId::from_f64(95.5)));
-        assert_eq!(builder.get_prop(1, "active"), Some(ValueId::Bool(true)));
+        assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(builder.interner.get_or_intern("Alice"))));
+        assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(30)));
+        assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
+        assert_eq!(builder.prop(1, "active"), Some(ValueId::Bool(true)));
     }
 
     #[test]
@@ -1048,8 +1051,8 @@ mod tests {
         ).unwrap();
         
         assert_eq!(node_ids.len(), 5);
-        // Auto-generated IDs start at 1
-        assert_eq!(node_ids, vec![1, 2, 3, 4, 5]);
+        // Auto-generated IDs start at 0
+        assert_eq!(node_ids, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
@@ -1068,8 +1071,8 @@ mod tests {
         
         assert_eq!(node_ids.len(), 5);
         // Should have loaded name, age, score, active (all columns except id and label)
-        assert!(builder.get_prop(1, "name").is_some());
-        assert!(builder.get_prop(1, "age").is_some());
+        assert!(builder.prop(1, "name").is_some());
+        assert!(builder.prop(1, "age").is_some());
     }
 
     #[test]
@@ -1080,7 +1083,7 @@ mod tests {
         // First add nodes
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(i, &["Node"]);
+            builder.add_node(Some(i), &["Node"]);
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -1105,7 +1108,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(i, &["Node"]);
+            builder.add_node(Some(i), &["Node"]);
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -1152,7 +1155,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(i as u32, &["Node"]);
+            builder.add_node(Some(i as u32), &["Node"]);
         }
         
         let rel_ids = builder.load_relationships_from_parquet(

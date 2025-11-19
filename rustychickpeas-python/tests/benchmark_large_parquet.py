@@ -220,7 +220,7 @@ def benchmark_large_load(nodes_file, rels_file):
     gc.collect()
     log_memory("After finalization GC")
     
-    snapshot_opt = manager.get_graph_snapshot("large_test_v1")
+    snapshot_opt = manager.graph_snapshot("large_test_v1")
     if snapshot_opt is None:
         raise RuntimeError("Failed to retrieve snapshot")
     snapshot = snapshot_opt  # Already unwrapped, no .unwrap() needed
@@ -231,8 +231,8 @@ def benchmark_large_load(nodes_file, rels_file):
     print(f"\n{'='*70}")
     print(f"Summary")
     print(f"{'='*70}")
-    print(f"Total nodes: {snapshot.n_nodes():,}")
-    print(f"Total relationships: {snapshot.n_rels():,}")
+    print(f"Total nodes: {snapshot.node_count():,}")
+    print(f"Total relationships: {snapshot.relationship_count():,}")
     print(f"Total entities: {total_entities:,}")
     print(f"\nTiming:")
     print(f"  Node loading: {nodes_load_time:.2f}s")

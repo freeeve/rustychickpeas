@@ -6,6 +6,8 @@ use rustychickpeas_core::{
     GraphSnapshot as CoreGraphSnapshot, Label, RelationshipType, ValueId,
 };
 use rustychickpeas_core::types::PropertyKey;
+use rustychickpeas_core::bitmap::NodeSet;
+use roaring::RoaringBitmap;
 use crate::direction::Direction;
 use crate::node::Node;
 use crate::relationship::Relationship;
@@ -19,13 +21,9 @@ pub struct GraphSnapshot {
 
 impl GraphSnapshot {
     /// Get string ID from string
-    /// Since atoms.strings is indexed by interned string ID, the index matches the ID
+    /// Uses the reverse index in Atoms for O(1) lookup
     fn get_string_id(&self, s: &str) -> Option<u32> {
-        // For now, search linearly (can optimize with cached reverse map later)
-        // The index in atoms.strings should match the interned string ID
-        self.snapshot.atoms.strings.iter()
-            .position(|st| st == s)
-            .map(|idx| idx as u32)
+        self.snapshot.atoms.get_id(s)
     }
 
     /// Get label from string
@@ -61,17 +59,17 @@ impl GraphSnapshot {
 impl GraphSnapshot {
 
     /// Get number of nodes
-    fn n_nodes(&self) -> u32 {
+    fn node_count(&self) -> u32 {
         self.snapshot.n_nodes
     }
 
     /// Get number of relationships
-    fn n_rels(&self) -> u64 {
+    fn relationship_count(&self) -> u64 {
         self.snapshot.n_rels
     }
 
     /// Get node labels
-    fn get_node_labels(&self, node_id: u32) -> PyResult<Vec<String>> {
+    fn node_labels(&self, node_id: u32) -> PyResult<Vec<String>> {
         // GraphSnapshot doesn't store labels per node directly
         // We need to iterate through label_index to find which labels contain this node
         let mut labels = Vec::new();
@@ -86,21 +84,28 @@ impl GraphSnapshot {
     }
 
     /// Get nodes with a specific label
-    fn get_nodes_with_label(&self, label: String) -> PyResult<Vec<u32>> {
-        let label_id = self.label_from_str(&label)
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+    fn nodes_with_label(&self, label: String) -> PyResult<Vec<u32>> {
+        // Call Rust function - it returns None if label doesn't exist
+        // We need to distinguish between "label doesn't exist" vs "label exists but no nodes"
+        // Since nodes_with_label_id returns Option<&NodeSet>, None means label not in index
+        let label_id = self.label_from_str(&label);
+        if label_id.is_none() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Label '{}' not found", label)
-            ))?;
+            ));
+        }
         
-        if let Some(node_set) = self.snapshot.get_nodes_with_label(label_id) {
+        // Label exists, now get nodes (will return Some even if empty)
+        if let Some(node_set) = self.snapshot.nodes_with_label(&label) {
             Ok(node_set.iter().collect())
         } else {
+            // This shouldn't happen if label exists, but handle it
             Ok(Vec::new())
         }
     }
 
     /// Get a Node object for the given node ID
-    fn get_node(&self, node_id: u32) -> PyResult<Node> {
+    fn node(&self, node_id: u32) -> PyResult<Node> {
         if node_id >= self.snapshot.n_nodes {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes - 1)
@@ -119,7 +124,7 @@ impl GraphSnapshot {
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (node_id, direction, rel_types=None))]
-    fn get_rels(&self, node_id: u32, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
+    fn relationships(&self, node_id: u32, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
         use rustychickpeas_core::types::RelationshipType;
         
         if node_id >= self.snapshot.n_nodes {
@@ -211,18 +216,18 @@ impl GraphSnapshot {
 
     /// Get neighbor node IDs of a node
     /// Returns a list of node IDs for neighbors in the specified direction
-    fn get_neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
+    fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
         match direction {
             Direction::Outgoing => {
-                Ok(self.snapshot.get_out_neighbors(node_id).to_vec())
+                Ok(self.snapshot.out_neighbors(node_id).to_vec())
             }
             Direction::Incoming => {
-                Ok(self.snapshot.get_in_neighbors(node_id).to_vec())
+                Ok(self.snapshot.in_neighbors(node_id).to_vec())
             }
             Direction::Both => {
                 let mut neighbors = Vec::new();
-                neighbors.extend_from_slice(self.snapshot.get_out_neighbors(node_id));
-                neighbors.extend_from_slice(self.snapshot.get_in_neighbors(node_id));
+                neighbors.extend_from_slice(self.snapshot.out_neighbors(node_id));
+                neighbors.extend_from_slice(self.snapshot.in_neighbors(node_id));
                 Ok(neighbors)
             }
         }
@@ -230,9 +235,9 @@ impl GraphSnapshot {
 
     /// Get neighbors of a node as Node objects
     /// Returns a list of Node objects for neighbors in the specified direction
-    fn get_neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<Node>> {
+    fn neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<Node>> {
         // Get relationships and extract neighbor node IDs
-        let rels = self.get_rels(node_id, direction, None)?;
+        let rels = self.relationships(node_id, direction, None)?;
         let mut neighbor_ids = Vec::new();
         
         for rel in rels {
@@ -265,27 +270,21 @@ impl GraphSnapshot {
     }
 
     /// Get degree of a node
-    fn get_degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
+    fn degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
         match direction {
-            Direction::Outgoing => Ok(self.snapshot.get_out_neighbors(node_id).len()),
-            Direction::Incoming => Ok(self.snapshot.get_in_neighbors(node_id).len()),
+            Direction::Outgoing => Ok(self.snapshot.out_neighbors(node_id).len()),
+            Direction::Incoming => Ok(self.snapshot.in_neighbors(node_id).len()),
             Direction::Both => {
-                Ok(self.snapshot.get_out_neighbors(node_id).len() + 
-                   self.snapshot.get_in_neighbors(node_id).len())
+                Ok(self.snapshot.out_neighbors(node_id).len() + 
+                   self.snapshot.in_neighbors(node_id).len())
             }
         }
     }
 
-    /// Get relationships of a node (returns neighbor node IDs, not relationship IDs)
-    /// Note: GraphSnapshot doesn't track relationship IDs, only node-to-node connections
-    fn get_relationships(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
-        // Use get_neighbor_ids which directly returns node IDs
-        self.get_neighbor_ids(node_id, direction)
-    }
 
     /// Get relationships by type
     /// Returns Relationship objects for all relationships of the specified type
-    fn get_relationships_by_type(&self, rel_type: String) -> PyResult<Vec<Relationship>> {
+    fn relationships_by_type(&self, rel_type: String) -> PyResult<Vec<Relationship>> {
         let rel_type_id = self.rel_type_from_str(&rel_type)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Relationship type '{}' not found", rel_type)
@@ -310,7 +309,7 @@ impl GraphSnapshot {
     }
 
     /// Get all nodes (returns all node IDs that have data: labels, edges, or properties)
-    fn get_all_nodes(&self) -> PyResult<Vec<u32>> {
+    fn all_nodes(&self) -> PyResult<Vec<u32>> {
         use std::collections::HashSet;
         let mut nodes = HashSet::new();
         
@@ -379,7 +378,7 @@ impl GraphSnapshot {
 
     /// Get all relationships as Relationship objects
     /// Returns all relationships in the graph
-    fn get_all_relationships(&self) -> PyResult<Vec<Relationship>> {
+    fn all_relationships(&self) -> PyResult<Vec<Relationship>> {
         let mut relationships = Vec::with_capacity(self.snapshot.out_nbrs.len());
         
         // Iterate through all outgoing relationships (each relationship appears once)
@@ -401,7 +400,7 @@ impl GraphSnapshot {
     /// 
     /// # Arguments
     /// * `rel_index` - The relationship index in out_nbrs (0 to n_rels-1)
-    fn get_relationship(&self, rel_index: u32) -> PyResult<Relationship> {
+    fn relationship(&self, rel_index: u32) -> PyResult<Relationship> {
         let max_index = self.snapshot.out_nbrs.len() as u32;
         
         if rel_index >= max_index {
@@ -425,7 +424,7 @@ impl GraphSnapshot {
     /// # Arguments
     /// * `start_node` - Source node ID
     /// * `end_node` - Destination node ID
-    fn get_relationship_by_nodes(&self, start_node: u32, end_node: u32) -> PyResult<Option<Relationship>> {
+    fn relationship_by_nodes(&self, start_node: u32, end_node: u32) -> PyResult<Option<Relationship>> {
         // Check if start_node is valid
         if start_node as usize >= self.snapshot.out_offsets.len().saturating_sub(1) {
             return Ok(None);
@@ -449,13 +448,18 @@ impl GraphSnapshot {
     }
 
     /// Get property value for a node
-    fn get_node_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
-        let key_id = self.property_key_from_str(&key)
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+    fn node_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
+        // Check if property key exists - need to do this before calling prop()
+        // because prop() returns None for both "key doesn't exist" and "node doesn't have property"
+        let key_id = self.property_key_from_str(&key);
+        if key_id.is_none() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Property key '{}' not found", key)
-            ))?;
+            ));
+        }
         
-        let value_id = self.snapshot.get_property(node_id, key_id);
+        // Key exists, now get value (None means node doesn't have this property, which is valid)
+        let value_id = self.snapshot.prop(node_id, &key);
         
         Python::with_gil(|py| {
             if let Some(vid) = value_id {
@@ -481,13 +485,32 @@ impl GraphSnapshot {
         })
     }
 
-    /// Get nodes with a specific property value
-    fn get_nodes_with_property(&self, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
-        let key_id = self.property_key_from_str(&key)
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Property key '{}' not found", key)
-            ))?;
+    /// Get nodes with a specific property value, scoped by label
+    /// 
+    /// # Arguments
+    /// * `label` - The label to scope the query to
+    /// * `key` - The property key
+    /// * `value` - The property value to search for
+    #[pyo3(signature = (label, key, value))]
+    fn nodes_with_property(&self, label: String, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
+        // Check if label exists - need to do this before calling nodes_with_property()
+        // because it returns None for both "label doesn't exist" and "no matches"
+        let label_id = self.label_from_str(&label);
+        if label_id.is_none() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("Label '{}' not found", label)
+            ));
+        }
         
+        // Check if property key exists
+        let key_id = self.property_key_from_str(&key);
+        if key_id.is_none() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("Property key '{}' not found", key)
+            ));
+        }
+        
+        // Both label and key exist, now convert value and query
         let prop_value = py_to_property_value(value)?;
         let value_id = match prop_value {
             rustychickpeas_core::PropertyValue::String(s) => {
@@ -509,7 +532,8 @@ impl GraphSnapshot {
         };
         
         // get_nodes_with_property now returns Option<NodeSet> (cloned) instead of Option<&NodeSet>
-        if let Some(node_set) = self.snapshot.get_nodes_with_property(key_id, value_id) {
+        // None means no matches (valid), Some means matches found
+        if let Some(node_set) = self.snapshot.nodes_with_property(&label, &key, value_id) {
             Ok(node_set.iter().collect())
         } else {
             Ok(Vec::new())
@@ -552,6 +576,361 @@ impl GraphSnapshot {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         
         Ok(GraphSnapshot::new(snapshot))
+    }
+
+    /// Bidirectional BFS to find paths between source and target node sets
+    /// 
+    /// Performs BFS from both source and target nodes simultaneously, meeting in the middle.
+    /// Returns the intersection of nodes and relationships that lie on paths between the sets.
+    /// 
+    /// # Arguments
+    /// * `source_nodes` - List of starting node IDs for forward traversal
+    /// * `target_nodes` - List of starting node IDs for backward traversal
+    /// * `direction` - Direction of traversal (Direction.Outgoing, Direction.Incoming, or Direction.Both)
+    ///   - Outgoing: Forward search uses outgoing edges, backward uses incoming (default for finding paths from source to target)
+    ///   - Incoming: Forward search uses incoming edges, backward uses outgoing (reverse direction)
+    ///   - Both: Both searches use both directions (bidirectional traversal)
+    /// * `rel_types` - Optional list of relationship type names to filter by
+    /// * `node_filter` - Optional callable that takes (node_id: int) and returns bool.
+    ///   Returns True to include/continue from a node.
+    /// * `rel_filter` - Optional callable that takes (from_node: int, to_node: int, rel_type: str, csr_pos: int) and returns bool.
+    ///   Returns True to follow a relationship.
+    /// * `max_depth` - Optional maximum depth for each direction (default: no limit)
+    /// 
+    /// # Returns
+    /// A tuple `(node_ids, rel_csr_positions)` where:
+    /// - `node_ids`: List of node IDs on paths between source and target
+    /// - `rel_csr_positions`: List of relationship CSR positions on paths between source and target
+    /// 
+    /// # Examples
+    /// ```python
+    /// from rustychickpeas import Direction
+    /// 
+    /// # Simple bidirectional search (default: Outgoing)
+    /// nodes, rels = snapshot.bidirectional_bfs([0, 1], [10, 11], Direction.Outgoing)
+    /// 
+    /// # With relationship type filter
+    /// nodes, rels = snapshot.bidirectional_bfs(
+    ///     [0, 1], [10, 11], 
+    ///     Direction.Outgoing,
+    ///     rel_types=["KNOWS", "WORKS_WITH"]
+    /// )
+    /// 
+    /// # Bidirectional traversal (both directions)
+    /// nodes, rels = snapshot.bidirectional_bfs(
+    ///     [0, 1], [10, 11],
+    ///     Direction.Both
+    /// )
+    /// 
+    /// # With node filter (only "Person" nodes)
+    /// def node_filter(node_id):
+    ///     return "Person" in snapshot.node_labels(node_id)
+    /// 
+    /// nodes, rels = snapshot.bidirectional_bfs(
+    ///     [0, 1], [10, 11],
+    ///     Direction.Outgoing,
+    ///     node_filter=node_filter
+    /// )
+    /// ```
+    #[pyo3(signature = (source_nodes, target_nodes, direction, *, rel_types=None, node_filter=None, rel_filter=None, max_depth=None))]
+    fn bidirectional_bfs(
+        &self,
+        source_nodes: Vec<u32>,
+        target_nodes: Vec<u32>,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+        node_filter: Option<PyObject>,
+        rel_filter: Option<PyObject>,
+        max_depth: Option<u32>,
+    ) -> PyResult<(Vec<u32>, Vec<u32>)> {
+        // Convert source and target node lists to NodeSets
+        let source_set = NodeSet::new(RoaringBitmap::from_iter(source_nodes.iter().copied()));
+        let target_set = NodeSet::new(RoaringBitmap::from_iter(target_nodes.iter().copied()));
+
+        // Convert Python Direction to Rust Direction
+        use rustychickpeas_core::types::Direction as CoreDirection;
+        let rust_direction = match direction {
+            Direction::Outgoing => CoreDirection::Outgoing,
+            Direction::Incoming => CoreDirection::Incoming,
+            Direction::Both => CoreDirection::Both,
+        };
+
+        // Convert relationship type strings if provided
+        let rel_types_str: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
+            types.iter().map(|s| s.as_str()).collect()
+        });
+
+        // Call the Rust function with appropriate filter closures
+        // We need to handle the different combinations of filters explicitly
+        // to help Rust's type inference
+        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
+            let nf_obj = nf_obj.clone();
+            let rf_obj = rf_obj.clone();
+            self.snapshot.bidirectional_bfs(
+                &source_set,
+                &target_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                    Python::with_gil(|py| {
+                        nf_obj.call1(py, (node_id,))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
+                    let rf_obj = rf_obj.clone();
+                    Python::with_gil(|py| {
+                        // Resolve relationship type to string
+                        let rel_type_str = snapshot.resolve_string(rel_type.id())
+                            .unwrap_or("")
+                            .to_string();
+                        
+                        rf_obj.call1(py, (from, to, rel_type_str, csr_pos))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                max_depth,
+            )
+        } else if let Some(nf_obj) = node_filter.as_ref() {
+            let nf_obj = nf_obj.clone();
+            // Type annotation helper: create a dummy closure type for None
+            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+            self.snapshot.bidirectional_bfs::<_, RelFilter>(
+                &source_set,
+                &target_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                    Python::with_gil(|py| {
+                        nf_obj.call1(py, (node_id,))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                None,
+                max_depth,
+            )
+        } else if let Some(rf_obj) = rel_filter.as_ref() {
+            let rf_obj = rf_obj.clone();
+            // Type annotation helper: create a dummy closure type for None
+            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+            self.snapshot.bidirectional_bfs::<NodeFilter, _>(
+                &source_set,
+                &target_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                None,
+                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
+                    let rf_obj = rf_obj.clone();
+                    Python::with_gil(|py| {
+                        // Resolve relationship type to string
+                        let rel_type_str = snapshot.resolve_string(rel_type.id())
+                            .unwrap_or("")
+                            .to_string();
+                        
+                        rf_obj.call1(py, (from, to, rel_type_str, csr_pos))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                max_depth,
+            )
+        } else {
+            // Type annotation helper: create dummy closure types for None
+            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+            self.snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
+                &source_set,
+                &target_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                None,
+                None,
+                max_depth,
+            )
+        };
+
+        // Convert bitmaps to Python lists
+        Ok((
+            node_bitmap.iter().collect(),
+            rel_bitmap.iter().collect(),
+        ))
+    }
+
+    /// BFS traversal from a set of starting nodes
+    /// 
+    /// Performs BFS from the starting nodes, following edges in the specified direction.
+    /// Returns all nodes and relationships visited during the traversal.
+    /// 
+    /// # Arguments
+    /// * `start_nodes` - List of starting node IDs
+    /// * `direction` - Direction of traversal (Direction.Outgoing, Direction.Incoming, or Direction.Both)
+    ///   - Outgoing: Follow outgoing edges
+    ///   - Incoming: Follow incoming edges
+    ///   - Both: Follow both outgoing and incoming edges
+    /// * `rel_types` - Optional list of relationship type names to filter by
+    /// * `node_filter` - Optional callable that takes (node_id: int) and returns bool.
+    ///   Returns True to include/continue from a node.
+    /// * `rel_filter` - Optional callable that takes (from_node: int, to_node: int, rel_type: str, csr_pos: int) and returns bool.
+    ///   Returns True to follow a relationship.
+    /// * `max_depth` - Optional maximum depth (default: no limit)
+    /// 
+    /// # Returns
+    /// A tuple `(node_ids, rel_csr_positions)` where:
+    /// - `node_ids`: List of node IDs visited during traversal
+    /// - `rel_csr_positions`: List of relationship CSR positions traversed
+    /// 
+    /// # Examples
+    /// ```python
+    /// from rustychickpeas import Direction
+    /// 
+    /// # Simple BFS from a single node
+    /// nodes, rels = snapshot.bfs([0], Direction.Outgoing)
+    /// 
+    /// # BFS with relationship type filter
+    /// nodes, rels = snapshot.bfs(
+    ///     [0], Direction.Outgoing, 
+    ///     rel_types=["KNOWS", "WORKS_WITH"]
+    /// )
+    /// 
+    /// # BFS with max depth
+    /// nodes, rels = snapshot.bfs(
+    ///     [0], Direction.Outgoing, 
+    ///     max_depth=3
+    /// )
+    /// 
+    /// # BFS with node filter (only "Person" nodes)
+    /// def node_filter(node_id):
+    ///     return "Person" in snapshot.node_labels(node_id)
+    /// 
+    /// nodes, rels = snapshot.bfs(
+    ///     [0], Direction.Outgoing,
+    ///     node_filter=node_filter
+    /// )
+    /// ```
+    #[pyo3(signature = (start_nodes, direction, *, rel_types=None, node_filter=None, rel_filter=None, max_depth=None))]
+    fn bfs(
+        &self,
+        start_nodes: Vec<u32>,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+        node_filter: Option<PyObject>,
+        rel_filter: Option<PyObject>,
+        max_depth: Option<u32>,
+    ) -> PyResult<(Vec<u32>, Vec<u32>)> {
+        // Convert start node list to NodeSet
+        let start_set = NodeSet::new(RoaringBitmap::from_iter(start_nodes.iter().copied()));
+
+        // Convert Python Direction to Rust Direction
+        use rustychickpeas_core::types::Direction as CoreDirection;
+        let rust_direction = match direction {
+            Direction::Outgoing => CoreDirection::Outgoing,
+            Direction::Incoming => CoreDirection::Incoming,
+            Direction::Both => CoreDirection::Both,
+        };
+
+        // Convert relationship type strings if provided
+        let rel_types_str: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
+            types.iter().map(|s| s.as_str()).collect()
+        });
+
+        // Call the Rust function with appropriate filter closures
+        // We need to handle the different combinations of filters explicitly
+        // to help Rust's type inference
+        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
+            let nf_obj = nf_obj.clone();
+            let rf_obj = rf_obj.clone();
+            self.snapshot.bfs(
+                &start_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                    Python::with_gil(|py| {
+                        nf_obj.call1(py, (node_id,))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
+                    let rf_obj = rf_obj.clone();
+                    Python::with_gil(|py| {
+                        // Resolve relationship type to string
+                        let rel_type_str = snapshot.resolve_string(rel_type.id())
+                            .unwrap_or("")
+                            .to_string();
+                        
+                        rf_obj.call1(py, (from, to, rel_type_str, csr_pos))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                max_depth,
+            )
+        } else if let Some(nf_obj) = node_filter.as_ref() {
+            let nf_obj = nf_obj.clone();
+            // Type annotation helper: create a dummy closure type for None
+            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+            self.snapshot.bfs::<_, RelFilter>(
+                &start_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                    Python::with_gil(|py| {
+                        nf_obj.call1(py, (node_id,))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                None,
+                max_depth,
+            )
+        } else if let Some(rf_obj) = rel_filter.as_ref() {
+            let rf_obj = rf_obj.clone();
+            // Type annotation helper: create a dummy closure type for None
+            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+            self.snapshot.bfs::<NodeFilter, _>(
+                &start_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                None,
+                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
+                    let rf_obj = rf_obj.clone();
+                    Python::with_gil(|py| {
+                        // Resolve relationship type to string
+                        let rel_type_str = snapshot.resolve_string(rel_type.id())
+                            .unwrap_or("")
+                            .to_string();
+                        
+                        rf_obj.call1(py, (from, to, rel_type_str, csr_pos))
+                            .and_then(|result| result.extract::<bool>(py))
+                            .unwrap_or(false)
+                    })
+                }),
+                max_depth,
+            )
+        } else {
+            // Type annotation helper: create dummy closure types for None
+            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+            self.snapshot.bfs::<NodeFilter, RelFilter>(
+                &start_set,
+                rust_direction,
+                rel_types_str.as_deref(),
+                None,
+                None,
+                max_depth,
+            )
+        };
+
+        // Convert bitmaps to Python lists
+        Ok((
+            node_bitmap.iter().collect(),
+            rel_bitmap.iter().collect(),
+        ))
     }
 }
 

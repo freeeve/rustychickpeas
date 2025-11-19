@@ -1,6 +1,6 @@
 //! Core types for the graph API
 
-use crate::snapshot::ValueId;
+use crate::graph_snapshot::ValueId;
 
 /// Interned string ID
 /// u32 allows up to 4.3 billion unique strings

@@ -1,7 +1,7 @@
 //! High-level graph API for managing multiple snapshots by version
 
-use crate::builder::GraphBuilder;
-use crate::snapshot::GraphSnapshot;
+use crate::graph_builder::GraphBuilder;
+use crate::graph_snapshot::GraphSnapshot;
 use hashbrown::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -72,7 +72,7 @@ impl RustyChickpeas {
     /// Get a graph snapshot by version
     /// 
     /// Returns `None` if no snapshot with that version exists.
-    pub fn get_graph_snapshot(&self, version: &str) -> Option<Arc<GraphSnapshot>> {
+    pub fn graph_snapshot(&self, version: &str) -> Option<Arc<GraphSnapshot>> {
         let snapshots = self.snapshots.read().unwrap();
         snapshots.get(version).cloned()
     }
@@ -170,7 +170,7 @@ mod tests {
         let snapshot = GraphSnapshot::new();
         manager.add_snapshot_with_version("v1.0", snapshot);
         
-        let retrieved = manager.get_graph_snapshot("v1.0");
+        let retrieved = manager.graph_snapshot("v1.0");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().n_nodes, 0);
     }
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn test_get_graph_snapshot_nonexistent() {
         let manager = RustyChickpeas::new();
-        let retrieved = manager.get_graph_snapshot("v1.0");
+        let retrieved = manager.graph_snapshot("v1.0");
         assert!(retrieved.is_none());
     }
 

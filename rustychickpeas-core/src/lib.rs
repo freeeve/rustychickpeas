@@ -4,18 +4,18 @@
 //! interface for easy porting of graph database stored procedures.
 
 pub mod bitmap;
-pub mod builder;
-pub mod builder_parquet;
+pub mod graph_builder;
+pub mod graph_builder_parquet;
 pub mod error;
 pub mod interner;
 pub mod rusty_chickpeas;
-pub mod snapshot;
+pub mod graph_snapshot;
 pub mod types;
 
 // Re-export main types
-pub use builder::GraphBuilder;
+pub use graph_builder::GraphBuilder;
 pub use error::{GraphError, Result};
 pub use rusty_chickpeas::RustyChickpeas;
-pub use snapshot::{Column, GraphSnapshot, ValueId};
-pub use types::{Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipType};
+pub use graph_snapshot::{Column, GraphSnapshot, ValueId};
+pub use types::{Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipDeduplication, RelationshipType};
 

@@ -41,5 +41,6 @@ harness = false
 
 [[bench]]
 name = "bulk_load"
+path = "benches/bulk_load.rs"
 harness = false
 

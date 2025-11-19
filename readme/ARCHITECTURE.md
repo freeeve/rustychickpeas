@@ -25,9 +25,9 @@ rustychickpeas/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
-│       ├── snapshot.rs            # Immutable GraphSnapshot
-│       ├── builder.rs             # GraphSnapshotBuilder
-│       ├── builder_parquet.rs    # Parquet loading
+│       ├── graph_snapshot.rs     # Immutable GraphSnapshot
+│       ├── graph_builder.rs      # GraphSnapshotBuilder
+│       ├── graph_builder_parquet.rs # Parquet loading
 │       ├── bitmap.rs              # NodeSet (RoaringBitmap/BitVec)
 │       ├── types.rs               # Core types (NodeId, Label, PropertyKey, etc.)
 │       ├── interner.rs            # String interning
@@ -61,8 +61,8 @@ pub type PropertyKey = u32;         // Property key (interned)
 ```rust
 pub struct GraphSnapshot {
     // Core shape (CSR format)
-    pub n_nodes: u32,
-    pub n_rels: u64,
+    pub n_nodes: u32,  // Access via node_count() in Python
+    pub n_rels: u64,   // Access via relationship_count() in Python
     pub out_offsets: Vec<u32>,      // CSR offsets for outgoing edges
     pub out_nbrs: Vec<NodeId>,      // CSR neighbors (outgoing)
     pub in_offsets: Vec<u32>,       // CSR offsets for incoming edges
@@ -152,11 +152,11 @@ pub struct RustyChickpeas {
 let manager = RustyChickpeas::new();
 let mut builder = manager.create_builder(1000, 1000);
 
-// Add nodes with external IDs
-builder.add_node(1001, &["Person"]);  // External ID: 1001
-builder.add_node(1002, &["Person"]);  // External ID: 1002
+// Add nodes with external IDs (or None to auto-generate)
+builder.add_node(Some(1001), &["Person"]);  // External ID: 1001
+builder.add_node(Some(1002), &["Person"]);  // External ID: 1002
 
-// Add relationships
+// Add relationships (node IDs are required)
 builder.add_rel(1001, 1002, "KNOWS");
 
 // Set properties
@@ -173,16 +173,16 @@ builder.finalize_into(&manager);
 
 ```rust
 // Retrieve snapshot
-let snapshot = manager.get_graph_snapshot("v1.0").unwrap();
+let snapshot = manager.graph_snapshot("v1.0").unwrap();
 
 // Fast neighbor lookup (CSR format)
-let neighbors = snapshot.get_out_neighbors(0);  // Internal NodeId 0
+let neighbors = snapshot.out_neighbors(0);  // Internal NodeId 0
 
 // Label query (inverted index)
-let person_nodes = snapshot.get_nodes_with_label(person_label);
+let person_nodes = snapshot.nodes_with_label(person_label);
 
 // Property query (inverted index)
-let alice_nodes = snapshot.get_nodes_with_property(name_key, ValueId::Str(alice_name_id));
+let alice_nodes = snapshot.nodes_with_property(name_key, ValueId::Str(alice_name_id));
 ```
 
 ## CSR (Compressed Sparse Row) Format
@@ -251,12 +251,12 @@ manager = rcp.RustyChickpeas()
 
 # Builder (created from manager)
 builder = manager.create_builder(1000, 1000)
-builder.add_node(1, ["Person"])
+builder.add_node(["Person"], node_id=1)
 builder.set_version("v1.0")
 builder.finalize_into(manager)
 
 # Snapshot (immutable)
-snapshot = manager.get_graph_snapshot("v1.0")
+snapshot = manager.graph_snapshot("v1.0")
 neighbors = snapshot.get_neighbors(0, rcp.Direction.Outgoing)
 ```
 
@@ -330,9 +330,9 @@ graph.create_node(vec![Label::from("Person")])?;
 ```rust
 let manager = RustyChickpeas::new();
 let mut builder = manager.create_builder(1000, 1000);
-builder.add_node(1, &["Person"]);
+builder.add_node(Some(1), &["Person"]);
 builder.finalize_into(&manager);
-let snapshot = manager.get_graph_snapshot("latest").unwrap();
+let snapshot = manager.graph_snapshot("latest").unwrap();
 ```
 
 ## Future Enhancements

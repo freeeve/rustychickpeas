@@ -17,14 +17,16 @@ pub struct Node {
 impl Node {
     /// Get property value for this node
     fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
-        let key_id = self.snapshot.atoms.strings.iter()
-            .position(|s| s == &key)
-            .map(|idx| idx as u32)
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Property key '{}' not found", key)
-            ))?;
+        // Check if property key exists first (O(1) lookup using reverse index)
+        let key_id = self.snapshot.atoms.get_id(&key);
         
-        let value_id = self.snapshot.get_property(self.node_id, key_id);
+        if key_id.is_none() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("Property key '{}' not found", key)
+            ));
+        }
+        
+        let value_id = self.snapshot.prop(self.node_id, &key);
         
         Python::with_gil(|py| {
             if let Some(vid) = value_id {
@@ -56,7 +58,7 @@ impl Node {
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (direction, rel_types=None))]
-    fn get_rels(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
+    fn relationships(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
         // Convert string types to RelationshipType IDs
         let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().map(|types| {
             let ids: Vec<RelationshipType> = types.iter()
@@ -203,61 +205,41 @@ impl Node {
     /// Get relationship IDs (neighbor node IDs) for this node
     /// 
     /// Returns the IDs of nodes connected to this node via relationships.
-    /// This is a lighter-weight alternative to get_rels() when you only need node IDs.
+    /// This is a lighter-weight alternative to relationships() when you only need node IDs.
     /// 
     /// # Arguments
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (direction, rel_types=None))]
-    fn get_rel_ids(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
-        // Convert string types to RelationshipType IDs
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().map(|types| {
-            let ids: Vec<RelationshipType> = types.iter()
-                .filter_map(|s| {
-                    self.snapshot.atoms.strings.iter()
-                        .position(|st| st == s)
-                        .map(|idx| RelationshipType::new(idx as u32))
-                })
-                .collect();
-            // If filter was provided but none found, return None to indicate no matches
-            if ids.is_empty() && !types.is_empty() {
-                return None; // Will be handled below
-            }
-            Some(ids)
-        }).flatten();
+    fn relationship_ids(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
+        // Convert Vec<String> to Vec<&str> for the Rust API
+        let rel_type_strs: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
+            types.iter().map(|s| s.as_str()).collect()
+        });
 
         let neighbor_ids = match direction {
             Direction::Outgoing => {
-                if let Some(type_ids) = rel_type_ids.as_ref() {
-                    self.snapshot.get_out_neighbors_by_type(self.node_id, type_ids)
-                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
-                    // Filter was provided but no types found - return empty
-                    Vec::new()
+                if let Some(type_strs) = rel_type_strs.as_ref() {
+                    self.snapshot.out_neighbors_by_type(self.node_id, type_strs)
                 } else {
-                    self.snapshot.get_out_neighbors(self.node_id).to_vec()
+                    self.snapshot.out_neighbors(self.node_id).to_vec()
                 }
             }
             Direction::Incoming => {
-                if let Some(type_ids) = rel_type_ids.as_ref() {
-                    self.snapshot.get_in_neighbors_by_type(self.node_id, type_ids)
-                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
-                    // Filter was provided but no types found - return empty
-                    Vec::new()
+                if let Some(type_strs) = rel_type_strs.as_ref() {
+                    self.snapshot.in_neighbors_by_type(self.node_id, type_strs)
                 } else {
-                    self.snapshot.get_in_neighbors(self.node_id).to_vec()
+                    self.snapshot.in_neighbors(self.node_id).to_vec()
                 }
             }
             Direction::Both => {
                 let mut neighbors = Vec::new();
-                if let Some(type_ids) = rel_type_ids.as_ref() {
-                    neighbors.extend(self.snapshot.get_out_neighbors_by_type(self.node_id, type_ids));
-                    neighbors.extend(self.snapshot.get_in_neighbors_by_type(self.node_id, type_ids));
-                } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
-                    // Filter was provided but no types found - return empty
-                    // neighbors is already empty
+                if let Some(type_strs) = rel_type_strs.as_ref() {
+                    neighbors.extend(self.snapshot.out_neighbors_by_type(self.node_id, type_strs));
+                    neighbors.extend(self.snapshot.in_neighbors_by_type(self.node_id, type_strs));
                 } else {
-                    neighbors.extend_from_slice(self.snapshot.get_out_neighbors(self.node_id));
-                    neighbors.extend_from_slice(self.snapshot.get_in_neighbors(self.node_id));
+                    neighbors.extend_from_slice(self.snapshot.out_neighbors(self.node_id));
+                    neighbors.extend_from_slice(self.snapshot.in_neighbors(self.node_id));
                 }
                 neighbors
             }
@@ -267,7 +249,7 @@ impl Node {
     }
 
     /// Get labels for this node
-    fn get_labels(&self) -> PyResult<Vec<String>> {
+    fn labels(&self) -> PyResult<Vec<String>> {
         let mut labels = Vec::new();
         for (label, node_set) in &self.snapshot.label_index {
             if node_set.contains(self.node_id) {
@@ -280,13 +262,13 @@ impl Node {
     }
 
     /// Get degree (number of relationships) for this node
-    fn get_degree(&self, direction: Direction) -> PyResult<usize> {
+    fn degree(&self, direction: Direction) -> PyResult<usize> {
         match direction {
-            Direction::Outgoing => Ok(self.snapshot.get_out_neighbors(self.node_id).len()),
-            Direction::Incoming => Ok(self.snapshot.get_in_neighbors(self.node_id).len()),
+            Direction::Outgoing => Ok(self.snapshot.out_neighbors(self.node_id).len()),
+            Direction::Incoming => Ok(self.snapshot.in_neighbors(self.node_id).len()),
             Direction::Both => {
-                Ok(self.snapshot.get_out_neighbors(self.node_id).len() + 
-                   self.snapshot.get_in_neighbors(self.node_id).len())
+                Ok(self.snapshot.out_neighbors(self.node_id).len() + 
+                   self.snapshot.in_neighbors(self.node_id).len())
             }
         }
     }
@@ -306,7 +288,7 @@ impl Node {
             dict.set_item("id", self.node_id)?;
             
             // Add labels
-            let labels = self.get_labels()?;
+            let labels = self.labels()?;
             dict.set_item("labels", labels)?;
             
             // Add all properties (nested in properties dict)

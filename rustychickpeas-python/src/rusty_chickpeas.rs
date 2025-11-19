@@ -44,8 +44,8 @@ impl RustyChickpeas {
     }
 
     /// Get a graph snapshot by version
-    fn get_graph_snapshot(&self, version: &str) -> PyResult<Option<GraphSnapshot>> {
-        if let Some(snapshot) = self.manager.get_graph_snapshot(version) {
+    fn graph_snapshot(&self, version: &str) -> PyResult<Option<GraphSnapshot>> {
+        if let Some(snapshot) = self.manager.graph_snapshot(version) {
             // Arc::clone is cheap, just cloning the pointer
             Ok(Some(GraphSnapshot::from_arc(snapshot)))
         } else {

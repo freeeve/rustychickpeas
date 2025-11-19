@@ -51,9 +51,14 @@ pytest
 ### Run Specific Test File
 
 ```bash
-pytest tests/test_basic_operations.py
+pytest tests/test_direction.py
+pytest tests/test_node.py
+pytest tests/test_relationship.py
+pytest tests/test_graph_snapshot.py
+pytest tests/test_graph_snapshot_builder.py
+pytest tests/test_rusty_chickpeas.py
 pytest tests/test_bulk_load_parquet.py
-pytest tests/test_bulk_load_builder.py
+pytest tests/test_parquet_deduplication.py
 ```
 
 ### Run with Verbose Output
@@ -71,11 +76,26 @@ pytest --cov=rustychickpeas
 
 ## Test Structure
 
-- **test_basic_operations.py**: Tests for GraphSnapshotBuilder and GraphSnapshot operations
+### Module-Specific Unit Tests
+
+- **test_direction.py**: Tests for Direction enum
+- **test_node.py**: Comprehensive tests for Node class
+- **test_relationship.py**: Comprehensive tests for Relationship class
+- **test_graph_snapshot.py**: Comprehensive tests for GraphSnapshot class
+- **test_graph_snapshot_builder.py**: Comprehensive tests for GraphSnapshotBuilder class
+- **test_rusty_chickpeas.py**: Comprehensive tests for RustyChickpeas manager class
+
+### Feature-Specific Tests
+
 - **test_bulk_load_parquet.py**: Tests for bulk loading from Parquet files
-- **test_bulk_load_builder.py**: Performance tests for GraphSnapshotBuilder
-- **test_relationship_api.py**: Tests for Node and Relationship APIs
+- **test_parquet_deduplication.py**: Tests for node and relationship deduplication
+
+### Benchmarks
+
+- **benchmark_bulk_load_builder.py**: Performance tests for GraphSnapshotBuilder bulk loading
 - **benchmark_large_parquet.py**: Large-scale performance benchmarks
+- **benchmark_deduplication.py**: Performance benchmarks for deduplication
+- **benchmark_s3_parquet.py**: Performance benchmarks for S3 Parquet loading
 
 ## Test Coverage
 

@@ -5,10 +5,58 @@
 
 use crate::bitmap::NodeSet;
 use crate::interner::StringInterner;
-use crate::snapshot::{Atoms, Column, GraphSnapshot, ValueId};
+use crate::graph_snapshot::{Atoms, Column, GraphSnapshot, ValueId};
 use crate::types::{Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
+
+/// Trait for converting common types to ValueId for GraphBuilder
+/// For strings, uses the builder's interner to look up or intern the string
+pub trait IntoValueIdBuilder {
+    fn into_value_id(self, builder: &GraphBuilder) -> ValueId;
+}
+
+impl IntoValueIdBuilder for ValueId {
+    fn into_value_id(self, _builder: &GraphBuilder) -> ValueId {
+        self
+    }
+}
+
+impl IntoValueIdBuilder for i64 {
+    fn into_value_id(self, _builder: &GraphBuilder) -> ValueId {
+        ValueId::I64(self)
+    }
+}
+
+impl IntoValueIdBuilder for i32 {
+    fn into_value_id(self, _builder: &GraphBuilder) -> ValueId {
+        ValueId::I64(self as i64)
+    }
+}
+
+impl IntoValueIdBuilder for f64 {
+    fn into_value_id(self, _builder: &GraphBuilder) -> ValueId {
+        ValueId::from_f64(self)
+    }
+}
+
+impl IntoValueIdBuilder for bool {
+    fn into_value_id(self, _builder: &GraphBuilder) -> ValueId {
+        ValueId::Bool(self)
+    }
+}
+
+impl IntoValueIdBuilder for &str {
+    fn into_value_id(self, builder: &GraphBuilder) -> ValueId {
+        ValueId::Str(builder.interner.get_or_intern(self))
+    }
+}
+
+impl IntoValueIdBuilder for String {
+    fn into_value_id(self, builder: &GraphBuilder) -> ValueId {
+        ValueId::Str(builder.interner.get_or_intern(&self))
+    }
+}
 
 
 /// Graph builder for constructing immutable GraphSnapshot
@@ -37,9 +85,6 @@ pub struct GraphBuilder {
     pub(crate) rel_col_bool: hashbrown::HashMap<PropertyKey, Vec<(usize, bool)>>,
     pub(crate) rel_col_str: hashbrown::HashMap<PropertyKey, Vec<(usize, u32)>>, // Interned
 
-    // Inverted buckets (value -> appended NodeId), to be sorted once
-    pub(crate) inv: hashbrown::HashMap<(PropertyKey, ValueId), Vec<NodeId>>,
-
     // Interner (for keys + values)
     pub(crate) interner: StringInterner,
 
@@ -47,6 +92,9 @@ pub struct GraphBuilder {
     // This persists across multiple file loads and regular builder operations to enable deduplication
     pub(crate) dedup_unique_properties: Option<Vec<PropertyKey>>, // Property keys to use for deduplication
     pub(crate) dedup_map: hashbrown::HashMap<crate::types::DedupKey, NodeId>,
+
+    // Auto-generation: next node ID to use when None is provided
+    pub(crate) next_node_id: NodeId,
 }
 
 impl GraphBuilder {
@@ -76,10 +124,10 @@ impl GraphBuilder {
             rel_col_f64: hashbrown::HashMap::new(),
             rel_col_bool: hashbrown::HashMap::new(),
             rel_col_str: hashbrown::HashMap::new(),
-            inv: hashbrown::HashMap::new(),
             interner: StringInterner::new(),
             dedup_unique_properties: None,
             dedup_map: hashbrown::HashMap::new(),
+            next_node_id: 0,
         }
     }
 
@@ -112,7 +160,7 @@ impl GraphBuilder {
     /// 
     /// # Example
     /// ```
-    /// use rustychickpeas_core::builder::GraphBuilder;
+    /// use rustychickpeas_core::graph_builder::GraphBuilder;
     /// let mut builder = GraphBuilder::new(None, None);
     /// builder.enable_node_deduplication(vec!["email", "username"]);
     /// // Now adding nodes with the same email+username will be merged
@@ -136,36 +184,42 @@ impl GraphBuilder {
     #[inline]
     fn ensure_capacity(&mut self, node_id: NodeId) {
         if node_id as usize >= self.deg_out.len() {
-            let old_len = self.deg_out.len();
             let max_size = u32::MAX as usize;
             let new_size = ((node_id as usize + 1) * 2).min(max_size);
             if new_size <= node_id as usize {
                 panic!("Maximum node limit (2^32 - 1) exceeded");
             }
-            let resize_start = std::time::Instant::now();
             self.node_labels.resize(new_size, Vec::new());
             self.deg_out.resize(new_size, 0);
             self.deg_in.resize(new_size, 0);
-            let resize_time = resize_start.elapsed();
-            if resize_time.as_millis() > 10 {
-                eprintln!("[RUST TIMING] ensure_capacity resize: {} -> {} nodes took {:?}", 
-                    old_len, new_size, resize_time);
-            }
         }
     }
 
     /// Add a node with labels
     /// 
     /// # Arguments
-    /// * `node_id` - Node ID (must be u32, users should map their own IDs to u32)
+    /// * `node_id` - Optional node ID. If None, auto-generates the next sequential ID.
+    ///               If Some(id), uses that ID (must be u32, users should map their own IDs to u32)
     /// * `labels` - Slice of label strings
-    pub fn add_node(&mut self, node_id: NodeId, labels: &[&str]) {
-        self.ensure_capacity(node_id);
+    /// 
+    /// # Returns
+    /// The node ID that was used (either the provided ID or the auto-generated one)
+    pub fn add_node(&mut self, node_id: Option<NodeId>, labels: &[&str]) -> NodeId {
+        let actual_id = node_id.unwrap_or_else(|| {
+            let id = self.next_node_id;
+            self.next_node_id = id.wrapping_add(1);
+            if self.next_node_id == 0 {
+                panic!("Node ID counter wrapped around (exceeded u32::MAX)");
+            }
+            id
+        });
+        self.ensure_capacity(actual_id);
         // Intern labels
         for &l in labels {
             let lid = self.interner.get_or_intern(l);
-            self.node_labels[node_id as usize].push(Label::new(lid));
+            self.node_labels[actual_id as usize].push(Label::new(lid));
         }
+        actual_id
     }
 
     /// Add a relationship
@@ -189,34 +243,13 @@ impl GraphBuilder {
 
     /// Set string property (interned)
     pub fn set_prop_str(&mut self, node_id: NodeId, key: &str, val: &str) {
-        // Use a static to track if we should print timing (only for first few calls)
-        static CALL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let count = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let should_time = count < 1000;
-        
-        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         self.ensure_capacity(node_id);
-        let ensure_time = start.map(|s| s.elapsed());
-        
-        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         let k = self.interner.get_or_intern(key);
-        let key_time = start.map(|s| s.elapsed());
-        
-        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         let v = self.interner.get_or_intern(val);
-        let val_time = start.map(|s| s.elapsed());
-        
-        let start = if should_time { Some(std::time::Instant::now()) } else { None };
         self.node_col_str.entry(k).or_default().push((node_id, v));
-        let push_time = start.map(|s| s.elapsed());
         
-        // Inverted index is now built lazily on first query (see get_nodes_with_property)
+        // Inverted index is now built lazily on first query (see nodes_with_property)
         // This significantly speeds up bulk loading
-        
-        if should_time && count < 10 {
-            eprintln!("[RUST TIMING] set_prop_str #{}: ensure={:?}, key={:?}, val={:?}, push={:?}", 
-                count, ensure_time, key_time, val_time, push_time);
-        }
     }
 
     /// Set i64 property
@@ -224,7 +257,7 @@ impl GraphBuilder {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         self.node_col_i64.entry(k).or_default().push((node_id, val));
-        // Inverted index is now built lazily on first query (see get_nodes_with_property)
+        // Inverted index is now built lazily on first query (see nodes_with_property)
     }
 
     /// Set f64 property
@@ -232,7 +265,7 @@ impl GraphBuilder {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         self.node_col_f64.entry(k).or_default().push((node_id, val));
-        // Inverted index is now built lazily on first query (see get_nodes_with_property)
+        // Inverted index is now built lazily on first query (see nodes_with_property)
     }
 
     /// Set boolean property
@@ -240,7 +273,7 @@ impl GraphBuilder {
         self.ensure_capacity(node_id);
         let k = self.interner.get_or_intern(key);
         self.node_col_bool.entry(k).or_default().push((node_id, val));
-        // Inverted index is now built lazily on first query (see get_nodes_with_property)
+        // Inverted index is now built lazily on first query (see nodes_with_property)
     }
 
     /// Find relationship index by (u, v, rel_type)
@@ -291,13 +324,13 @@ impl GraphBuilder {
     }
 
     /// Get property key ID for a string (returns None if key hasn't been interned yet)
-    pub fn get_property_key_id(&self, key: &str) -> Option<PropertyKey> {
+    pub fn property_key_id(&self, key: &str) -> Option<PropertyKey> {
         self.interner.get(key)
     }
 
     /// Get property value for a node (before finalization)
     /// Returns None if property doesn't exist
-    pub fn get_prop(&self, node_id: NodeId, key: &str) -> Option<ValueId> {
+    pub fn prop(&self, node_id: NodeId, key: &str) -> Option<ValueId> {
         let k = self.interner.get_or_intern(key);
         
         // Search through staging property vectors
@@ -426,24 +459,46 @@ impl GraphBuilder {
         self.interner.resolve(id)
     }
 
-    /// Get nodes with a specific property value (before finalization)
-    /// Builds the inverted index lazily on first access for this key/value
-    pub fn get_nodes_with_property(&self, key: &str, value: ValueId) -> Vec<NodeId> {
+    /// Get nodes with a specific property value, scoped by label (before finalization)
+    /// 
+    /// # Arguments
+    /// * `label` - The label to scope the query to (as a string)
+    /// * `key` - The property key
+    /// * `value` - The property value to search for (can be `&str`, `String`, `i64`, `i32`, `f64`, `bool`, or `ValueId`)
+    /// 
+    /// # Examples
+    /// ```
+    /// // Find all Person nodes with name "Alice"
+    /// let nodes = builder.nodes_with_property("Person", "name", "Alice");
+    /// 
+    /// // Find all Person nodes with age 30
+    /// let nodes = builder.nodes_with_property("Person", "age", 30i64);
+    /// 
+    /// // Find all Person nodes with active = true
+    /// let nodes = builder.nodes_with_property("Person", "active", true);
+    /// ```
+    pub fn nodes_with_property<V: IntoValueIdBuilder>(&self, label: &str, key: &str, value: V) -> Vec<NodeId> {
+        let value_id = value.into_value_id(self);
+        let label_id = self.interner.get_or_intern(label);
         let k = self.interner.get_or_intern(key);
+        let label_key = Label::new(label_id);
         
-        // Check if already in inverted index (lazy building)
-        if let Some(bucket) = self.inv.get(&(k, value)) {
-            return bucket.clone();
-        }
-        
-        // Build inverted index lazily by scanning property columns
-        // This is slower on first access but much faster during bulk loading
+        // Build result by scanning property columns, filtered by label
         let mut nodes = Vec::new();
+        
+        // Helper to check if a node has the specified label
+        let has_label = |node_id: NodeId| -> bool {
+            if let Some(labels) = self.node_labels.get(node_id as usize) {
+                labels.iter().any(|&l| l == label_key)
+            } else {
+                false
+            }
+        };
         
         // Check i64 column
         if let Some(pairs) = self.node_col_i64.get(&k) {
             for (node_id, val) in pairs {
-                if ValueId::I64(*val) == value {
+                if ValueId::I64(*val) == value_id && has_label(*node_id) {
                     nodes.push(*node_id);
                 }
             }
@@ -452,7 +507,7 @@ impl GraphBuilder {
         // Check f64 column
         if let Some(pairs) = self.node_col_f64.get(&k) {
             for (node_id, val) in pairs {
-                if ValueId::from_f64(*val) == value {
+                if ValueId::from_f64(*val) == value_id && has_label(*node_id) {
                     nodes.push(*node_id);
                 }
             }
@@ -461,7 +516,7 @@ impl GraphBuilder {
         // Check bool column
         if let Some(pairs) = self.node_col_bool.get(&k) {
             for (node_id, val) in pairs {
-                if ValueId::Bool(*val) == value {
+                if ValueId::Bool(*val) == value_id && has_label(*node_id) {
                     nodes.push(*node_id);
                 }
             }
@@ -470,21 +525,17 @@ impl GraphBuilder {
         // Check str column
         if let Some(pairs) = self.node_col_str.get(&k) {
             for (node_id, val_id) in pairs {
-                if ValueId::Str(*val_id) == value {
+                if ValueId::Str(*val_id) == value_id && has_label(*node_id) {
                     nodes.push(*node_id);
                 }
             }
         }
         
-        // Cache the result in inverted index for future queries
-        // Note: We need mutable access, but this is a read-only method
-        // For now, we'll just return the result without caching
-        // The inverted index will be built during finalize() if needed
         nodes
     }
 
     /// Get node labels (before finalization)
-    pub fn get_node_labels(&self, node_id: NodeId) -> Vec<String> {
+    pub fn node_labels(&self, node_id: NodeId) -> Vec<String> {
         if let Some(labels) = self.node_labels.get(node_id as usize) {
             labels.iter()
                 .map(|l| self.interner.resolve(l.id()).to_string())
@@ -496,7 +547,7 @@ impl GraphBuilder {
 
     /// Get neighbors of a node (before finalization)
     /// Returns (outgoing, incoming) neighbors as node IDs
-    pub fn get_neighbor_ids(&self, node_id: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
+    pub fn neighbor_ids(&self, node_id: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
         let mut outgoing = Vec::new();
         let mut incoming = Vec::new();
         
@@ -519,10 +570,29 @@ impl GraphBuilder {
     /// To add the snapshot to a manager, use `manager.add_snapshot(snapshot)`.
     /// 
     /// # Arguments
-    /// * `index_properties` - Optional list of property keys to index during finalization.
+    /// * `index_properties` - Optional list of property key names to index during finalization.
     ///   If provided, these properties will be indexed upfront (faster queries, more memory).
     ///   If None, all properties will be indexed lazily on first access (saves memory).
-    pub fn finalize(self, index_properties: Option<&[PropertyKey]>) -> GraphSnapshot {
+    /// 
+    /// # Examples
+    /// ```
+    /// // Index specific properties upfront
+    /// let snapshot = builder.finalize(Some(&["name", "age"]));
+    /// 
+    /// // Lazy indexing (default)
+    /// let snapshot = builder.finalize(None);
+    /// ```
+    pub fn finalize(self, index_properties: Option<&[&str]>) -> GraphSnapshot {
+        let index_property_keys: Option<Vec<PropertyKey>> = index_properties.map(|keys| {
+            keys.iter()
+                .filter_map(|key| self.interner.get(key))
+                .collect()
+        });
+        self.finalize_with_keys(index_property_keys.as_deref())
+    }
+
+    /// Finalize the builder into an immutable GraphSnapshot (internal ID-based version)
+    fn finalize_with_keys(self, index_properties: Option<&[PropertyKey]>) -> GraphSnapshot {
         // Calculate the maximum node ID that has been used
         // We need to find the actual maximum node ID, not just the vector length
         // (vectors may be pre-allocated with capacity)
@@ -678,73 +748,85 @@ impl GraphBuilder {
 
         // --- Build property indexes (optional, for specified keys) ---
         // Do this BEFORE moving property columns, so we can read from them
-        let mut prop_index: hashbrown::HashMap<PropertyKey, hashbrown::HashMap<ValueId, NodeSet>> = hashbrown::HashMap::new();
+        // Indexes are now scoped by (label, property_key) to allow the same property key
+        // to be indexed separately per label
+        let mut prop_index: hashbrown::HashMap<(Label, PropertyKey), hashbrown::HashMap<ValueId, NodeSet>> = hashbrown::HashMap::new();
         
         if let Some(keys_to_index) = index_properties {
-            // Build indexes for specified property keys from property columns
-            // Since we're not building inv during property setting, we need to build it from columns
+            // Build indexes for specified property keys, scoped by label
+            // For each label and each property key, build a separate index
             use rayon::prelude::*;
             
-            // Build inverted index from property columns
-            let mut inv_map: hashbrown::HashMap<(PropertyKey, ValueId), Vec<NodeId>> = hashbrown::HashMap::new();
+            // Get all labels that have nodes
+            let labels_with_nodes: Vec<Label> = label_index.keys().copied().collect();
             
-            // Process i64 columns
-            for (key, pairs) in &self.node_col_i64 {
-                if keys_to_index.contains(key) {
-                    for (node_id, val) in pairs {
-                        inv_map.entry((*key, ValueId::I64(*val))).or_default().push(*node_id);
-                    }
-                }
-            }
+            // For each (label, property_key) combination, build an index
+            let label_key_combinations: Vec<(Label, PropertyKey)> = labels_with_nodes
+                .iter()
+                .flat_map(|&label| {
+                    keys_to_index.iter().map(move |&key| (label, key))
+                })
+                .collect();
             
-            // Process f64 columns
-            for (key, pairs) in &self.node_col_f64 {
-                if keys_to_index.contains(key) {
-                    for (node_id, val) in pairs {
-                        inv_map.entry((*key, ValueId::from_f64(*val))).or_default().push(*node_id);
-                    }
-                }
-            }
-            
-            // Process bool columns
-            for (key, pairs) in &self.node_col_bool {
-                if keys_to_index.contains(key) {
-                    for (node_id, val) in pairs {
-                        inv_map.entry((*key, ValueId::Bool(*val))).or_default().push(*node_id);
-                    }
-                }
-            }
-            
-            // Process str columns
-            for (key, pairs) in &self.node_col_str {
-                if keys_to_index.contains(key) {
-                    for (node_id, val_id) in pairs {
-                        inv_map.entry((*key, ValueId::Str(*val_id))).or_default().push(*node_id);
-                    }
-                }
-            }
-            
-            // Group by property key first
-            let mut by_key: hashbrown::HashMap<PropertyKey, Vec<(ValueId, Vec<NodeId>)>> = hashbrown::HashMap::new();
-            for ((key, val_id), bucket) in inv_map {
-                if keys_to_index.contains(&key) {
-                    by_key.entry(key).or_default().push((val_id, bucket));
-                }
-            }
-            
-            // Build indexes in parallel for each key
-            let by_key_vec: Vec<(PropertyKey, Vec<(ValueId, Vec<NodeId>)>)> = by_key.into_iter().collect();
-            let prop_index_vec: Vec<(PropertyKey, hashbrown::HashMap<ValueId, NodeSet>)> = by_key_vec
+            let prop_index_vec: Vec<((Label, PropertyKey), hashbrown::HashMap<ValueId, NodeSet>)> = label_key_combinations
                 .into_par_iter()
-                .map(|(key, buckets)| {
+                .filter_map(|(label, key)| {
+                    // Get nodes with this label
+                    let label_nodes = label_index.get(&label)?;
+                    
+                    // Build inverted index from property columns, filtered by label
+                    let mut inv_map: hashbrown::HashMap<ValueId, Vec<NodeId>> = hashbrown::HashMap::new();
+                    
+                    // Process i64 columns
+                    if let Some(pairs) = self.node_col_i64.get(&key) {
+                        for (node_id, val) in pairs {
+                            if label_nodes.contains(*node_id) {
+                                inv_map.entry(ValueId::I64(*val)).or_default().push(*node_id);
+                            }
+                        }
+                    }
+                    
+                    // Process f64 columns
+                    if let Some(pairs) = self.node_col_f64.get(&key) {
+                        for (node_id, val) in pairs {
+                            if label_nodes.contains(*node_id) {
+                                inv_map.entry(ValueId::from_f64(*val)).or_default().push(*node_id);
+                            }
+                        }
+                    }
+                    
+                    // Process bool columns
+                    if let Some(pairs) = self.node_col_bool.get(&key) {
+                        for (node_id, val) in pairs {
+                            if label_nodes.contains(*node_id) {
+                                inv_map.entry(ValueId::Bool(*val)).or_default().push(*node_id);
+                            }
+                        }
+                    }
+                    
+                    // Process str columns
+                    if let Some(pairs) = self.node_col_str.get(&key) {
+                        for (node_id, val_id) in pairs {
+                            if label_nodes.contains(*node_id) {
+                                inv_map.entry(ValueId::Str(*val_id)).or_default().push(*node_id);
+                            }
+                        }
+                    }
+                    
+                    // Build the index for this (label, key) combination
+                    if inv_map.is_empty() {
+                        return None;
+                    }
+                    
                     let mut key_index: hashbrown::HashMap<ValueId, NodeSet> = hashbrown::HashMap::new();
-                    for (val_id, mut bucket) in buckets {
+                    for (val_id, mut bucket) in inv_map {
                         bucket.sort_unstable();
                         bucket.dedup();
                         let bitmap = RoaringBitmap::from_sorted_iter(bucket.into_iter()).unwrap();
                         key_index.insert(val_id, NodeSet::new(bitmap));
                     }
-                    (key, key_index)
+                    
+                    Some(((label, key), key_index))
                 })
                 .collect();
             
@@ -964,9 +1046,9 @@ mod tests {
     #[test]
     fn test_add_node() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         assert_eq!(builder.node_count(), 1);
-        let labels = builder.get_node_labels(1);
+        let labels = builder.node_labels(1);
         assert_eq!(labels.len(), 1);
         assert!(labels.contains(&"Person".to_string()));
     }
@@ -974,9 +1056,9 @@ mod tests {
     #[test]
     fn test_add_node_multiple_labels() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person", "User"]);
+        builder.add_node(Some(1), &["Person", "User"]);
         assert_eq!(builder.node_count(), 1);
-        let labels = builder.get_node_labels(1);
+        let labels = builder.node_labels(1);
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&"Person".to_string()));
         assert!(labels.contains(&"User".to_string()));
@@ -985,8 +1067,8 @@ mod tests {
     #[test]
     fn test_add_relationship() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
-        builder.add_node(2, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
         builder.add_rel(1, 2, "KNOWS");
         assert_eq!(builder.rel_count(), 1);
     }
@@ -994,7 +1076,7 @@ mod tests {
     #[test]
     fn test_set_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         
         builder.set_prop_str(1, "name", "Alice");
         builder.set_prop_i64(1, "age", 30);
@@ -1002,54 +1084,54 @@ mod tests {
         builder.set_prop_bool(1, "active", true);
         
         let alice_id = builder.interner.get_or_intern("Alice");
-        assert_eq!(builder.get_prop(1, "name"), Some(ValueId::Str(alice_id)));
-        assert_eq!(builder.get_prop(1, "age"), Some(ValueId::I64(30)));
-        assert_eq!(builder.get_prop(1, "score"), Some(ValueId::from_f64(95.5)));
-        assert_eq!(builder.get_prop(1, "active"), Some(ValueId::Bool(true)));
+        assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(alice_id)));
+        assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(30)));
+        assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
+        assert_eq!(builder.prop(1, "active"), Some(ValueId::Bool(true)));
     }
 
     #[test]
     fn test_get_prop_nonexistent() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
-        assert_eq!(builder.get_prop(1, "nonexistent"), None);
-        assert_eq!(builder.get_prop(999, "name"), None);
+        builder.add_node(Some(1), &["Person"]);
+        assert_eq!(builder.prop(1, "nonexistent"), None);
+        assert_eq!(builder.prop(999, "name"), None);
     }
 
     #[test]
     fn test_update_prop_str() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         builder.set_prop_str(1, "name", "Alice");
         
         let alice_id = builder.interner.get_or_intern("Alice");
-        assert_eq!(builder.get_prop(1, "name"), Some(ValueId::Str(alice_id)));
+        assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(alice_id)));
         
         builder.update_prop_str(1, "name", "Bob");
         let bob_id = builder.interner.get_or_intern("Bob");
-        assert_eq!(builder.get_prop(1, "name"), Some(ValueId::Str(bob_id)));
+        assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(bob_id)));
     }
 
     #[test]
     fn test_update_prop_i64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         builder.set_prop_i64(1, "age", 30);
-        assert_eq!(builder.get_prop(1, "age"), Some(ValueId::I64(30)));
+        assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(30)));
         
         builder.update_prop_i64(1, "age", 31);
-        assert_eq!(builder.get_prop(1, "age"), Some(ValueId::I64(31)));
+        assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(31)));
     }
 
     #[test]
     fn test_update_prop_f64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         builder.set_prop_f64(1, "score", 95.5);
-        assert_eq!(builder.get_prop(1, "score"), Some(ValueId::from_f64(95.5)));
+        assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
         
         builder.update_prop_f64(1, "score", 98.0);
-        assert_eq!(builder.get_prop(1, "score"), Some(ValueId::from_f64(98.0)));
+        assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(98.0)));
     }
 
     #[test]
@@ -1062,13 +1144,13 @@ mod tests {
     #[test]
     fn test_get_neighbors() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
-        builder.add_node(2, &["Person"]);
-        builder.add_node(3, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_node(Some(3), &["Person"]);
         builder.add_rel(1, 2, "KNOWS");
         builder.add_rel(3, 1, "KNOWS");
         
-        let (outgoing, incoming) = builder.get_neighbor_ids(1);
+        let (outgoing, incoming) = builder.neighbor_ids(1);
         assert_eq!(outgoing.len(), 1);
         assert_eq!(outgoing[0], 2); // Node 2
         assert_eq!(incoming.len(), 1);
@@ -1078,7 +1160,7 @@ mod tests {
     #[test]
     fn test_get_neighbors_nonexistent() {
         let builder = GraphBuilder::new(Some(10), Some(10));
-        let (outgoing, incoming) = builder.get_neighbor_ids(999);
+        let (outgoing, incoming) = builder.neighbor_ids(999);
         assert_eq!(outgoing.len(), 0);
         assert_eq!(incoming.len(), 0);
     }
@@ -1086,7 +1168,7 @@ mod tests {
     #[test]
     fn test_get_node_labels_nonexistent() {
         let builder = GraphBuilder::new(Some(10), Some(10));
-        let labels = builder.get_node_labels(999);
+        let labels = builder.node_labels(999);
         assert_eq!(labels.len(), 0);
     }
 
@@ -1107,27 +1189,27 @@ mod tests {
     #[test]
     fn test_get_property_key_id() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        assert_eq!(builder.get_property_key_id("name"), None);
+        assert_eq!(builder.property_key_id("name"), None);
         builder.set_prop_str(1, "name", "value");
-        assert!(builder.get_property_key_id("name").is_some());
+        assert!(builder.property_key_id("name").is_some());
     }
 
     #[test]
     fn test_auto_grow() {
         let mut builder = GraphBuilder::new(Some(2), Some(2));
         // Add more nodes than initial capacity
-        builder.add_node(1, &["Person"]);
-        builder.add_node(2, &["Person"]);
-        builder.add_node(3, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_node(Some(3), &["Person"]);
         assert_eq!(builder.node_count(), 3);
     }
 
     #[test]
     fn test_multiple_relationships() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
-        builder.add_node(2, &["Person"]);
-        builder.add_node(3, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_node(Some(3), &["Person"]);
         builder.add_rel(1, 2, "KNOWS");
         builder.add_rel(1, 3, "KNOWS");
         assert_eq!(builder.rel_count(), 2);
@@ -1139,7 +1221,7 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         // Add 10 nodes
         for i in 1..=10 {
-            builder.add_node(i, &["Person"]);
+            builder.add_node(Some(i), &["Person"]);
         }
         // Set property on 9 nodes (>80% of 10)
         for i in 1..=9 {
@@ -1153,50 +1235,50 @@ mod tests {
     #[test]
     fn test_f64_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         builder.set_prop_f64(1, "score", 95.5);
-        assert_eq!(builder.get_prop(1, "score"), Some(ValueId::from_f64(95.5)));
+        assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
     }
 
     #[test]
     fn test_bool_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         builder.set_prop_bool(1, "active", true);
-        assert_eq!(builder.get_prop(1, "active"), Some(ValueId::Bool(true)));
+        assert_eq!(builder.prop(1, "active"), Some(ValueId::Bool(true)));
     }
 
     #[test]
     fn test_get_nodes_with_property() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(0, &["Person"]);
-        builder.add_node(1, &["Person"]);
-        builder.add_node(2, &["Person"]);
+        builder.add_node(Some(0), &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
         builder.set_prop_i64(0, "age", 30);
         builder.set_prop_i64(1, "age", 30);
         builder.set_prop_i64(2, "age", 25);
         
-        let nodes = builder.get_nodes_with_property("age", ValueId::I64(30));
+        let nodes = builder.nodes_with_property("Person", "age", 30i64);
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&0));
         assert!(nodes.contains(&1));
         
-        let nodes = builder.get_nodes_with_property("age", ValueId::I64(25));
+        let nodes = builder.nodes_with_property("Person", "age", 25i64);
         assert_eq!(nodes.len(), 1);
         assert!(nodes.contains(&2));
         
         // Non-existent property value
-        let nodes = builder.get_nodes_with_property("age", ValueId::I64(99));
+        let nodes = builder.nodes_with_property("Person", "age", 99i64);
         assert_eq!(nodes.len(), 0);
     }
 
     #[test]
     fn test_get_nodes_with_property_f64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(0, &["Person"]);
+        builder.add_node(Some(0), &["Person"]);
         builder.set_prop_f64(0, "score", 95.5);
         
-        let nodes = builder.get_nodes_with_property("score", ValueId::from_f64(95.5));
+        let nodes = builder.nodes_with_property("Person", "score", 95.5);
         assert_eq!(nodes.len(), 1);
         assert!(nodes.contains(&0));
     }
@@ -1204,10 +1286,10 @@ mod tests {
     #[test]
     fn test_get_nodes_with_property_bool() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(0, &["Person"]);
+        builder.add_node(Some(0), &["Person"]);
         builder.set_prop_bool(0, "active", true);
         
-        let nodes = builder.get_nodes_with_property("active", ValueId::Bool(true));
+        let nodes = builder.nodes_with_property("Person", "active", true);
         assert_eq!(nodes.len(), 1);
         assert!(nodes.contains(&0));
     }
@@ -1215,8 +1297,8 @@ mod tests {
     #[test]
     fn test_finalize_simple() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(0, &["Person"]);
-        builder.add_node(1, &["Person"]);
+        builder.add_node(Some(0), &["Person"]);
+        builder.add_node(Some(1), &["Person"]);
         builder.add_rel(0, 1, "KNOWS");
         
         let snapshot = builder.finalize(None);
@@ -1227,11 +1309,11 @@ mod tests {
     #[test]
     fn test_finalize_with_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(0, &["Person"]);
+        builder.add_node(Some(0), &["Person"]);
         builder.set_prop_str(0, "name", "Alice");
         
         // Get the key before finalize consumes the builder
-        let name_key = builder.get_property_key_id("name").unwrap();
+        let name_key = builder.property_key_id("name").unwrap();
         
         let snapshot = builder.finalize(None);
         assert_eq!(snapshot.n_nodes, 1);

@@ -29,12 +29,16 @@ impl GraphSnapshotBuilder {
     /// Add a node with labels
     /// 
     /// # Arguments
-    /// * `node_id` - Node ID (must be u32, users should map their own IDs to u32)
     /// * `labels` - List of label strings
-    fn add_node(&mut self, node_id: u32, labels: Vec<String>) -> PyResult<()> {
+    /// * `node_id` - Optional node ID. If None, auto-generates the next sequential ID.
+    ///               If Some(id), uses that ID (must be u32)
+    /// 
+    /// # Returns
+    /// The node ID that was used (either the provided ID or the auto-generated one)
+    #[pyo3(signature = (labels, *, node_id = None))]
+    fn add_node(&mut self, labels: Vec<String>, node_id: Option<u32>) -> PyResult<u32> {
         let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-        self.builder.add_node(node_id, &label_refs);
-        Ok(())
+        Ok(self.builder.add_node(node_id, &label_refs))
     }
 
     /// Add a relationship
@@ -234,8 +238,9 @@ impl GraphSnapshotBuilder {
     }
 
     /// Get property value for a node (before finalization)
+    /// Note: Uses get_property to avoid conflict with Python's property builtin
     fn get_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
-        let value_id = self.builder.get_prop(node_id, &key);
+        let value_id = self.builder.prop(node_id, &key);
         
         Python::with_gil(|py| {
             if let Some(vid) = value_id {
@@ -258,6 +263,13 @@ impl GraphSnapshotBuilder {
     /// Update property with automatic type detection
     /// Automatically calls the correct type-specific method based on the value type
     fn update_prop(&mut self, node_id: u32, key: String, value: &PyAny) -> PyResult<()> {
+        // Check if property exists first
+        if self.builder.prop(node_id, &key).is_none() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("Property key '{}' not found", key)
+            ));
+        }
+        
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
             self.builder.update_prop_bool(node_id, &key, b);
@@ -276,31 +288,37 @@ impl GraphSnapshotBuilder {
     }
 
     /// Update string property (removes old, sets new)
-    fn update_property_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
+    fn update_prop_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
         self.builder.update_prop_str(node_id, &key, &value);
         Ok(())
     }
 
     /// Update i64 property
-    fn update_property_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
+    fn update_prop_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
         self.builder.update_prop_i64(node_id, &key, value);
         Ok(())
     }
 
     /// Update f64 property
-    fn update_property_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
+    fn update_prop_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
         self.builder.update_prop_f64(node_id, &key, value);
         Ok(())
     }
 
     /// Update boolean property
-    fn update_property_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
+    fn update_prop_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
         self.builder.update_prop_bool(node_id, &key, value);
         Ok(())
     }
 
-    /// Get nodes with a specific property value (before finalization)
-    fn get_nodes_with_property(&self, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
+    /// Get nodes with a specific property value, scoped by label (before finalization)
+    /// 
+    /// # Arguments
+    /// * `label` - The label to scope the query to
+    /// * `key` - The property key
+    /// * `value` - The property value to search for
+    #[pyo3(signature = (label, key, value))]
+    fn nodes_with_property(&self, label: String, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
         let prop_value = py_to_property_value(value)?;
         let value_id = match prop_value {
             rustychickpeas_core::PropertyValue::String(_s) => {
@@ -321,19 +339,19 @@ impl GraphSnapshotBuilder {
             }
         };
         
-        let node_ids = self.builder.get_nodes_with_property(&key, value_id);
+        let node_ids = self.builder.nodes_with_property(&label, &key, value_id);
         Ok(node_ids)
     }
 
     /// Get node labels (before finalization)
-    fn get_node_labels(&self, node_id: u32) -> PyResult<Vec<String>> {
-        Ok(self.builder.get_node_labels(node_id))
+    fn node_labels(&self, node_id: u32) -> PyResult<Vec<String>> {
+        Ok(self.builder.node_labels(node_id))
     }
 
     /// Get neighbors of a node (before finalization)
     /// Returns (outgoing, incoming) as tuple of lists of node IDs
-    fn get_neighbor_ids(&self, node_id: u32) -> PyResult<(Vec<u32>, Vec<u32>)> {
-        let (out, inc) = self.builder.get_neighbor_ids(node_id);
+    fn neighbor_ids(&self, node_id: u32) -> PyResult<(Vec<u32>, Vec<u32>)> {
+        let (out, inc) = self.builder.neighbor_ids(node_id);
         Ok((out, inc))
     }
 
@@ -355,18 +373,10 @@ impl GraphSnapshotBuilder {
         // We need to take ownership to finalize, so we'll use replace
         let builder = std::mem::replace(&mut self.builder, GraphBuilder::new(None, None));
         
-        // Convert property key names to PropertyKey IDs if provided
-        let keys_to_index = if let Some(prop_names) = index_properties {
-            let mut keys = Vec::new();
-            for name in prop_names {
-                if let Some(key_id) = builder.get_property_key_id(&name) {
-                    keys.push(key_id);
-                }
-            }
-            Some(keys)
-        } else {
-            None
-        };
+        // Convert Vec<String> to Vec<&str> for the Rust API
+        let keys_to_index: Option<Vec<&str>> = index_properties.as_ref().map(|names| {
+            names.iter().map(|s| s.as_str()).collect()
+        });
         
         let snapshot = builder.finalize(keys_to_index.as_deref());
         Ok(GraphSnapshot::new(snapshot))
@@ -389,18 +399,10 @@ impl GraphSnapshotBuilder {
     fn finalize_into(&mut self, manager: &RustyChickpeas, index_properties: Option<Vec<String>>) -> PyResult<()> {
         let builder = std::mem::replace(&mut self.builder, GraphBuilder::new(None, None));
         
-        // Convert property key names to PropertyKey IDs if provided
-        let keys_to_index = if let Some(prop_names) = index_properties {
-            let mut keys = Vec::new();
-            for name in prop_names {
-                if let Some(key_id) = builder.get_property_key_id(&name) {
-                    keys.push(key_id);
-                }
-            }
-            Some(keys)
-        } else {
-            None
-        };
+        // Convert Vec<String> to Vec<&str> for the Rust API
+        let keys_to_index: Option<Vec<&str>> = index_properties.as_ref().map(|names| {
+            names.iter().map(|s| s.as_str()).collect()
+        });
         
         let snapshot = builder.finalize(keys_to_index.as_deref());
         manager.manager.add_snapshot(snapshot);

@@ -15,7 +15,7 @@
 //! cargo test --test s3_integration_test -- --ignored
 //! ```
 
-use rustychickpeas_core::builder::GraphBuilder;
+use rustychickpeas_core::graph_builder::GraphBuilder;
 use tempfile::TempDir;
 use object_store::aws::AmazonS3Builder;
 use object_store::ObjectStore;

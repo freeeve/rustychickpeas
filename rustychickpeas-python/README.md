@@ -77,11 +77,11 @@ manager = rcp.RustyChickpeas()
 builder = manager.create_builder(version="v1.0")
 
 # Add nodes with labels
-builder.add_node(1, ["Person"])
-builder.add_node(2, ["Person"])
-builder.add_node(3, ["Company"])
+builder.add_node(["Person"], node_id=1)
+builder.add_node(["Person"], node_id=2)
+builder.add_node(["Company"], node_id=3)
 
-# Add relationships
+# Add relationships (node IDs are required)
 builder.add_rel(1, 2, "KNOWS")
 builder.add_rel(1, 3, "WORKS_FOR")
 
@@ -127,8 +127,8 @@ import rustychickpeas as rcp
 builder = rcp.GraphSnapshotBuilder(version="v1.0")
 
 # Add nodes and relationships
-builder.add_node(1, ["Person"])
-builder.add_node(2, ["Person"])
+builder.add_node(["Person"], node_id=1)
+builder.add_node(["Person"], node_id=2)
 builder.add_rel(1, 2, "KNOWS")
 
 # Finalize into a snapshot
@@ -179,8 +179,8 @@ let manager = RustyChickpeas::new();
 let mut builder = manager.create_builder(Some("v1.0"), None, None);
 
 // Add nodes and relationships
-builder.add_node(1, &["Person"]);
-builder.add_node(2, &["Person"]);
+builder.add_node(Some(1), &["Person"]);
+builder.add_node(Some(2), &["Person"]);
 builder.add_rel(1, 2, "KNOWS");
 
 // Finalize the builder
