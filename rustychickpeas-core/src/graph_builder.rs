@@ -468,6 +468,15 @@ impl GraphBuilder {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::GraphBuilder;
+    /// 
+    /// // Create a builder and add nodes with properties
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.set_prop_str(0, "name", "Alice");
+    /// builder.set_prop_i64(0, "age", 30);
+    /// builder.set_prop_bool(0, "active", true);
+    /// 
     /// // Find all Person nodes with name "Alice"
     /// let nodes = builder.nodes_with_property("Person", "name", "Alice");
     /// 
@@ -576,11 +585,21 @@ impl GraphBuilder {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::GraphBuilder;
+    /// 
+    /// // Create a builder and add nodes
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.set_prop_str(0, "name", "Alice");
+    /// builder.set_prop_i64(0, "age", 30);
+    /// 
     /// // Index specific properties upfront
     /// let snapshot = builder.finalize(Some(&["name", "age"]));
     /// 
-    /// // Lazy indexing (default)
-    /// let snapshot = builder.finalize(None);
+    /// // Or create a new builder for lazy indexing (default)
+    /// let mut builder2 = GraphBuilder::new(Some(10), Some(10));
+    /// builder2.add_node(Some(0), &["Person"]);
+    /// let snapshot = builder2.finalize(None);
     /// ```
     pub fn finalize(self, index_properties: Option<&[&str]>) -> GraphSnapshot {
         let index_property_keys: Option<Vec<PropertyKey>> = index_properties.map(|keys| {

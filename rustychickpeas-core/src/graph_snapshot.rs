@@ -386,11 +386,22 @@ impl GraphSnapshot {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::GraphBuilder;
+    /// 
+    /// // Create a graph
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.add_node(Some(1), &["Person"]);
+    /// builder.add_node(Some(2), &["Company"]);
+    /// builder.add_rel(0, 1, "KNOWS");
+    /// builder.add_rel(0, 2, "WORKS_FOR");
+    /// let snapshot = builder.finalize(None);
+    /// 
     /// // Get neighbors connected via "KNOWS" relationships
     /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS"]);
     /// 
     /// // Get neighbors connected via multiple relationship types
-    /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS", "WORKS_WITH"]);
+    /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
     pub fn out_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
         let rel_type_ids: Vec<RelationshipType> = rel_types.iter()
@@ -437,11 +448,22 @@ impl GraphSnapshot {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::GraphBuilder;
+    /// 
+    /// // Create a graph
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.add_node(Some(1), &["Person"]);
+    /// builder.add_node(Some(2), &["Company"]);
+    /// builder.add_rel(1, 0, "KNOWS");
+    /// builder.add_rel(2, 0, "WORKS_FOR");
+    /// let snapshot = builder.finalize(None);
+    /// 
     /// // Get neighbors connected via "KNOWS" relationships
     /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS"]);
     /// 
     /// // Get neighbors connected via multiple relationship types
-    /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS", "WORKS_WITH"]);
+    /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
     pub fn in_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
         let rel_type_ids: Vec<RelationshipType> = rel_types.iter()
@@ -496,6 +518,16 @@ impl GraphSnapshot {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
+    /// use rustychickpeas_core::types::Direction;
+    /// 
+    /// // Create a simple graph
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(5), &["Person"]);
+    /// builder.add_node(Some(10), &["Person"]);
+    /// builder.add_rel(5, 10, "KNOWS");
+    /// let snapshot = builder.finalize(None);
+    /// 
     /// // Check if node 5 can reach node 10 via outgoing relationships
     /// let reachable = snapshot.can_reach(5, 10, Direction::Outgoing, None, None);
     /// 
@@ -623,24 +655,37 @@ impl GraphSnapshot {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
     /// use rustychickpeas_core::bitmap::NodeSet;
     /// use rustychickpeas_core::types::Direction;
     /// use roaring::RoaringBitmap;
     /// 
+    /// // Create a simple graph
+    /// let mut builder = GraphBuilder::new(Some(20), Some(20));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.add_node(Some(1), &["Person"]);
+    /// builder.add_node(Some(10), &["Person"]);
+    /// builder.add_node(Some(11), &["Person"]);
+    /// builder.add_rel(0, 10, "KNOWS");
+    /// builder.add_rel(1, 11, "WORKS_WITH");
+    /// let snapshot = builder.finalize(None);
+    /// 
     /// // Simple bidirectional search (default: Outgoing for forward, Incoming for backward)
     /// let source = NodeSet::new(RoaringBitmap::from_iter([0, 1]));
     /// let target = NodeSet::new(RoaringBitmap::from_iter([10, 11]));
-    /// let (nodes, rels) = snapshot.bidirectional_bfs(
+    /// type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
+    /// type RelFilter = fn(u32, u32, rustychickpeas_core::types::RelationshipType, u32, &GraphSnapshot) -> bool;
+    /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
     ///     &source, &target, Direction::Outgoing, None, None, None, None
     /// );
     /// 
     /// // With relationship type filter
-    /// let (nodes, rels) = snapshot.bidirectional_bfs(
+    /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
     ///     &source, &target, Direction::Outgoing, Some(&["KNOWS", "WORKS_WITH"]), None, None, None
     /// );
     /// 
     /// // Bidirectional traversal (both directions)
-    /// let (nodes, rels) = snapshot.bidirectional_bfs(
+    /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
     ///     &source, &target, Direction::Both, None, None, None, None
     /// );
     /// ```
@@ -875,23 +920,35 @@ impl GraphSnapshot {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
     /// use rustychickpeas_core::bitmap::NodeSet;
-    /// use rustychickpeas_core::types::Direction;
+    /// use rustychickpeas_core::types::{Direction, NodeId};
     /// use roaring::RoaringBitmap;
+    /// 
+    /// // Create a simple graph
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.add_node(Some(1), &["Person"]);
+    /// builder.add_node(Some(2), &["Company"]);
+    /// builder.add_rel(0, 1, "KNOWS");
+    /// builder.add_rel(0, 2, "WORKS_FOR");
+    /// let snapshot = builder.finalize(None);
     /// 
     /// // Simple BFS from a single node
     /// let start = NodeSet::new(RoaringBitmap::from_iter([0]));
-    /// let (nodes, rels) = snapshot.bfs(
+    /// type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
+    /// type RelFilter = fn(u32, u32, rustychickpeas_core::types::RelationshipType, u32, &GraphSnapshot) -> bool;
+    /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
     ///     &start, Direction::Outgoing, None, None, None, None
     /// );
     /// 
     /// // BFS with relationship type filter
-    /// let (nodes, rels) = snapshot.bfs(
+    /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
     ///     &start, Direction::Outgoing, Some(&["KNOWS", "WORKS_WITH"]), None, None, None
     /// );
     /// 
     /// // BFS with max depth
-    /// let (nodes, rels) = snapshot.bfs(
+    /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
     ///     &start, Direction::Outgoing, None, None, None, Some(3)
     /// );
     /// 
@@ -901,7 +958,7 @@ impl GraphSnapshot {
     ///         .map_or(false, |nodes| nodes.contains(node_id))
     /// };
     /// let (nodes, rels) = snapshot.bfs(
-    ///     &start, Direction::Outgoing, None, Some(&node_filter), None, None
+    ///     &start, Direction::Outgoing, None, Some(&node_filter), None::<RelFilter>, None
     /// );
     /// ```
     pub fn bfs<NF, RF>(
@@ -1115,6 +1172,16 @@ impl GraphSnapshot {
     /// 
     /// # Examples
     /// ```
+    /// use rustychickpeas_core::GraphBuilder;
+    /// 
+    /// // Create a graph with properties
+    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
+    /// builder.add_node(Some(0), &["Person"]);
+    /// builder.set_prop_str(0, "name", "Alice");
+    /// builder.set_prop_i64(0, "age", 30);
+    /// builder.set_prop_bool(0, "active", true);
+    /// let snapshot = builder.finalize(None);
+    /// 
     /// // Find all Person nodes with name "Alice"
     /// let nodes = snapshot.nodes_with_property("Person", "name", "Alice");
     /// 
