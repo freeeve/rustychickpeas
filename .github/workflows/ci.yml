@@ -129,6 +129,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin
       
@@ -171,7 +176,7 @@ jobs:
             exit 1
           fi
       
-      - name: Verify coverage file exists
+      - name: Verify Rust coverage file exists
         run: |
           # Verify from workspace root
           if [ -f coverage/rust/lcov.info ]; then
@@ -188,12 +193,106 @@ jobs:
             exit 1
           fi
       
-      - name: Upload to Coveralls
+      - name: Run Python coverage
+        run: |
+          mkdir -p coverage/python
+          cd rustychickpeas-python
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install maturin pytest pytest-cov coverage[toml] pyarrow
+          maturin develop --release
+          # Run pytest with coverage, generating LCOV format
+          pytest \
+            --cov=rustychickpeas \
+            --cov-report=term \
+            --cov-report=lcov:../coverage/python/lcov.info \
+            --cov-report=xml:../coverage/python/coverage.xml \
+            --cov-report=html:../coverage/python/htmlcov \
+            tests/ -v
+          cd ..
+          # Verify Python coverage file exists
+          if [ -f coverage/python/lcov.info ]; then
+            echo "✓ Created Python lcov.info at coverage/python/lcov.info"
+            ls -lh coverage/python/lcov.info
+            # Check if file has content (may be empty if no Python source files)
+            if grep -q "^SF:" coverage/python/lcov.info 2>/dev/null; then
+              echo "✓ Valid LCOV file with $(grep -c '^SF:' coverage/python/lcov.info) source files"
+            else
+              echo "⚠ Note: LCOV file exists but may be empty (expected for Rust extension modules)"
+              echo "   This is normal - the Python module is compiled Rust code."
+            fi
+          else
+            echo "⚠ WARNING: Python lcov.info not created (tests may have failed)"
+          fi
+      
+      - name: Upload Rust coverage to Coveralls
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: coverage/rust/lcov.info
           flag-name: rust
+          parallel: false
+          # Optional: only needed for private repos
+          # repo-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+      
+      - name: Run Python API coverage (Rust code executed by Python tests)
+        run: |
+          mkdir -p coverage/python-api
+          cd rustychickpeas-python
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install maturin pytest pyarrow
+          # Build in debug mode for coverage tracking
+          maturin develop
+          cd ..
+          # Run tarpaulin on the Python API coverage test
+          # This test runs pytest and tracks which Rust code is executed
+          cargo tarpaulin \
+            --package rustychickpeas-core \
+            --test python_api_coverage_test \
+            --follow-exec \
+            --exclude-files '*/tests/*' \
+            --exclude-files '*/benches/*' \
+            --exclude-files '*/target/*' \
+            --exclude-files '*/examples/*' \
+            --exclude-files 'rustychickpeas-python/src/*' \
+            --out Lcov \
+            --root . \
+            --timeout 600 \
+            -- --ignored || true
+          # Move lcov.info if it exists
+          if [ -f lcov.info ]; then
+            grep -E '^(SF:|TN:|FNF:|FNH:|FNDA:|DA:|LF:|LH:|BRDA:|BRF:|BRH:|end_of_record)' lcov.info > coverage/python-api/lcov.info || mv lcov.info coverage/python-api/lcov.info
+            if [ -f coverage/python-api/lcov.info ]; then
+              echo "✓ Created Python API coverage at coverage/python-api/lcov.info"
+              if grep -q "^SF:" coverage/python-api/lcov.info 2>/dev/null; then
+                echo "✓ Valid LCOV file with $(grep -c '^SF:' coverage/python-api/lcov.info) source files"
+              fi
+            fi
+          else
+            echo "⚠ Note: Python API coverage not generated (this is optional)"
+          fi
+      
+      - name: Upload Python test coverage to Coveralls
+        if: always()
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: coverage/python/lcov.info
+          flag-name: python-tests
+          parallel: false
+          # Optional: only needed for private repos
+          # repo-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
+      
+      - name: Upload Python API coverage to Coveralls
+        if: always()
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: coverage/python-api/lcov.info
+          flag-name: python-api
           parallel: false
           # Optional: only needed for private repos
           # repo-token: ${{ secrets.COVERALLS_REPO_TOKEN }}

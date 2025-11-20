@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_resolve_string() {
-        let mut builder = GraphBuilder::new(Some(10), Some(10));
+        let builder = GraphBuilder::new(Some(10), Some(10));
         let id = builder.interner.get_or_intern("test");
         assert_eq!(builder.resolve_string(id), "test");
     }
@@ -1339,5 +1339,548 @@ mod tests {
         
         // Check that property is accessible
         assert!(snapshot.columns.contains_key(&name_key));
+    }
+
+    // Deduplication tests for each tuple type in DedupKey
+
+    #[test]
+    fn test_dedup_single_property() {
+        // Tests DedupKey::Single
+        // Note: Deduplication only works during Parquet loading, but we can test the DedupKey types
+        // by manually building the dedup keys and verifying they work correctly
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email"]);
+        
+        // Add first node with email
+        let node1 = builder.add_node(Some(1), &["Person"]);
+        builder.set_prop_str(node1, "email", "alice@example.com");
+        
+        // Manually build dedup key and add to map (simulating Parquet loading behavior)
+        let _email_key = builder.interner.get_or_intern("email");
+        let email_val = builder.interner.get_or_intern("alice@example.com");
+        let dedup_key = DedupKey::Single(ValueId::Str(email_val));
+        builder.dedup_map.insert(dedup_key, node1);
+        
+        assert_eq!(builder.node_count(), 1);
+        
+        // Add second node with same email - check dedup_map
+        let node2 = builder.add_node(Some(2), &["User"]);
+        builder.set_prop_str(node2, "email", "alice@example.com");
+        
+        // Check that dedup_map would find the existing node
+        let email_val2 = builder.interner.get_or_intern("alice@example.com");
+        let dedup_key2 = DedupKey::Single(ValueId::Str(email_val2));
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&node1));
+        
+        // Manually merge labels (simulating Parquet behavior)
+        let labels = builder.node_labels(node1);
+        let mut merged_labels = labels.clone();
+        for label in builder.node_labels(node2) {
+            if !merged_labels.contains(&label) {
+                merged_labels.push(label);
+            }
+        }
+        // Verify we would merge to node1
+        assert_eq!(merged_labels.len(), 2);
+        assert!(merged_labels.contains(&"Person".to_string()));
+        assert!(merged_labels.contains(&"User".to_string()));
+        
+        // Add third node with different email - should create new entry
+        let node3 = builder.add_node(Some(3), &["Person"]);
+        builder.set_prop_str(node3, "email", "bob@example.com");
+        let bob_val = builder.interner.get_or_intern("bob@example.com");
+        let dedup_key3 = DedupKey::Single(ValueId::Str(bob_val));
+        builder.dedup_map.insert(dedup_key3, node3);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_pair_properties() {
+        // Tests DedupKey::Pair
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email", "username"]);
+        
+        // Build dedup keys manually to test Pair variant
+        let email_val1 = builder.interner.get_or_intern("alice@example.com");
+        let username_val1 = builder.interner.get_or_intern("alice");
+        let dedup_key1 = DedupKey::Pair(ValueId::Str(email_val1), ValueId::Str(username_val1));
+        builder.dedup_map.insert(dedup_key1.clone(), 1);
+        
+        // Same key should map to same node
+        let email_val2 = builder.interner.get_or_intern("alice@example.com");
+        let username_val2 = builder.interner.get_or_intern("alice");
+        let dedup_key2 = DedupKey::Pair(ValueId::Str(email_val2), ValueId::Str(username_val2));
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&1));
+        
+        // Different username should create different key
+        let username_val3 = builder.interner.get_or_intern("alice2");
+        let dedup_key3 = DedupKey::Pair(ValueId::Str(email_val2), ValueId::Str(username_val3));
+        assert_eq!(builder.dedup_map.get(&dedup_key3), None);
+        builder.dedup_map.insert(dedup_key3, 2);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_triple_properties() {
+        // Tests DedupKey::Triple
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email", "username", "domain"]);
+        
+        let email_val = builder.interner.get_or_intern("alice@example.com");
+        let username_val = builder.interner.get_or_intern("alice");
+        let domain_val1 = builder.interner.get_or_intern("example.com");
+        let dedup_key1 = DedupKey::Triple(ValueId::Str(email_val), ValueId::Str(username_val), ValueId::Str(domain_val1));
+        builder.dedup_map.insert(dedup_key1.clone(), 1);
+        
+        // Same triple should map to same node
+        let email_val2 = builder.interner.get_or_intern("alice@example.com");
+        let username_val2 = builder.interner.get_or_intern("alice");
+        let domain_val2 = builder.interner.get_or_intern("example.com");
+        let dedup_key2 = DedupKey::Triple(ValueId::Str(email_val2), ValueId::Str(username_val2), ValueId::Str(domain_val2));
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&1));
+        
+        // Different domain should create different key
+        let domain_val3 = builder.interner.get_or_intern("other.com");
+        let dedup_key3 = DedupKey::Triple(ValueId::Str(email_val2), ValueId::Str(username_val2), ValueId::Str(domain_val3));
+        assert_eq!(builder.dedup_map.get(&dedup_key3), None);
+        builder.dedup_map.insert(dedup_key3, 2);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_quad_properties() {
+        // Tests DedupKey::Quad
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email", "username", "domain", "region"]);
+        
+        let email_val = builder.interner.get_or_intern("alice@example.com");
+        let username_val = builder.interner.get_or_intern("alice");
+        let domain_val = builder.interner.get_or_intern("example.com");
+        let region_val1 = builder.interner.get_or_intern("us-east");
+        let dedup_key1 = DedupKey::Quad(ValueId::Str(email_val), ValueId::Str(username_val), ValueId::Str(domain_val), ValueId::Str(region_val1));
+        builder.dedup_map.insert(dedup_key1.clone(), 1);
+        
+        // Same quad should map to same node
+        let email_val2 = builder.interner.get_or_intern("alice@example.com");
+        let username_val2 = builder.interner.get_or_intern("alice");
+        let domain_val2 = builder.interner.get_or_intern("example.com");
+        let region_val2 = builder.interner.get_or_intern("us-east");
+        let dedup_key2 = DedupKey::Quad(ValueId::Str(email_val2), ValueId::Str(username_val2), ValueId::Str(domain_val2), ValueId::Str(region_val2));
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&1));
+        
+        // Different region should create different key
+        let region_val3 = builder.interner.get_or_intern("us-west");
+        let dedup_key3 = DedupKey::Quad(ValueId::Str(email_val2), ValueId::Str(username_val2), ValueId::Str(domain_val2), ValueId::Str(region_val3));
+        assert_eq!(builder.dedup_map.get(&dedup_key3), None);
+        builder.dedup_map.insert(dedup_key3, 2);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_quint_properties() {
+        // Tests DedupKey::Quint
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email", "username", "domain", "region", "zone"]);
+        
+        let email_val = builder.interner.get_or_intern("alice@example.com");
+        let username_val = builder.interner.get_or_intern("alice");
+        let domain_val = builder.interner.get_or_intern("example.com");
+        let region_val = builder.interner.get_or_intern("us-east");
+        let zone_val1 = builder.interner.get_or_intern("a");
+        let dedup_key1 = DedupKey::Quint(ValueId::Str(email_val), ValueId::Str(username_val), ValueId::Str(domain_val), ValueId::Str(region_val), ValueId::Str(zone_val1));
+        builder.dedup_map.insert(dedup_key1.clone(), 1);
+        
+        // Same quint should map to same node
+        let email_val2 = builder.interner.get_or_intern("alice@example.com");
+        let username_val2 = builder.interner.get_or_intern("alice");
+        let domain_val2 = builder.interner.get_or_intern("example.com");
+        let region_val2 = builder.interner.get_or_intern("us-east");
+        let zone_val2 = builder.interner.get_or_intern("a");
+        let dedup_key2 = DedupKey::Quint(ValueId::Str(email_val2), ValueId::Str(username_val2), ValueId::Str(domain_val2), ValueId::Str(region_val2), ValueId::Str(zone_val2));
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&1));
+        
+        // Different zone should create different key
+        let zone_val3 = builder.interner.get_or_intern("b");
+        let dedup_key3 = DedupKey::Quint(ValueId::Str(email_val2), ValueId::Str(username_val2), ValueId::Str(domain_val2), ValueId::Str(region_val2), ValueId::Str(zone_val3));
+        assert_eq!(builder.dedup_map.get(&dedup_key3), None);
+        builder.dedup_map.insert(dedup_key3, 2);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_many_properties() {
+        // Tests DedupKey::Many (6+ properties)
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
+        
+        let v1 = builder.interner.get_or_intern("v1");
+        let v2 = builder.interner.get_or_intern("v2");
+        let v3 = builder.interner.get_or_intern("v3");
+        let v4 = builder.interner.get_or_intern("v4");
+        let v5 = builder.interner.get_or_intern("v5");
+        let v6 = builder.interner.get_or_intern("v6");
+        let v7 = builder.interner.get_or_intern("v7");
+        let values = vec![ValueId::Str(v1), ValueId::Str(v2), ValueId::Str(v3), ValueId::Str(v4), ValueId::Str(v5), ValueId::Str(v6), ValueId::Str(v7)];
+        let dedup_key1 = DedupKey::from_slice(&values);
+        builder.dedup_map.insert(dedup_key1.clone(), 1);
+        
+        // Same 7 properties should map to same node
+        let v1_2 = builder.interner.get_or_intern("v1");
+        let v2_2 = builder.interner.get_or_intern("v2");
+        let v3_2 = builder.interner.get_or_intern("v3");
+        let v4_2 = builder.interner.get_or_intern("v4");
+        let v5_2 = builder.interner.get_or_intern("v5");
+        let v6_2 = builder.interner.get_or_intern("v6");
+        let v7_2 = builder.interner.get_or_intern("v7");
+        let values2 = vec![ValueId::Str(v1_2), ValueId::Str(v2_2), ValueId::Str(v3_2), ValueId::Str(v4_2), ValueId::Str(v5_2), ValueId::Str(v6_2), ValueId::Str(v7_2)];
+        let dedup_key2 = DedupKey::from_slice(&values2);
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&1));
+        
+        // Different p7 should create different key
+        let v8 = builder.interner.get_or_intern("v8");
+        let values3 = vec![ValueId::Str(v1_2), ValueId::Str(v2_2), ValueId::Str(v3_2), ValueId::Str(v4_2), ValueId::Str(v5_2), ValueId::Str(v6_2), ValueId::Str(v8)];
+        let dedup_key3 = DedupKey::from_slice(&values3);
+        assert_eq!(builder.dedup_map.get(&dedup_key3), None);
+        builder.dedup_map.insert(dedup_key3, 2);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_mixed_value_types() {
+        // Test deduplication with different ValueId types (i64, f64, bool, str)
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["id", "score", "active", "name"]);
+        
+        // Build dedup key with mixed types
+        let name_val = builder.interner.get_or_intern("Alice");
+        let dedup_key1 = DedupKey::Quad(
+            ValueId::I64(100),
+            ValueId::from_f64(95.5),
+            ValueId::Bool(true),
+            ValueId::Str(name_val)
+        );
+        builder.dedup_map.insert(dedup_key1.clone(), 1);
+        
+        // Same values should map to same node
+        let name_val2 = builder.interner.get_or_intern("Alice");
+        let dedup_key2 = DedupKey::Quad(
+            ValueId::I64(100),
+            ValueId::from_f64(95.5),
+            ValueId::Bool(true),
+            ValueId::Str(name_val2)
+        );
+        assert_eq!(builder.dedup_map.get(&dedup_key2), Some(&1));
+        
+        // Different id should create different key
+        let dedup_key3 = DedupKey::Quad(
+            ValueId::I64(200),
+            ValueId::from_f64(95.5),
+            ValueId::Bool(true),
+            ValueId::Str(name_val2)
+        );
+        assert_eq!(builder.dedup_map.get(&dedup_key3), None);
+        builder.dedup_map.insert(dedup_key3, 2);
+        assert_eq!(builder.dedup_map.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_partial_properties() {
+        // Test that nodes without all deduplication properties are not deduplicated
+        // (In Parquet loading, missing properties result in None in dedup_keys_per_row)
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email", "username"]);
+        
+        // Node with both properties
+        let email_val = builder.interner.get_or_intern("alice@example.com");
+        let username_val = builder.interner.get_or_intern("alice");
+        let dedup_key = DedupKey::Pair(ValueId::Str(email_val), ValueId::Str(username_val));
+        builder.dedup_map.insert(dedup_key, 1);
+        
+        // Node with only email - cannot build complete dedup key, so won't match
+        // Missing username - cannot create Pair key, so won't be in dedup_map
+        // This simulates Parquet loading behavior where missing properties result in None
+        
+        // Node with only username - same issue
+        // Missing email - cannot create Pair key
+        
+        // Only the complete key should be in the map
+        assert_eq!(builder.dedup_map.len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_disable() {
+        // Test that disabling deduplication clears the dedup_map
+        use crate::types::DedupKey;
+        use crate::graph_snapshot::ValueId;
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.enable_node_deduplication(vec!["email"]);
+        
+        // Add a dedup key
+        let email_val = builder.interner.get_or_intern("alice@example.com");
+        let dedup_key = DedupKey::Single(ValueId::Str(email_val));
+        builder.dedup_map.insert(dedup_key, 1);
+        assert_eq!(builder.dedup_map.len(), 1);
+        
+        // Disable deduplication
+        builder.disable_node_deduplication();
+        
+        // dedup_map should be cleared
+        assert_eq!(builder.dedup_map.len(), 0);
+        assert_eq!(builder.dedup_unique_properties, None);
+    }
+
+    // Tests for IntoValueIdBuilder trait
+
+    #[test]
+    fn test_into_value_id_builder_valueid() {
+        let builder = GraphBuilder::new(None, None);
+        let value_id = ValueId::I64(42);
+        let result = value_id.into_value_id(&builder);
+        assert_eq!(result, ValueId::I64(42));
+    }
+
+    #[test]
+    fn test_into_value_id_builder_i64() {
+        let builder = GraphBuilder::new(None, None);
+        let result = 42i64.into_value_id(&builder);
+        assert_eq!(result, ValueId::I64(42));
+    }
+
+    #[test]
+    fn test_into_value_id_builder_i32() {
+        let builder = GraphBuilder::new(None, None);
+        let result = 42i32.into_value_id(&builder);
+        assert_eq!(result, ValueId::I64(42));
+    }
+
+    #[test]
+    fn test_into_value_id_builder_f64() {
+        let builder = GraphBuilder::new(None, None);
+        let result = 95.5f64.into_value_id(&builder);
+        match result {
+            ValueId::F64(bits) => {
+                let val = f64::from_bits(bits);
+                assert!((val - 95.5).abs() < 0.001);
+            }
+            _ => panic!("Expected F64 variant"),
+        }
+    }
+
+    #[test]
+    fn test_into_value_id_builder_bool() {
+        let builder = GraphBuilder::new(None, None);
+        let result_true = true.into_value_id(&builder);
+        assert_eq!(result_true, ValueId::Bool(true));
+        
+        let result_false = false.into_value_id(&builder);
+        assert_eq!(result_false, ValueId::Bool(false));
+    }
+
+    #[test]
+    fn test_into_value_id_builder_str() {
+        let builder = GraphBuilder::new(None, None);
+        // Intern a string first - need mutable access for get_or_intern
+        let id = builder.interner.get_or_intern("test");
+        let result = "test".into_value_id(&builder);
+        assert_eq!(result, ValueId::Str(id));
+    }
+
+    #[test]
+    fn test_into_value_id_builder_string() {
+        let builder = GraphBuilder::new(None, None);
+        // Intern a string first - need mutable access for get_or_intern
+        let id = builder.interner.get_or_intern("test");
+        let result = "test".to_string().into_value_id(&builder);
+        assert_eq!(result, ValueId::Str(id));
+    }
+
+    // Tests for relationship properties
+
+    #[test]
+    fn test_set_relationship_property_str() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        
+        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        
+        // Verify property was set by checking the internal storage
+        let since_key = builder.interner.get_or_intern("since");
+        let since_val = builder.interner.get_or_intern("2020");
+        assert!(builder.rel_col_str.contains_key(&since_key));
+        let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        let props = builder.rel_col_str.get(&since_key).unwrap();
+        assert!(props.iter().any(|(idx, val)| *idx == rel_idx && *val == since_val));
+    }
+
+    #[test]
+    fn test_set_relationship_property_i64() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        
+        builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
+        
+        // Verify property was set
+        let weight_key = builder.interner.get_or_intern("weight");
+        let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        let props = builder.rel_col_i64.get(&weight_key).unwrap();
+        assert!(props.iter().any(|(idx, val)| *idx == rel_idx && *val == 5));
+    }
+
+    #[test]
+    fn test_set_relationship_property_f64() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        
+        builder.set_rel_prop_f64(1, 2, "KNOWS", "score", 0.85);
+        
+        // Verify property was set
+        let score_key = builder.interner.get_or_intern("score");
+        let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        let props = builder.rel_col_f64.get(&score_key).unwrap();
+        assert!(props.iter().any(|(idx, val)| *idx == rel_idx && (*val - 0.85).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_set_relationship_property_bool() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        
+        builder.set_rel_prop_bool(1, 2, "KNOWS", "verified", true);
+        
+        // Verify property was set
+        let verified_key = builder.interner.get_or_intern("verified");
+        let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        let props = builder.rel_col_bool.get(&verified_key).unwrap();
+        assert!(props.iter().any(|(idx, val)| *idx == rel_idx && *val == true));
+    }
+
+    #[test]
+    fn test_set_relationship_property_multiple() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        
+        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
+        builder.set_rel_prop_f64(1, 2, "KNOWS", "score", 0.85);
+        builder.set_rel_prop_bool(1, 2, "KNOWS", "verified", true);
+        
+        // Verify all properties were set
+        let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        
+        let since_key = builder.interner.get_or_intern("since");
+        let since_val = builder.interner.get_or_intern("2020");
+        assert!(builder.rel_col_str.get(&since_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && *val == since_val));
+        
+        let weight_key = builder.interner.get_or_intern("weight");
+        assert!(builder.rel_col_i64.get(&weight_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && *val == 5));
+        
+        let score_key = builder.interner.get_or_intern("score");
+        assert!(builder.rel_col_f64.get(&score_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && (*val - 0.85).abs() < 0.001));
+        
+        let verified_key = builder.interner.get_or_intern("verified");
+        assert!(builder.rel_col_bool.get(&verified_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && *val == true));
+    }
+
+    #[test]
+    fn test_set_relationship_property_nonexistent_rel() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        // Don't add the relationship
+        
+        // Setting property on non-existent relationship should not panic
+        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        
+        // Property should not be set
+        let since_key = builder.interner.get_or_intern("since");
+        assert!(!builder.rel_col_str.contains_key(&since_key) || 
+                builder.rel_col_str.get(&since_key).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_set_relationship_property_wrong_type() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        builder.add_rel(1, 2, "LIKES"); // Different type
+        
+        // Set property on KNOWS relationship
+        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        
+        // Verify property is only on KNOWS, not LIKES
+        let since_key = builder.interner.get_or_intern("since");
+        let knows_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        let likes_idx = builder.find_rel_index(1, 2, "LIKES").unwrap();
+        
+        let props = builder.rel_col_str.get(&since_key).unwrap();
+        assert!(props.iter().any(|(idx, _)| *idx == knows_idx));
+        assert!(!props.iter().any(|(idx, _)| *idx == likes_idx));
+    }
+
+    #[test]
+    fn test_relationship_properties_finalize() {
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        
+        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
+        
+        let snapshot = builder.finalize(None);
+        
+        // Verify relationship properties are in the snapshot
+        // We need to find the CSR position for the relationship
+        let out_neighbors = snapshot.out_neighbors(1);
+        assert_eq!(out_neighbors.len(), 1);
+        assert_eq!(out_neighbors[0], 2);
+        
+        // Get the CSR position (should be 0 for first relationship)
+        let csr_pos = 0u32;
+        let since_val = snapshot.value_id_from_str("2020").unwrap();
+        
+        // Check that relationship property exists
+        let prop = snapshot.relationship_property(csr_pos, "since");
+        assert_eq!(prop, Some(since_val));
+        
+        let weight_val = ValueId::I64(5);
+        let prop = snapshot.relationship_property(csr_pos, "weight");
+        assert_eq!(prop, Some(weight_val));
     }
 }

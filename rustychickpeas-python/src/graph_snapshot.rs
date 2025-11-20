@@ -696,7 +696,6 @@ impl GraphSnapshot {
         } else if let Some(nf_obj) = node_filter.as_ref() {
             let nf_obj = nf_obj.clone();
             // Type annotation helper: create a dummy closure type for None
-            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
             type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
             self.snapshot.bidirectional_bfs::<_, RelFilter>(
                 &source_set,
@@ -872,7 +871,6 @@ impl GraphSnapshot {
         } else if let Some(nf_obj) = node_filter.as_ref() {
             let nf_obj = nf_obj.clone();
             // Type annotation helper: create a dummy closure type for None
-            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
             type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
             self.snapshot.bfs::<_, RelFilter>(
                 &start_set,

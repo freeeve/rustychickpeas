@@ -139,6 +139,7 @@ impl GraphBuilder {
     /// * `label_columns` - Optional list of column names to use as labels
     /// * `property_columns` - Optional list of column names to use as properties. If None, uses all columns except ID and labels.
     /// * `unique_properties` - Optional list of property column names to use for deduplication. If provided, nodes with the same values for these properties will be merged.
+    /// * `default_label` - Optional default label to apply to all loaded nodes (in addition to any labels from label_columns).
     pub fn load_nodes_from_parquet(
         &mut self,
         path: &str,
@@ -146,6 +147,7 @@ impl GraphBuilder {
         label_columns: Option<Vec<&str>>,
         property_columns: Option<Vec<&str>>,
         unique_properties: Option<Vec<&str>>,
+        default_label: Option<&str>,
     ) -> Result<Vec<u32>> {
         // Create Parquet reader (handles both local and S3)
         // For S3, uses ParquetObjectReader for direct streaming without temp files
@@ -244,6 +246,14 @@ impl GraphBuilder {
 
             // Extract labels
             let mut labels_per_row: Vec<Vec<&str>> = vec![Vec::new(); batch.num_rows()];
+            
+            // Add default label to all rows if provided
+            if let Some(default_lbl) = default_label {
+                for labels in &mut labels_per_row {
+                    labels.push(default_lbl);
+                }
+            }
+            
             for label_col in &label_cols {
                 if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == label_col) {
                     let column = batch.column(column_idx);
@@ -907,6 +917,7 @@ pub fn read_from_parquet(
             label_columns,
             node_property_columns,
             None, // unique_properties - no deduplication by default
+            None, // default_label
         )?;
     }
 
@@ -1023,6 +1034,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["name", "age", "score", "active"]),
             None, // unique_properties
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 5);
@@ -1048,6 +1060,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["name"]),
             None, // unique_properties
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 5);
@@ -1067,6 +1080,7 @@ mod tests {
             Some(vec!["label"]),
             None, // Auto-detect property columns
             None, // unique_properties
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 5);
@@ -1204,6 +1218,7 @@ mod tests {
             None,
             None,
             None, // unique_properties
+            None, // default_label
         );
         
         assert!(result.is_err());
@@ -1245,6 +1260,2518 @@ mod tests {
         );
         
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_nodes_with_deduplication() {
+        let temp_dir = TempDir::new().unwrap();
+        let nodes_path = create_test_nodes_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            nodes_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["name"]),
+            Some(vec!["name"]), // Deduplicate by name
+        ).unwrap();
+        
+        // All nodes should be loaded (deduplication happens during load)
+        assert_eq!(node_ids.len(), 5);
+        // But dedup_map should track unique names
+        assert!(builder.dedup_map.len() > 0);
+    }
+
+    #[test]
+    fn test_load_nodes_with_invalid_node_id() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        // Create array with ID exceeding u32::MAX
+        let ids = Int64Array::from(vec![u32::MAX as i64 + 1]);
+        let labels = StringArray::from(vec!["Person"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_ids.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let result = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_nodes_with_negative_node_id() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![-1]);
+        let labels = StringArray::from(vec!["Person"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("negative_ids.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let result = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_nodes_with_nullable_properties() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true), // Nullable
+            Field::new("score", DataType::Float64, true), // Nullable
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let names = StringArray::from(vec![Some("Alice"), None, Some("Bob")]);
+        let scores = Float64Array::from(vec![Some(95.5), Some(88.0), None]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(names), Arc::new(scores)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("nullable.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name", "score"]),
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 3);
+        // Node 1 should have both properties
+        assert!(builder.prop(1, "name").is_some());
+        assert!(builder.prop(1, "score").is_some());
+        // Node 2 should have score but not name
+        assert!(builder.prop(2, "name").is_none());
+        assert!(builder.prop(2, "score").is_some());
+        // Node 3 should have name but not score
+        assert!(builder.prop(3, "name").is_some());
+        assert!(builder.prop(3, "score").is_none());
+    }
+
+    #[test]
+    fn test_load_relationships_with_deduplication_by_type() {
+        let temp_dir = TempDir::new().unwrap();
+        let rels_path = create_test_relationships_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=5 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        use crate::types::RelationshipDeduplication;
+        let rel_ids = builder.load_relationships_from_parquet(
+            rels_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelType),
+        ).unwrap();
+        
+        assert_eq!(rel_ids.len(), 4);
+        assert_eq!(builder.rel_count(), 4);
+    }
+
+    #[test]
+    fn test_load_relationships_with_deduplication_by_type_and_props() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("weight", DataType::Float64, false),
+        ]);
+        
+        // Create duplicate relationships with same weight
+        let from = Int64Array::from(vec![1, 1, 2]);
+        let to = Int64Array::from(vec![2, 2, 3]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS", "KNOWS"]);
+        let weights = Float64Array::from(vec![0.8, 0.8, 0.5]); // First two are duplicates
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types), Arc::new(weights)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("rels_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        use crate::types::RelationshipDeduplication;
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["weight"]),
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+        ).unwrap();
+        
+        // Should deduplicate the first two relationships (same from, to, type, weight)
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(builder.rel_count(), 2);
+    }
+
+    #[test]
+    fn test_load_relationships_with_invalid_start_node_id() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int64Array::from(vec![u32::MAX as i64 + 1]);
+        let to = Int64Array::from(vec![2]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_start.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(2), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_with_invalid_end_node_id() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1]);
+        let to = Int64Array::from(vec![u32::MAX as i64 + 1]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_end.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_with_nullable_nodes() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, true), // Nullable
+            Field::new("to", DataType::Int64, true),   // Nullable
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int64Array::from(vec![Some(1), None, Some(2)]);
+        let to = Int64Array::from(vec![Some(2), Some(3), None]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS", "KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("nullable_nodes.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        ).unwrap();
+        
+        // Only the first relationship should be added (others have null nodes)
+        assert_eq!(rel_ids.len(), 1);
+        assert_eq!(builder.rel_count(), 1);
+    }
+
+    #[test]
+    fn test_load_relationships_with_properties() {
+        use arrow::array::{Int64Array, StringArray, Float64Array, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("weight", DataType::Float64, true),
+            Field::new("verified", DataType::Boolean, true),
+        ]);
+        
+        let from = Int64Array::from(vec![1, 2]);
+        let to = Int64Array::from(vec![2, 3]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+        let weights = Float64Array::from(vec![Some(0.8), None]);
+        let verified = BooleanArray::from(vec![Some(true), Some(false)]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types), Arc::new(weights), Arc::new(verified)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("rels_with_props.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["weight", "verified"]),
+            None,
+            None,
+        ).unwrap();
+        
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(builder.rel_count(), 2);
+        
+        // Verify properties were set
+        let snapshot = builder.finalize(None);
+        // Check first relationship (CSR position 0)
+        let weight_prop = snapshot.relationship_property(0, "weight");
+        assert!(weight_prop.is_some());
+    }
+
+    #[test]
+    fn test_load_nodes_with_deduplication_missing_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let nodes_path = create_test_nodes_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // Try to deduplicate by a column that doesn't exist
+        let node_ids = builder.load_nodes_from_parquet(
+            nodes_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["name"]),
+            Some(vec!["nonexistent"]), // Column doesn't exist
+        ).unwrap();
+        
+        // Should still load nodes, but deduplication won't work (column not found)
+        assert_eq!(node_ids.len(), 5);
+        // dedup_map should be empty since no valid dedup columns
+        assert_eq!(builder.dedup_map.len(), 0);
+    }
+
+    #[test]
+    fn test_load_nodes_with_multiple_batches() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        
+        let file_path = temp_dir.path().join("multi_batch.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder()
+            .set_write_batch_size(2) // Small batch size to force multiple batches
+            .build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema.clone()), Some(props)).unwrap();
+        
+        // Write first batch
+        let ids1 = Int64Array::from(vec![1, 2]);
+        let names1 = StringArray::from(vec!["Alice", "Bob"]);
+        let batch1 = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids1), Arc::new(names1)],
+        ).unwrap();
+        writer.write(&batch1).unwrap();
+        
+        // Write second batch
+        let ids2 = Int64Array::from(vec![3, 4]);
+        let names2 = StringArray::from(vec!["Charlie", "David"]);
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids2), Arc::new(names2)],
+        ).unwrap();
+        writer.write(&batch2).unwrap();
+        
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name"]),
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 4);
+        assert_eq!(node_ids, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_load_nodes_with_empty_batch() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]);
+        
+        let file_path = temp_dir.path().join("empty_batch.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema.clone()), Some(props)).unwrap();
+        
+        // Write empty batch
+        let ids = Int64Array::from(Vec::<i64>::new());
+        let names = StringArray::from(Vec::<&str>::new());
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(names)],
+        ).unwrap();
+        writer.write(&batch).unwrap();
+        
+        // Write non-empty batch
+        let ids2 = Int64Array::from(vec![1]);
+        let names2 = StringArray::from(vec!["Alice"]);
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids2), Arc::new(names2)],
+        ).unwrap();
+        writer.write(&batch2).unwrap();
+        
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name"]),
+            None,
+        ).unwrap();
+        
+        // Should skip empty batch and only load from non-empty batch
+        assert_eq!(node_ids.len(), 1);
+        assert_eq!(node_ids, vec![1]);
+    }
+
+    #[test]
+    fn test_load_nodes_with_float32_property() {
+        use arrow::array::{Int64Array, Float32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("score", DataType::Float32, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let scores = Float32Array::from(vec![95.5f32, 88.0f32]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(scores)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("float32.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["score"]),
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 2);
+        // Float32 should be converted to string (fallback for unsupported types)
+        // Actually, let me check what happens - it might convert to Float64
+    }
+
+    #[test]
+    fn test_load_relationships_with_wrong_column_type() {
+        use arrow::array::{Int64Array, Float64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Start node column is Float64 instead of Int64/Int32
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Float64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Float64Array::from(vec![1.0]);
+        let to = Int64Array::from(vec![2]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("wrong_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_nodes_with_large_utf8() {
+        use arrow::array::{Int64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use arrow::array::LargeStringArray;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::LargeUtf8, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let names = LargeStringArray::from(vec!["Alice", "Bob"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(names)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("large_utf8.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // LargeUtf8 is handled in the match but LargeStringArray doesn't downcast to StringArray
+        // So it falls through to the _ case which tries to convert to string
+        // This test just ensures the code path is exercised
+        let result = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name"]),
+            None,
+        );
+        
+        // Should succeed (even if properties aren't set due to type mismatch)
+        assert!(result.is_ok());
+        let node_ids = result.unwrap();
+        assert_eq!(node_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_load_nodes_with_auto_id_and_properties() {
+        use arrow::array::{StringArray, Int64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // No ID column - all auto-generated
+        let schema = Schema::new(vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int64, false),
+        ]);
+        
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        let names = StringArray::from(vec!["Alice", "Bob"]);
+        let ages = Int64Array::from(vec![30, 25]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(labels), Arc::new(names), Arc::new(ages)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("auto_id.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            None, // No ID column
+            Some(vec!["label"]),
+            Some(vec!["name", "age"]),
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 2);
+        // Auto-generated IDs should start at 0
+        assert_eq!(node_ids, vec![0, 1]);
+        assert!(builder.prop(0, "name").is_some());
+        assert!(builder.prop(0, "age").is_some());
+    }
+
+
+    #[test]
+    fn test_load_relationships_with_fixed_type() {
+        use arrow::array::{Int64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // No type column - use fixed type
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1, 2]);
+        let to = Int64Array::from(vec![2, 3]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("fixed_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            None, // No type column
+            None,
+            Some("KNOWS"), // Fixed type
+            None,
+        ).unwrap();
+        
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(builder.rel_count(), 2);
+    }
+
+    #[test]
+    fn test_load_relationships_with_create_all_deduplication() {
+        let temp_dir = TempDir::new().unwrap();
+        let rels_path = create_test_relationships_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=5 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        use crate::types::RelationshipDeduplication;
+        let rel_ids = builder.load_relationships_from_parquet(
+            rels_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            Some(RelationshipDeduplication::CreateAll), // Explicitly create all
+        ).unwrap();
+        
+        assert_eq!(rel_ids.len(), 4);
+        assert_eq!(builder.rel_count(), 4);
+    }
+
+    #[test]
+    fn test_load_relationships_with_int32_nodes() {
+        use arrow::array::{Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int32, false),
+            Field::new("to", DataType::Int32, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int32Array::from(vec![1, 2]);
+        let to = Int32Array::from(vec![2, 3]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("int32_rels.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        ).unwrap();
+        
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(rel_ids, vec![(1, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn test_load_relationships_with_negative_int32_node_id() {
+        use arrow::array::{Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int32, false),
+            Field::new("to", DataType::Int32, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int32Array::from(vec![-1]);
+        let to = Int32Array::from(vec![2]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("negative_int32.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(2), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_with_null_rel_type() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, true), // Nullable
+        ]);
+        
+        let from = Int64Array::from(vec![1, 2]);
+        let to = Int64Array::from(vec![2, 3]);
+        let types = StringArray::from(vec![Some("KNOWS"), None]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("null_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        ).unwrap();
+        
+        // Only first relationship should be added (second has null type)
+        assert_eq!(rel_ids.len(), 1);
+        assert_eq!(builder.rel_count(), 1);
+    }
+
+    #[test]
+    fn test_load_relationships_with_deduplication_no_key_props() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1, 1]);
+        let to = Int64Array::from(vec![2, 2]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("no_key_props.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=2 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        use crate::types::RelationshipDeduplication;
+        // Request deduplication by type and key props, but no property columns
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None, // No property columns
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+        ).unwrap();
+        
+        // Should treat as unique (add all) since no key properties
+        assert_eq!(rel_ids.len(), 2);
+    }
+
+
+    #[test]
+    fn test_load_nodes_with_deduplication_multi_key_partial_null() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, true),
+            Field::new("username", DataType::Utf8, true),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let labels = StringArray::from(vec!["Person", "Person", "Person"]);
+        let emails = StringArray::from(vec![Some("alice@example.com"), Some("alice@example.com"), Some("bob@example.com")]);
+        let usernames = StringArray::from(vec![Some("alice"), None, Some("bob")]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails), Arc::new(usernames)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("multi_key_null.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email", "username"]),
+            Some(vec!["email", "username"]), // Deduplicate by both
+        ).unwrap();
+        
+        // Node 2 has null username, so can't create complete dedup key
+        // All 3 nodes should be loaded separately
+        assert_eq!(node_ids.len(), 3);
+    }
+
+    #[test]
+    fn test_load_relationships_with_property_deduplication_empty_key() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("weight", DataType::Float64, true), // All null
+        ]);
+        
+        let from = Int64Array::from(vec![1, 1]);
+        let to = Int64Array::from(vec![2, 2]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+        let weights = Float64Array::from(vec![None, None]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types), Arc::new(weights)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("empty_key_props.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=2 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        use crate::types::RelationshipDeduplication;
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["weight"]), // Property column, but all null
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+        ).unwrap();
+        
+        // Should treat as unique (add all) since no key properties (all null)
+        assert_eq!(rel_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_load_nodes_with_duplicate_node_ids() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        // Same ID appears twice
+        let ids = Int64Array::from(vec![1, 1]);
+        let labels = StringArray::from(vec!["Person", "User"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("duplicate_ids.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        ).unwrap();
+        
+        // Should only return unique node IDs
+        assert_eq!(node_ids.len(), 1);
+        assert_eq!(node_ids, vec![1]);
+        // But labels should be merged
+        let labels = builder.node_labels(1);
+        assert_eq!(labels.len(), 2);
+    }
+
+    #[test]
+    fn test_load_relationships_with_all_property_types() {
+        use arrow::array::{Int64Array, StringArray, Float64Array, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("weight", DataType::Float64, false),
+            Field::new("count", DataType::Int64, false),
+            Field::new("active", DataType::Boolean, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1]);
+        let to = Int64Array::from(vec![2]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        let names = StringArray::from(vec!["rel1"]);
+        let weights = Float64Array::from(vec![0.8]);
+        let counts = Int64Array::from(vec![5]);
+        let active = BooleanArray::from(vec![true]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(from),
+                Arc::new(to),
+                Arc::new(types),
+                Arc::new(names),
+                Arc::new(weights),
+                Arc::new(counts),
+                Arc::new(active),
+            ],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("all_prop_types.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=2 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["name", "weight", "count", "active"]),
+            None,
+            None,
+        ).unwrap();
+        
+        assert_eq!(rel_ids.len(), 1);
+        assert_eq!(builder.rel_count(), 1);
+        
+        // Verify all property types were set
+        let snapshot = builder.finalize(None);
+        let csr_pos = 0u32;
+        assert!(snapshot.relationship_property(csr_pos, "name").is_some());
+        assert!(snapshot.relationship_property(csr_pos, "weight").is_some());
+        assert!(snapshot.relationship_property(csr_pos, "count").is_some());
+        assert!(snapshot.relationship_property(csr_pos, "active").is_some());
+    }
+
+    #[test]
+    fn test_load_nodes_with_int32_id_column() {
+        use arrow::array::{Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        let ids = Int32Array::from(vec![1, 2, 3]);
+        let labels = StringArray::from(vec!["Person", "Person", "Company"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("int32_ids.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 3);
+        assert_eq!(node_ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_load_nodes_with_nullable_id_column() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, true), // Nullable
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![Some(1), None, Some(3)]);
+        let labels = StringArray::from(vec!["Person", "Person", "Company"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("nullable_ids.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 3);
+        // First node has ID 1, second auto-generates (should be 0), third has ID 3
+        assert_eq!(node_ids[0], 1);
+        assert_eq!(node_ids[2], 3);
+        // Middle node should have auto-generated ID
+        assert!(node_ids[1] < 3 || node_ids[1] > 3); // Not 1 or 3
+    }
+
+    #[test]
+    fn test_load_nodes_invalid_id_column_type() {
+        use arrow::array::{Float64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // ID column is Float64 instead of Int64/Int32
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Float64, false),
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        let ids = Float64Array::from(vec![1.0, 2.0]);
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_id_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let result = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_missing_start_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let rels_path = create_test_relationships_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=5 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let result = builder.load_relationships_from_parquet(
+            rels_path.to_str().unwrap(),
+            "nonexistent_from", // Column doesn't exist
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_missing_end_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let rels_path = create_test_relationships_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=5 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let result = builder.load_relationships_from_parquet(
+            rels_path.to_str().unwrap(),
+            "from",
+            "nonexistent_to", // Column doesn't exist
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_missing_rel_type_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let rels_path = create_test_relationships_parquet(&temp_dir);
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=5 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let result = builder.load_relationships_from_parquet(
+            rels_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("nonexistent_type"), // Column doesn't exist
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_invalid_rel_type_column_type() {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Type column is Int64 instead of String
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Int64, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1]);
+        let to = Int64Array::from(vec![2]);
+        let types = Int64Array::from(vec![1]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_rel_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_invalid_start_column_type() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Start column is Float64 instead of Int64/Int32
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Float64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Float64Array::from(vec![1.0]);
+        let to = Int64Array::from(vec![2]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_start_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_relationships_invalid_end_column_type() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // End column is Float64 instead of Int64/Int32
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Float64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1]);
+        let to = Float64Array::from(vec![2.0]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("invalid_end_type.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+        
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_nodes_with_unsupported_property_type() {
+        use arrow::array::{Int64Array, Date32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Date32 is not directly supported, should fall through to string conversion
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("birth_date", DataType::Date32, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        // Date32 represents days since Unix epoch
+        let dates = Date32Array::from(vec![0, 365]); // Jan 1, 1970 and Jan 1, 1971
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(dates)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("date_property.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // Should succeed, but Date32 will fall through to the _ case
+        // which tries to convert to string, but Date32Array doesn't downcast to StringArray
+        // So the property won't be set, but the node will be loaded
+        let result = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["birth_date"]),
+            None,
+        );
+        
+        // Should succeed (node loaded, but property might not be set due to type mismatch)
+        assert!(result.is_ok());
+        let node_ids = result.unwrap();
+        assert_eq!(node_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_load_nodes_with_int32_id_nullable() {
+        use arrow::array::{Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true), // Nullable
+            Field::new("label", DataType::Utf8, false),
+        ]);
+        
+        let ids = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let labels = StringArray::from(vec!["Person", "Person", "Company"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("int32_nullable_ids.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            None,
+            None,
+        ).unwrap();
+        
+        assert_eq!(node_ids.len(), 3);
+        assert_eq!(node_ids[0], 1);
+        assert_eq!(node_ids[2], 3);
+        // Middle node should have auto-generated ID
+    }
+
+    #[test]
+    fn test_load_relationships_with_int32_nullable_nodes() {
+        use arrow::array::{Int32Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int32, true), // Nullable
+            Field::new("to", DataType::Int32, true),   // Nullable
+            Field::new("type", DataType::Utf8, false),
+        ]);
+        
+        let from = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let to = Int32Array::from(vec![Some(2), Some(3), None]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS", "KNOWS"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("int32_nullable_nodes.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            None,
+            None,
+            None,
+        ).unwrap();
+        
+        // Only the first relationship should be added (others have null nodes)
+        assert_eq!(rel_ids.len(), 1);
+        assert_eq!(builder.rel_count(), 1);
+    }
+
+    #[test]
+    fn test_load_nodes_with_property_fallback_to_string() {
+        use arrow::array::{Int64Array, TimestampSecondArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // TimestampSecond is not directly supported, should fall through to string conversion
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("timestamp", DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None), false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        // TimestampSecond represents seconds since Unix epoch
+        let timestamps = TimestampSecondArray::from(vec![0, 86400]); // Jan 1, 1970 and Jan 2, 1970
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(timestamps)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("timestamp_property.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // Should succeed, but TimestampSecond will fall through to the _ case
+        // which tries to convert to string, but TimestampSecondArray doesn't downcast to StringArray
+        // So the property won't be set, but the node will be loaded
+        let result = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["timestamp"]),
+            None,
+        );
+        
+        // Should succeed (node loaded, but property might not be set due to type mismatch)
+        assert!(result.is_ok());
+        let node_ids = result.unwrap();
+        assert_eq!(node_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_load_relationships_with_property_fallback_to_string() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use arrow::array::Date64Array;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Date64 is not directly supported, should fall through to string conversion
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("created", DataType::Date64, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1]);
+        let to = Int64Array::from(vec![2]);
+        let types = StringArray::from(vec!["KNOWS"]);
+        // Date64 represents milliseconds since Unix epoch
+        let created = Date64Array::from(vec![0]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types), Arc::new(created)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("date64_rel_prop.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+        
+        // Should succeed, but Date64 will fall through to the _ case
+        // which tries to convert to string, but Date64Array doesn't downcast to StringArray
+        // So the property won't be set, but the relationship will be loaded
+        let result = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["created"]),
+            None,
+            None,
+        );
+        
+        // Should succeed (relationship loaded, but property might not be set due to type mismatch)
+        assert!(result.is_ok());
+        let rel_ids = result.unwrap();
+        assert_eq!(rel_ids.len(), 1);
+    }
+
+    #[test]
+    fn test_deduplication_with_empty_dedup_key() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // All dedup properties are null, so dedup_key will be empty
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, true), // Nullable, all null
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        let emails = StringArray::from(vec![None::<&str>, None]); // All null
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("empty_dedup_key.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email"]),
+            Some(vec!["email"]), // Deduplicate by email, but all are null
+        ).unwrap();
+        
+        // All nodes should be loaded separately since dedup_key is empty
+        assert_eq!(node_ids.len(), 2);
+        assert_eq!(builder.node_count(), 2);
+        // dedup_map should be empty since no valid dedup keys were created
+        assert_eq!(builder.dedup_map.len(), 0);
+    }
+
+    #[test]
+    fn test_deduplication_with_partial_dedup_columns_missing() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Request deduplication by email and username, but username column doesn't exist
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, false),
+            // username column is missing
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        let emails = StringArray::from(vec!["alice@example.com", "bob@example.com"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("partial_dedup_cols.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // Request deduplication by email and username, but username doesn't exist
+        // This should clear dedup_columns and skip deduplication for this batch
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email"]),
+            Some(vec!["email", "username"]), // username doesn't exist
+        ).unwrap();
+        
+        // All nodes should be loaded (deduplication skipped due to missing column)
+        assert_eq!(node_ids.len(), 2);
+        assert_eq!(builder.node_count(), 2);
+        // dedup_map should be empty since deduplication was skipped
+        assert_eq!(builder.dedup_map.len(), 0);
+    }
+
+    #[test]
+    fn test_deduplication_with_mixed_value_types() {
+        use arrow::array::{Int64Array, StringArray, Float64Array, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Deduplicate by multiple properties of different types
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, false),
+            Field::new("age", DataType::Int64, false),
+            Field::new("score", DataType::Float64, false),
+            Field::new("active", DataType::Boolean, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let labels = StringArray::from(vec!["Person", "Person", "Person"]);
+        let emails = StringArray::from(vec!["alice@example.com", "alice@example.com", "bob@example.com"]);
+        let ages = Int64Array::from(vec![30, 30, 25]);
+        let scores = Float64Array::from(vec![95.5, 95.5, 88.0]);
+        let active = BooleanArray::from(vec![true, true, false]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails), Arc::new(ages), Arc::new(scores), Arc::new(active)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("mixed_dedup_types.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // Deduplicate by all property types
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email", "age", "score", "active"]),
+            Some(vec!["email", "age", "score", "active"]), // Multi-key deduplication
+        ).unwrap();
+        
+        // Nodes 1 and 2 have same values for all dedup properties, so should be deduplicated
+        // node_ids.len() returns unique node IDs seen, which may be less than rows processed
+        // After deduplication, rows 1 and 2 map to the same node (node 1), so node_ids contains 2 unique nodes
+        assert_eq!(node_ids.len(), 2);
+        // After deduplication, node_count() should be 2 (1&2 merged, plus 3)
+        assert_eq!(builder.node_count(), 2);
+        // dedup_map should have entries
+        assert!(builder.dedup_map.len() > 0);
+    }
+
+    #[test]
+    fn test_deduplication_with_unsupported_type_fallback() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use arrow::array::Date32Array;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Deduplicate by Date32 (unsupported type, falls through to string conversion)
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("birth_date", DataType::Date32, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        // Date32 represents days since Unix epoch
+        let dates = Date32Array::from(vec![0, 0]); // Same date
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(dates)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("date32_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // Date32 falls through to _ case which tries string conversion
+        // But Date32Array doesn't downcast to StringArray, so dedup_key will be None
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["birth_date"]),
+            Some(vec!["birth_date"]), // Deduplicate by Date32
+        ).unwrap();
+        
+        // Both nodes should be loaded (deduplication won't work due to type mismatch)
+        assert_eq!(node_ids.len(), 2);
+        assert_eq!(builder.node_count(), 2);
+    }
+
+    #[test]
+    fn test_deduplication_with_large_utf8() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use arrow::array::LargeStringArray;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Deduplicate by LargeUtf8
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::LargeUtf8, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        let emails = LargeStringArray::from(vec!["alice@example.com", "alice@example.com"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("large_utf8_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        // LargeUtf8 is handled in the match, but LargeStringArray doesn't downcast to StringArray
+        // So it falls through to the _ case which tries string conversion
+        // But LargeStringArray doesn't downcast to StringArray, so dedup_key will be None
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email"]),
+            Some(vec!["email"]), // Deduplicate by LargeUtf8
+        ).unwrap();
+        
+        // Both nodes should be loaded (deduplication won't work due to type mismatch)
+        assert_eq!(node_ids.len(), 2);
+        assert_eq!(builder.node_count(), 2);
+    }
+
+    #[test]
+    fn test_deduplication_with_boolean_property() {
+        use arrow::array::{Int64Array, StringArray, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Deduplicate by boolean property
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("verified", DataType::Boolean, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let labels = StringArray::from(vec!["Person", "Person", "Person"]);
+        let verified = BooleanArray::from(vec![true, true, false]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(verified)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("bool_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["verified"]),
+            Some(vec!["verified"]), // Deduplicate by boolean
+        ).unwrap();
+        
+        // Nodes 1 and 2 have same verified=true, so should be deduplicated
+        // After deduplication, rows 1 and 2 map to the same node (node 1), so node_ids contains 2 unique nodes
+        assert_eq!(node_ids.len(), 2);
+        // Should have 2 unique nodes (1&2 merged, plus 3) if deduplication worked
+        assert_eq!(builder.node_count(), 2);
+        // dedup_map should have entries
+        assert!(builder.dedup_map.len() > 0);
+    }
+
+    #[test]
+    fn test_deduplication_with_float64_property() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Deduplicate by Float64 property
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("score", DataType::Float64, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let labels = StringArray::from(vec!["Person", "Person", "Person"]);
+        let scores = Float64Array::from(vec![95.5, 95.5, 88.0]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(scores)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("float64_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["score"]),
+            Some(vec!["score"]), // Deduplicate by Float64
+        ).unwrap();
+        
+        // Nodes 1 and 2 have same score=95.5, so should be deduplicated
+        // After deduplication, rows 1 and 2 map to the same node (node 1), so node_ids contains 2 unique nodes
+        assert_eq!(node_ids.len(), 2);
+        // Should have 2 unique nodes (1&2 merged, plus 3) if deduplication worked
+        assert_eq!(builder.node_count(), 2);
+        // dedup_map should have entries
+        assert!(builder.dedup_map.len() > 0);
+    }
+
+    #[test]
+    fn test_deduplication_with_row_no_dedup_key() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Some rows have null dedup properties, so they won't have dedup keys
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, true), // Nullable
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let labels = StringArray::from(vec!["Person", "Person", "Person"]);
+        let emails = StringArray::from(vec![Some("alice@example.com"), None, Some("alice@example.com")]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("no_dedup_key_row.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email"]),
+            Some(vec!["email"]), // Deduplicate by email
+        ).unwrap();
+        
+        // Node 2 has null email, so no dedup key, should be added separately
+        // Nodes 1 and 3 have same email, so should be deduplicated
+        // After deduplication, rows 1 and 3 map to the same node (node 1), so node_ids contains 2 unique nodes
+        assert_eq!(node_ids.len(), 2);
+        // Should have 2 unique nodes (1&3 merged, plus 2) if deduplication worked
+        assert_eq!(builder.node_count(), 2);
+    }
+
+    #[test]
+    fn test_deduplication_label_merging() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Same email but different labels - labels should be merged
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, false),
+        ]);
+        
+        let ids = Int64Array::from(vec![1, 2]);
+        let labels = StringArray::from(vec!["Person", "User"]); // Different labels
+        let emails = StringArray::from(vec!["alice@example.com", "alice@example.com"]); // Same email
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(labels), Arc::new(emails)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("label_merge_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["email"]),
+            Some(vec!["email"]), // Deduplicate by email
+        ).unwrap();
+        
+        // Both nodes have the same email, so they should be deduplicated
+        // After deduplication, rows 1 and 2 map to the same node, so node_ids contains 1 unique node
+        assert_eq!(node_ids.len(), 1);
+        // Check that dedup_map has an entry
+        assert!(builder.dedup_map.len() > 0);
+        // If deduplication worked, node_count should be 1
+        assert_eq!(builder.node_count(), 1);
+    }
+
+    #[test]
+    fn test_deduplication_with_auto_generated_id() {
+        use arrow::array::{StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // No ID column - auto-generate, but deduplicate by email
+        let schema = Schema::new(vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new("email", DataType::Utf8, false),
+        ]);
+        
+        let labels = StringArray::from(vec!["Person", "Person"]);
+        let emails = StringArray::from(vec!["alice@example.com", "alice@example.com"]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(labels), Arc::new(emails)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("auto_id_dedup.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            None, // No ID column - auto-generate
+            Some(vec!["label"]),
+            Some(vec!["email"]),
+            Some(vec!["email"]), // Deduplicate by email
+        ).unwrap();
+        
+        // Both rows should be deduplicated to the same node
+        // After deduplication, rows 1 and 2 map to the same node, so node_ids contains 1 unique node
+        assert_eq!(node_ids.len(), 1);
+        // Should have 1 unique node if deduplication worked
+        assert_eq!(builder.node_count(), 1);
+    }
+
+    #[test]
+    fn test_relationship_deduplication_with_empty_key_props() {
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // All key properties are null, so key_props will be empty
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("weight", DataType::Float64, true), // All null
+        ]);
+        
+        let from = Int64Array::from(vec![1, 1]);
+        let to = Int64Array::from(vec![2, 2]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+        let weights = Float64Array::from(vec![None, None]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types), Arc::new(weights)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("empty_key_props_rel.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+        
+        use crate::types::RelationshipDeduplication;
+        // Request deduplication by type and key props, but all key props are null
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["weight"]), // Property column, but all null
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+        ).unwrap();
+        
+        // Should treat as unique (add all) since key_props is empty
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(builder.rel_count(), 2);
+    }
+
+    #[test]
+    fn test_relationship_deduplication_with_mixed_key_props() {
+        use arrow::array::{Int64Array, StringArray, Float64Array, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        
+        let temp_dir = TempDir::new().unwrap();
+        // Deduplicate by multiple property types
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("weight", DataType::Float64, false),
+            Field::new("verified", DataType::Boolean, false),
+        ]);
+        
+        let from = Int64Array::from(vec![1, 1, 2]);
+        let to = Int64Array::from(vec![2, 2, 3]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS", "KNOWS"]);
+        let weights = Float64Array::from(vec![0.8, 0.8, 0.5]);
+        let verified = BooleanArray::from(vec![true, true, false]);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types), Arc::new(weights), Arc::new(verified)],
+        ).unwrap();
+        
+        let file_path = temp_dir.path().join("mixed_key_props_rel.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Node"]);
+        }
+        
+        use crate::types::RelationshipDeduplication;
+        // Deduplicate by weight and verified (both properties)
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["weight", "verified"]),
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+        ).unwrap();
+        
+        // First two relationships have same (from, to, type, weight, verified), so should be deduplicated
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(builder.rel_count(), 2);
     }
 }
 

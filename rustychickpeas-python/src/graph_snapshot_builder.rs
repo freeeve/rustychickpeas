@@ -182,6 +182,14 @@ impl GraphSnapshotBuilder {
     }
 
     /// Load nodes from a Parquet file into the builder
+    /// 
+    /// # Arguments
+    /// * `path` - Path to the Parquet file (local file or S3 URI)
+    /// * `node_id_column` - Optional column name for node IDs. If None, auto-generates sequential IDs.
+    /// * `label_columns` - Optional list of column names to use as labels
+    /// * `property_columns` - Optional list of column names to load as properties. If None, loads all columns except ID and label columns.
+    /// * `unique_properties` - Optional list of property column names to use for deduplication
+    /// * `default_label` - Optional default label to apply to all loaded nodes (in addition to any labels from label_columns)
     fn load_nodes_from_parquet(
         &mut self,
         path: String,
@@ -189,6 +197,7 @@ impl GraphSnapshotBuilder {
         label_columns: Option<Vec<String>>,
         property_columns: Option<Vec<String>>,
         unique_properties: Option<Vec<String>>,
+        default_label: Option<String>,
     ) -> PyResult<Vec<u32>> {
         let label_cols = label_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
@@ -201,6 +210,7 @@ impl GraphSnapshotBuilder {
                 label_cols,
                 prop_cols,
                 unique_props,
+                default_label.as_deref(),
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }

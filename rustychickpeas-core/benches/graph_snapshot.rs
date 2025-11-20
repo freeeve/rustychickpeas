@@ -6,6 +6,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
 use std::env;
+use rand::Rng;
 
 fn get_criterion() -> Criterion {
     let mut criterion = Criterion::default();
@@ -41,6 +42,67 @@ fn setup_snapshot(num_nodes: usize, num_rels: usize) -> GraphSnapshot {
         let to = ((i + 1) % num_nodes) as u64;
         let rel_type = if i % 2 == 0 { "KNOWS" } else { "WORKS_FOR" };
         builder.add_rel(from as u32, to as u32, rel_type);
+    }
+    
+    builder.finalize(None)
+}
+
+fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
+    let mut builder = GraphBuilder::new(Some(num_nodes), Some(num_nodes * avg_degree));
+    
+    // Add nodes with labels
+    for i in 0..num_nodes {
+        let labels = if i % 3 == 0 {
+            &["Person", "User"][..]
+        } else if i % 3 == 1 {
+            &["Person", "Admin"][..]
+        } else {
+            &["Company"][..]
+        };
+        builder.add_node(Some(i as u32), labels);
+        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
+        builder.set_prop_i64(i as u32, "id", i as i64);
+    }
+    
+    // Create realistic branching with deterministic but varied patterns
+    // For large graphs, use a faster deterministic approach
+    if num_nodes >= 100_000 {
+        // For very large graphs, use a simpler deterministic pattern
+        // Each node connects to avg_degree neighbors in a ring + some random jumps
+        for i in 0..num_nodes {
+            let node_id = i as u32;
+            // Ring connections (creates locality) - each node connects to next avg_degree nodes
+            for offset in 1..=avg_degree {
+                let target = ((i + offset) % num_nodes) as u32;
+                let rel_type = if offset % 2 == 0 { "KNOWS" } else { "WORKS_FOR" };
+                builder.add_rel(node_id, target, rel_type);
+            }
+            // Add some long-range connections (every 100th node)
+            if i % 100 == 0 {
+                let target = ((i * 7 + 1) % num_nodes) as u32;
+                builder.add_rel(node_id, target, "KNOWS");
+            }
+        }
+    } else {
+        // For smaller graphs, use random patterns
+        let mut rng = rand::thread_rng();
+        
+        for i in 0..num_nodes {
+            let node_degree = rng.gen_range((avg_degree / 2)..(avg_degree * 2));
+            for _ in 0..node_degree {
+                // Connect to random neighbors (with some locality)
+                let target = if rng.gen_bool(0.7) {
+                    // 70% chance: connect to nearby nodes (creates clusters)
+                    ((i as i64 + rng.gen_range(-10..10)).max(0).min((num_nodes - 1) as i64)) as u32
+                } else {
+                    // 30% chance: connect to random distant nodes (creates long-range connections)
+                    rng.gen_range(0..num_nodes) as u32
+                };
+                
+                let rel_type = if rng.gen_bool(0.5) { "KNOWS" } else { "WORKS_FOR" };
+                builder.add_rel(i as u32, target, rel_type);
+            }
+        }
     }
     
     builder.finalize(None)
@@ -155,8 +217,14 @@ fn snapshot_get_degree_benchmark(c: &mut Criterion) {
 fn snapshot_traversal_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("snapshot_traversal");
     
-    for size in [100, 1000, 10000].iter() {
-        let snapshot = setup_snapshot(*size, *size * 2);
+    // Keep small sizes for quick tests, add 1M for realistic benchmark
+    for size in [100, 1000, 10000, 1_000_000].iter() {
+        let snapshot = if *size >= 1_000_000 {
+            // Use realistic graph with branching for large sizes
+            setup_realistic_graph(*size, 8) // Average degree of 8
+        } else {
+            setup_snapshot(*size, *size * 2)
+        };
         let start_node = 0u32;
         
         group.bench_with_input(
@@ -182,8 +250,12 @@ fn snapshot_traversal_benchmark(c: &mut Criterion) {
 fn bidirectional_bfs_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bidirectional_bfs");
     
-    for size in [100, 1000, 10000].iter() {
-        let snapshot = setup_snapshot(*size, *size * 2);
+    for size in [100, 1000, 10000, 1_000_000].iter() {
+        let snapshot = if *size >= 1_000_000 {
+            setup_realistic_graph(*size, 8) // Average degree of 8
+        } else {
+            setup_snapshot(*size, *size * 2)
+        };
         
         // Create source and target node sets
         use rustychickpeas_core::bitmap::NodeSet;
@@ -225,8 +297,12 @@ fn bidirectional_bfs_benchmark(c: &mut Criterion) {
 fn bidirectional_bfs_with_filters_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bidirectional_bfs_with_filters");
     
-    for size in [100, 1000, 10000].iter() {
-        let snapshot = setup_snapshot(*size, *size * 2);
+    for size in [100, 1000, 10000, 1_000_000].iter() {
+        let snapshot = if *size >= 1_000_000 {
+            setup_realistic_graph(*size, 8) // Average degree of 8
+        } else {
+            setup_snapshot(*size, *size * 2)
+        };
         
         use rustychickpeas_core::bitmap::NodeSet;
         use roaring::RoaringBitmap;
@@ -309,8 +385,12 @@ fn bidirectional_bfs_with_filters_benchmark(c: &mut Criterion) {
 fn bfs_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bfs");
     
-    for size in [100, 1000, 10000].iter() {
-        let snapshot = setup_snapshot(*size, *size * 2);
+    for size in [100, 1000, 10000, 1_000_000].iter() {
+        let snapshot = if *size >= 1_000_000 {
+            setup_realistic_graph(*size, 8) // Average degree of 8
+        } else {
+            setup_snapshot(*size, *size * 2)
+        };
         
         use rustychickpeas_core::bitmap::NodeSet;
         use roaring::RoaringBitmap;
@@ -346,8 +426,12 @@ fn bfs_benchmark(c: &mut Criterion) {
 fn bfs_with_filters_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bfs_with_filters");
     
-    for size in [100, 1000, 10000].iter() {
-        let snapshot = setup_snapshot(*size, *size * 2);
+    for size in [100, 1000, 10000, 1_000_000].iter() {
+        let snapshot = if *size >= 1_000_000 {
+            setup_realistic_graph(*size, 8) // Average degree of 8
+        } else {
+            setup_snapshot(*size, *size * 2)
+        };
         
         use rustychickpeas_core::bitmap::NodeSet;
         use roaring::RoaringBitmap;

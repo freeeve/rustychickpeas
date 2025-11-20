@@ -2100,7 +2100,7 @@ mod tests {
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, crate::types::Direction::Outgoing, None, None, None, None);
+        let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, crate::types::Direction::Outgoing, None, None, None, None);
         
         // Should find intersection (both sets contain their starting nodes)
         // But no actual path, so intersection should be empty or just the endpoints

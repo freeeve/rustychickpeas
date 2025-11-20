@@ -6,6 +6,7 @@
 pub mod bitmap;
 pub mod graph_builder;
 pub mod graph_builder_parquet;
+pub mod graph_builder_csv;
 pub mod error;
 pub mod interner;
 pub mod rusty_chickpeas;
@@ -18,4 +19,5 @@ pub use error::{GraphError, Result};
 pub use rusty_chickpeas::RustyChickpeas;
 pub use graph_snapshot::{Column, GraphSnapshot, ValueId};
 pub use types::{Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipDeduplication, RelationshipType};
+pub use graph_builder_csv::CsvColumnType;
 

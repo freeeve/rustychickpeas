@@ -1,0 +1,59 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for commit SHA
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      
+      - name: Run benchmarks
+        run: |
+          cargo bench --features dhat --bench graph_builder --bench graph_snapshot
+        continue-on-error: true  # Don't fail CI if benchmarks are slow
+      
+      - name: Collect results
+        run: |
+          python3 bench/collect.py --machine github
+        continue-on-error: true
+      
+      - name: Plot charts
+        run: |
+          python3 bench/plot.py --machine github
+        continue-on-error: true
+      
+      - name: Commit artifacts
+        run: |
+          git config user.name "bench-bot"
+          git config user.email "bench-bot@users.noreply.github.com"
+          git add bench/results bench/img
+          git diff --staged --quiet || git commit -m "bench: update results [skip ci]"
+          git push || echo "No changes to commit or push failed"
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

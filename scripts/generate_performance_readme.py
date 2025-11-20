@@ -7,6 +7,14 @@ and generates a markdown file with performance tables and charts.
 
 Usage:
     ./scripts/generate_performance_readme.py [--extract-from-tags]
+
+NOTE: This is the original script. For a more robust system with JSON storage
+and better chart generation, see:
+  - scripts/save_benchmark_results.py
+  - scripts/generate_benchmark_charts.py
+  - scripts/BENCHMARK_TRACKING.md
+
+The new system is recommended for long-term benchmark tracking.
 """
 
 import json
