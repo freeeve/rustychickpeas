@@ -1274,6 +1274,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["name"]),
             Some(vec!["name"]), // Deduplicate by name
+            None, // default_label
         ).unwrap();
         
         // All nodes should be loaded (deduplication happens during load)
@@ -1320,6 +1321,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         );
         
         assert!(result.is_err());
@@ -1362,6 +1364,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         );
         
         assert!(result.is_err());
@@ -1406,6 +1409,7 @@ mod tests {
             None,
             Some(vec!["name", "score"]),
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 3);
@@ -1723,6 +1727,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["name"]),
             Some(vec!["nonexistent"]), // Column doesn't exist
+            None, // default_label
         ).unwrap();
         
         // Should still load nodes, but deduplication won't work (column not found)
@@ -1780,6 +1785,7 @@ mod tests {
             None,
             Some(vec!["name"]),
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 4);
@@ -1833,6 +1839,7 @@ mod tests {
             None,
             Some(vec!["name"]),
             None,
+            None, // default_label
         ).unwrap();
         
         // Should skip empty batch and only load from non-empty batch
@@ -1877,6 +1884,7 @@ mod tests {
             None,
             Some(vec!["score"]),
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 2);
@@ -1975,6 +1983,7 @@ mod tests {
             None,
             Some(vec!["name"]),
             None,
+            None, // default_label
         );
         
         // Should succeed (even if properties aren't set due to type mismatch)
@@ -2023,6 +2032,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["name", "age"]),
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 2);
@@ -2354,6 +2364,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email", "username"]),
             Some(vec!["email", "username"]), // Deduplicate by both
+            None, // default_label
         ).unwrap();
         
         // Node 2 has null username, so can't create complete dedup key
@@ -2453,6 +2464,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         ).unwrap();
         
         // Should only return unique node IDs
@@ -2575,6 +2587,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 3);
@@ -2618,6 +2631,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 3);
@@ -2666,6 +2680,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         );
         
         assert!(result.is_err());
@@ -2932,6 +2947,7 @@ mod tests {
             None,
             Some(vec!["birth_date"]),
             None,
+            None, // default_label
         );
         
         // Should succeed (node loaded, but property might not be set due to type mismatch)
@@ -2977,6 +2993,7 @@ mod tests {
             Some(vec!["label"]),
             None,
             None,
+            None, // default_label
         ).unwrap();
         
         assert_eq!(node_ids.len(), 3);
@@ -3079,6 +3096,7 @@ mod tests {
             None,
             Some(vec!["timestamp"]),
             None,
+            None, // default_label
         );
         
         // Should succeed (node loaded, but property might not be set due to type mismatch)
@@ -3187,6 +3205,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email"]), // Deduplicate by email, but all are null
+            None, // default_label
         ).unwrap();
         
         // All nodes should be loaded separately since dedup_key is empty
@@ -3239,6 +3258,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email", "username"]), // username doesn't exist
+            None, // default_label
         ).unwrap();
         
         // All nodes should be loaded (deduplication skipped due to missing column)
@@ -3295,6 +3315,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email", "age", "score", "active"]),
             Some(vec!["email", "age", "score", "active"]), // Multi-key deduplication
+            None, // default_label
         ).unwrap();
         
         // Nodes 1 and 2 have same values for all dedup properties, so should be deduplicated
@@ -3351,6 +3372,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["birth_date"]),
             Some(vec!["birth_date"]), // Deduplicate by Date32
+            None, // default_label
         ).unwrap();
         
         // Both nodes should be loaded (deduplication won't work due to type mismatch)
@@ -3402,6 +3424,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email"]), // Deduplicate by LargeUtf8
+            None, // default_label
         ).unwrap();
         
         // Both nodes should be loaded (deduplication won't work due to type mismatch)
@@ -3449,6 +3472,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["verified"]),
             Some(vec!["verified"]), // Deduplicate by boolean
+            None, // default_label
         ).unwrap();
         
         // Nodes 1 and 2 have same verified=true, so should be deduplicated
@@ -3500,6 +3524,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["score"]),
             Some(vec!["score"]), // Deduplicate by Float64
+            None, // default_label
         ).unwrap();
         
         // Nodes 1 and 2 have same score=95.5, so should be deduplicated
@@ -3551,6 +3576,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email"]), // Deduplicate by email
+            None, // default_label
         ).unwrap();
         
         // Node 2 has null email, so no dedup key, should be added separately
@@ -3601,6 +3627,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email"]), // Deduplicate by email
+            None, // default_label
         ).unwrap();
         
         // Both nodes have the same email, so they should be deduplicated
@@ -3650,6 +3677,7 @@ mod tests {
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email"]), // Deduplicate by email
+            None, // default_label
         ).unwrap();
         
         // Both rows should be deduplicated to the same node

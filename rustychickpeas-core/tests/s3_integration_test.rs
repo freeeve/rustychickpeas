@@ -254,7 +254,7 @@ fn test_load_nodes_from_s3() {
     let mut builder = GraphBuilder::new(None, None);
     let s3_path = format!("s3://{}/{}", bucket, key);
     let node_ids = builder
-        .load_nodes_from_parquet(&s3_path, Some("id"), Some(vec!["label"]), Some(vec!["name", "age", "score", "active"]), None)
+        .load_nodes_from_parquet(&s3_path, Some("id"), Some(vec!["label"]), Some(vec!["name", "age", "score", "active"]), None, None)
         .expect("Failed to load nodes from S3");
     
     assert_eq!(node_ids.len(), 5);
@@ -298,7 +298,7 @@ fn test_load_nodes_from_s3_with_deduplication() {
     let mut builder = GraphBuilder::new(None, None);
     let s3_path = format!("s3://{}/{}", bucket, key);
     let node_ids = builder
-        .load_nodes_from_parquet(&s3_path, Some("id"), Some(vec!["label"]), Some(vec!["name"]), Some(vec!["name"]))
+        .load_nodes_from_parquet(&s3_path, Some("id"), Some(vec!["label"]), Some(vec!["name"]), Some(vec!["name"]), None)
         .expect("Failed to load nodes from S3");
     
     assert_eq!(node_ids.len(), 5);
@@ -421,11 +421,11 @@ fn test_load_from_s3_invalid_path() {
     let mut builder = GraphBuilder::new(None, None);
     
     // Test invalid S3 path format
-    let result = builder.load_nodes_from_parquet("s3://invalid", Some("id"), None, None, None);
+    let result = builder.load_nodes_from_parquet("s3://invalid", Some("id"), None, None, None, None);
     assert!(result.is_err());
     
     // Test missing file
-    let result = builder.load_nodes_from_parquet("s3://test-bucket/nonexistent.parquet", Some("id"), None, None, None);
+    let result = builder.load_nodes_from_parquet("s3://test-bucket/nonexistent.parquet", Some("id"), None, None, None, None);
     assert!(result.is_err());
 }
 
@@ -462,7 +462,7 @@ fn test_load_nodes_and_relationships_from_s3() {
     
     let nodes_s3_path = format!("s3://{}/{}", bucket, nodes_key);
     let node_ids = builder
-        .load_nodes_from_parquet(&nodes_s3_path, Some("id"), Some(vec!["label"]), Some(vec!["name", "age"]), None)
+        .load_nodes_from_parquet(&nodes_s3_path, Some("id"), Some(vec!["label"]), Some(vec!["name", "age"]), None, None)
         .expect("Failed to load nodes from S3");
     
     assert_eq!(node_ids.len(), 5);

@@ -33,12 +33,12 @@ jobs:
       
       - name: Run benchmarks
         run: |
-          cargo bench --features dhat --bench graph_builder --bench graph_snapshot
+          cargo bench --bench graph_builder --bench graph_snapshot
         continue-on-error: true  # Don't fail CI if benchmarks are slow
       
       - name: Collect results
         run: |
-          python3 bench/collect.py --machine github
+          python3 bench/collect.py --machine github --results-dir bench/results
         continue-on-error: true
       
       - name: Plot charts

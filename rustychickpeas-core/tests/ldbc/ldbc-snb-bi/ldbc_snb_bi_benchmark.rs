@@ -64,6 +64,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             Some(vec!["Person"]),
             None, // Load all properties
             None,
+            None, // default_label
         );
     }
 
@@ -76,6 +77,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             Some(vec!["Forum"]),
             None,
             None,
+            None, // default_label
         );
     }
 
@@ -88,6 +90,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             Some(vec!["Post"]),
             None,
             None,
+            None, // default_label
         );
     }
 
@@ -100,6 +103,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             Some(vec!["Comment"]),
             None,
             None,
+            None, // default_label
         );
     }
 
@@ -116,6 +120,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
                     Some(vec!["Tag"]),
                     None,
                     None,
+                    None, // default_label
                 );
                 break;
             }
@@ -132,6 +137,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
                     Some(vec!["TagClass"]),
                     None,
                     None,
+                    None, // default_label
                 );
                 break;
             }
@@ -148,6 +154,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
                     Some(vec!["Place"]),
                     None,
                     None,
+                    None, // default_label
                 );
                 break;
             }
@@ -164,6 +171,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
                     Some(vec!["Organisation"]),
                     None,
                     None,
+                    None, // default_label
                 );
                 break;
             }
