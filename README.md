@@ -2,6 +2,8 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/freeeve/rustychickpeas/badge.svg)](https://coveralls.io/github/freeeve/rustychickpeas)
 
+![RustyChickpeas Logo](rustychickpeas.png)
+
 An in-memory graph API written in Rust, using RoaringBitmaps as a fundamental data structure. 
 
 ## Overview
