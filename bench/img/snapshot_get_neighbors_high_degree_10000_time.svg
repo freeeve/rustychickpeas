@@ -3,6 +3,6 @@
 <line x1="133" y1="67.5" x2="617" y2="67.5" stroke="currentColor" stroke-width="0.5" opacity="0.2" stroke-dasharray="2,2"/>
 <polyline fill="none" stroke="#3b82f6" stroke-width="2" points="118.0,112.0 617.0,112.0" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="118.0" cy="112.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="118.0" y="104.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1 (725.64M ops/s)</text>
+<text x="118.0" y="104.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1 (459.31M ops/s)</text>
 <circle cx="617.0" cy="112.0" r="1.5" fill="#3b82f6" opacity="0.6"/>
 </svg>
