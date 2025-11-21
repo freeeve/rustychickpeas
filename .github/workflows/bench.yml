@@ -11,6 +11,8 @@ jobs:
   bench:
     name: Run Benchmarks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - uses: actions/checkout@v4
@@ -51,9 +53,12 @@ jobs:
           git config user.name "bench-bot"
           git config user.email "bench-bot@users.noreply.github.com"
           git add bench/results bench/img
-          git diff --staged --quiet || git commit -m "bench: update results [skip ci]"
-          git push || echo "No changes to commit or push failed"
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "bench: update results [skip ci]"
+            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            git push origin HEAD:${{ github.ref_name }} || echo "Push failed"
+          fi
         continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
