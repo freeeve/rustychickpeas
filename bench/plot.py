@@ -56,13 +56,60 @@ def sparkline_svg(xs, w=500, h=120, pad=8, versions=None, line_color="#3b82f6", 
     lo, hi = min(ops_per_sec), max(ops_per_sec)
     rng = (hi - lo) or 1.0
     
-    # Calculate if we need extra space for last point label
-    extra_right_pad = 80 if versions and any(v[0] == len(ops_per_sec) - 1 for v in versions) else 0
-    svg_width = w + extra_right_pad  # Extend SVG width to accommodate label
+    # Calculate if we need extra space for first and last point labels
+    # Target total width: ~800px, so limit padding accordingly
+    # Check label lengths to determine padding needed
+    extra_left_pad = 0
+    extra_right_pad = 0
+    
+    if versions:
+        # Find min and max ops/s values to determine which labels will show ops/s
+        version_ops_list = []
+        for idx, version in versions:
+            if 0 <= idx < len(ops_per_sec):
+                version_ops_list.append(ops_per_sec[idx])
+        
+        min_ops = min(version_ops_list) if version_ops_list else 0
+        max_ops = max(version_ops_list) if version_ops_list else 0
+        
+        for idx, version in versions:
+            if idx == 0:
+                # First point: check if it will show ops/s
+                ops = ops_per_sec[idx] if idx < len(ops_per_sec) else 0
+                is_max = abs(ops - max_ops) < 0.001 if version_ops_list else False
+                if is_max:
+                    # "832fc5da (305.8 ops/s)" - estimate ~140px, but move point left 15px
+                    extra_left_pad = 125  # 140px space - 15px left shift
+                else:
+                    # "832fc5da" - estimate ~70px, but move point left 15px
+                    extra_left_pad = 55  # 70px space - 15px left shift
+            elif idx == len(ops_per_sec) - 1:
+                # Last point: check if it will show ops/s
+                ops = ops_per_sec[idx] if idx < len(ops_per_sec) else 0
+                is_min = abs(ops - min_ops) < 0.001 if version_ops_list else False
+                if is_min:
+                    # "v0.4.1 (174.7 ops/s)" or "v0.4.1 (142.56M ops/s)" - estimate ~200px
+                    # Label is centered, so need space for label extending right from point
+                    extra_right_pad = 200
+                else:
+                    # "v0.4.1" - estimate ~60px
+                    extra_right_pad = 60
+    
+    # Ensure total width doesn't exceed ~800px
+    total_width = w + extra_left_pad + extra_right_pad
+    if total_width > 800:
+        # Scale down proportionally
+        scale = 800 / total_width
+        extra_left_pad = int(extra_left_pad * scale)
+        extra_right_pad = int(extra_right_pad * scale)
+    
+    svg_width = w + extra_left_pad + extra_right_pad  # Extend SVG width to accommodate labels
     
     # Build the SVG
     label_height = 15  # Space for labels at top
     chart_h = h - label_height - pad
+    # Available height for the chart (with padding on top and bottom)
+    available_height = chart_h - pad  # h - label_height - 2 * pad
     
     svg_parts = [
         f'<svg width="{svg_width}" height="{h}" viewBox="0 0 {svg_width} {h}" xmlns="http://www.w3.org/2000/svg">',
@@ -70,37 +117,39 @@ def sparkline_svg(xs, w=500, h=120, pad=8, versions=None, line_color="#3b82f6", 
         f'<rect width="{svg_width}" height="{h}" fill="transparent"/>',
     ]
     
-    # Draw scale label at top (show max ops/sec)
-    if hi > 0:
-        max_label = format_ops_per_sec(hi)
-        svg_parts.append(
-            f'<text x="{w - pad}" y="{label_height - 2}" '
-            f'font-size="10" fill="{line_color}" text-anchor="end" '
-            f'font-family="system-ui, -apple-system, sans-serif" '
-            f'opacity="0.9" font-weight="500">{max_label} ops/s</text>'
-        )
-    
     # Draw subtle grid line at midpoint
-    effective_w = w  # Chart area (not including extra padding for label)
+    effective_w = w  # Chart area (not including extra padding for labels)
     
     if rng > 0:
-        mid_y = label_height + pad + (chart_h - 2 * pad) / 2
+        mid_y = label_height + pad + available_height / 2
         svg_parts.append(
-            f'<line x1="{pad}" y1="{mid_y:.1f}" x2="{effective_w-pad}" y2="{mid_y:.1f}" '
+            f'<line x1="{pad + extra_left_pad}" y1="{mid_y:.1f}" x2="{effective_w - pad + extra_left_pad}" y2="{mid_y:.1f}" '
             f'stroke="currentColor" stroke-width="0.5" opacity="0.2" stroke-dasharray="2,2"/>'
         )
     
     # Draw the main line (inverted Y so higher ops/sec is at top)
     # Calculate point coordinates - store them for reuse by version markers
-    # All points use the same calculation (last point doesn't move)
+    # First and last points get extra padding for labels
     point_coords = []
     pts = []
     for i, ops in enumerate(ops_per_sec):
         t = i / (len(ops_per_sec) - 1) if len(ops_per_sec) > 1 else 0
-        # All points calculated normally - last point stays at its original position
-        X = pad + t * (w - 2 * pad)
+        is_first = i == 0
+        is_last = i == len(ops_per_sec) - 1
+        
+        if is_first and extra_left_pad > 0:
+            # First point: add extra padding on left, but shift it 15px left from that
+            X = pad + extra_left_pad - 15
+        else:
+            # All other points (including last): normal calculation with left padding offset
+            # Last point stays in normal position; SVG width extends to accommodate label
+            X = pad + extra_left_pad + t * (w - 2 * pad)
+        
         # Invert Y: higher ops/sec = higher on chart
-        Y = label_height + pad + chart_h - pad - ((ops - lo) / rng) * (chart_h - 2 * pad)
+        # Top of chart area: label_height + pad
+        # Available height: available_height
+        # Y position from top: (1 - normalized_value) * available_height
+        Y = label_height + pad + available_height - ((ops - lo) / rng) * available_height
         point_coords.append((X, Y))
         pts.append(f"{X:.1f},{Y:.1f}")
     
@@ -166,14 +215,19 @@ def sparkline_svg(xs, w=500, h=120, pad=8, versions=None, line_color="#3b82f6", 
                 else:
                     label = version
                 
+                is_first = idx == 0
                 is_last = idx == len(ops_per_sec) - 1
-                if is_last:
-                    # Center label with the point
+                if is_first:
+                    # First point: center label with the point
+                    label_x = X
+                    anchor = "middle"
+                elif is_last:
+                    # Last point: center label with the point
                     label_x = X
                     anchor = "middle"
                 else:
-                    label_x = min(X, w - pad - 5)  # Keep 5px from right edge
-                    anchor = "middle" if X < w - pad - 15 else "end"
+                    label_x = min(X, w - pad - 5 + extra_left_pad)  # Keep 5px from right edge
+                    anchor = "middle" if X < w - pad - 15 + extra_left_pad else "end"
                 
                 label_y = max(Y - 8, label_height + 2)
                 svg_parts.append(
@@ -288,6 +342,24 @@ def main():
     time_versions = defaultdict(list)  # Version tags for each data point
     alloc_versions = defaultdict(list)  # Version tags for allocations
     
+    def is_exact_tag(version: str) -> bool:
+        """Check if version is an exact git tag (starts with 'v' and looks like a version)."""
+        if not version:
+            return False
+        # Exact tags typically start with 'v' followed by numbers/dots
+        # e.g., "v0.4.1", "v1.0.0"
+        return version.startswith("v") and any(c.isdigit() for c in version)
+    
+    def format_version_label(version: str, commit: str) -> str:
+        """Format version label: use exact tag if available, otherwise use commit hash."""
+        if is_exact_tag(version):
+            return version
+        elif commit:
+            # Use first 8 characters of commit hash
+            return commit[:8] if len(commit) >= 8 else commit
+        else:
+            return version if version else ""
+    
     with open(csv_file) as f:
         reader = csv.DictReader(f)
         row_index = 0
@@ -297,13 +369,17 @@ def main():
             
             bench = row["bench"]
             version = row.get("version", "").strip()
+            commit = row.get("commit", "").strip()
+            
+            # Format version label (exact tag or commit hash)
+            version_label = format_version_label(version, commit)
             
             # Collect time data
             try:
                 value_ns = float(row["value"])
                 time_series[bench].append(value_ns)
-                if version:
-                    time_versions[bench].append((len(time_series[bench]) - 1, version))
+                if version_label:
+                    time_versions[bench].append((len(time_series[bench]) - 1, version_label))
             except (ValueError, KeyError):
                 pass
             
@@ -312,8 +388,8 @@ def main():
                 try:
                     allocs = float(row["allocs"])
                     alloc_series[bench].append(allocs)
-                    if version:
-                        alloc_versions[bench].append((len(alloc_series[bench]) - 1, version))
+                    if version_label:
+                        alloc_versions[bench].append((len(alloc_series[bench]) - 1, version_label))
                 except (ValueError, KeyError):
                     pass
             

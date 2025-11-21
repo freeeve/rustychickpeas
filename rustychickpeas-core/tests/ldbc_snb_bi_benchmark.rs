@@ -27,24 +27,24 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 /// Get the path to LDBC data directory
-/// Tries SF10 first, then falls back to SF0.003 if not found
+/// Defaults to SF0.003, with fallbacks to SF1 and SF10 if not found
 fn get_ldbc_data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("LDBC_DATA_DIR") {
         return PathBuf::from(dir);
     }
     
-    // Try to get scale factor from environment, default to SF10
+    // Try to get scale factor from environment, default to SF0.003
     let scale_factor = std::env::var("LDBC_SF")
-        .unwrap_or_else(|_| "10".to_string());
+        .unwrap_or_else(|_| "0.003".to_string());
     
     let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ldbc_data");
     
     // Try the specified scale factor first
     let sf_path = base_dir.join(format!("social-network-sf{}-bi-parquet/graphs/parquet/bi/composite-merged-fk/initial_snapshot", scale_factor));
     
-    // If the requested scale factor doesn't exist, try fallbacks in order: SF1, then SF0.003
+    // If the requested scale factor doesn't exist, try fallbacks in order: SF0.003, SF1, then SF10
     if !sf_path.exists() {
-        let fallbacks = vec!["1", "0.003"];
+        let fallbacks = vec!["0.003", "1", "10"];
         for fallback_sf in fallbacks {
             if fallback_sf != &scale_factor {
                 let fallback_path = base_dir.join(format!("social-network-sf{}-bi-parquet/graphs/parquet/bi/composite-merged-fk/initial_snapshot", fallback_sf));
@@ -54,7 +54,7 @@ fn get_ldbc_data_dir() -> PathBuf {
                 }
             }
         }
-        println!("Warning: No LDBC data found. Tried SF{}, SF1, and SF0.003", scale_factor);
+        println!("Warning: No LDBC data found. Tried SF{}, SF0.003, SF1, and SF10", scale_factor);
     }
     
     sf_path
@@ -233,7 +233,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
     // SF1: ~3M persons, ~10M posts, ~30M comments, ~100M relationships
     // SF10: ~30M persons, ~100M posts, ~300M comments, ~1B relationships
     // Use appropriate capacity based on scale factor
-    let scale_factor = std::env::var("LDBC_SF").unwrap_or_else(|_| "10".to_string());
+    let scale_factor = std::env::var("LDBC_SF").unwrap_or_else(|_| "0.003".to_string());
     println!("Scale factor: {}", scale_factor);
     let (node_capacity, rel_capacity) = match scale_factor.as_str() {
         "10" => (Some(500_000_000), Some(2_000_000_000)), // 500M nodes, 2B relationships

@@ -42,3 +42,7 @@ harness = false
 name = "graph_snapshot"
 harness = false
 
+[[bench]]
+name = "ldbc_snb_bi"
+harness = false
+

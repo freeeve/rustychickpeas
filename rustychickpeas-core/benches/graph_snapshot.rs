@@ -525,6 +525,85 @@ fn bfs_with_filters_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
+fn snapshot_get_neighbors_high_degree_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_get_neighbors_high_degree");
+    
+    // Create a graph with one very high-degree node (hub node)
+    let num_nodes = 100_000;
+    let hub_degree = 10_000;
+    let mut builder = GraphBuilder::new(Some(num_nodes), Some(hub_degree + num_nodes));
+    
+    // Add all nodes
+    for i in 0..num_nodes {
+        builder.add_node(Some(i as u32), &["Person"]);
+    }
+    
+    // Create a hub node (node 0) with many connections
+    let hub_node = 0u32;
+    for i in 1..=hub_degree {
+        let target = (i % num_nodes) as u32;
+        builder.add_rel(hub_node, target, "KNOWS");
+    }
+    
+    // Add some other relationships to make it realistic
+    for i in 1..num_nodes {
+        let from = i as u32;
+        let to = ((i + 1) % num_nodes) as u32;
+        builder.add_rel(from, to, "KNOWS");
+    }
+    
+    let snapshot = builder.finalize(None);
+    
+    group.bench_function("10000", |b| {
+        b.iter(|| {
+            let neighbors = snapshot.out_neighbors(black_box(hub_node));
+            black_box(neighbors);
+        });
+    });
+    
+    group.finish();
+}
+
+fn snapshot_get_property_many_nodes_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_get_property_many_nodes");
+    
+    // Create a graph with 10k nodes, all with properties
+    let num_nodes = 10_000;
+    let mut builder = GraphBuilder::new(Some(num_nodes), Some(num_nodes));
+    
+    // Add all nodes with properties
+    for i in 0..num_nodes {
+        builder.add_node(Some(i as u32), &["Person"]);
+        builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
+        builder.set_prop_i64(i as u32, "id", i as i64);
+        builder.set_prop_str(i as u32, "email", &format!("person{}@example.com", i));
+    }
+    
+    // Add some relationships
+    for i in 0..num_nodes {
+        let from = i as u32;
+        let to = ((i + 1) % num_nodes) as u32;
+        builder.add_rel(from, to, "KNOWS");
+    }
+    
+    let snapshot = builder.finalize(None);
+    
+    group.bench_function("10000", |b| {
+        // Test getting properties from multiple nodes
+        let test_nodes: Vec<u32> = (0..100).map(|i| (i * 100) as u32).collect();
+        b.iter(|| {
+            for &node in test_nodes.iter() {
+                let name = snapshot.prop(black_box(node), "name");
+                let id = snapshot.prop(black_box(node), "id");
+                let email = snapshot.prop(black_box(node), "email");
+                black_box((name, id, email));
+            }
+        });
+    });
+    
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = get_criterion();
@@ -534,6 +613,8 @@ criterion_group! {
         snapshot_get_nodes_with_label_benchmark,
         snapshot_get_nodes_with_property_benchmark,
         snapshot_get_degree_benchmark,
+        snapshot_get_neighbors_high_degree_benchmark,
+        snapshot_get_property_many_nodes_benchmark,
         snapshot_traversal_benchmark,
         bidirectional_bfs_benchmark,
         bidirectional_bfs_with_filters_benchmark,
