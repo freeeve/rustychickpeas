@@ -1,9 +1,11 @@
 <svg width="615" height="120" viewBox="0 0 615 120" xmlns="http://www.w3.org/2000/svg">
 <rect width="615" height="120" fill="transparent"/>
 <line x1="63" y1="67.5" x2="547" y2="67.5" stroke="currentColor" stroke-width="0.5" opacity="0.2" stroke-dasharray="2,2"/>
-<polyline fill="none" stroke="#3b82f6" stroke-width="2" points="48.0,112.0 547.0,23.0" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline fill="none" stroke="#3b82f6" stroke-width="2" points="48.0,112.0 305.0,23.0 547.0,59.1" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="48.0" cy="112.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
 <text x="48.0" y="104.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1 (401.76M ops/s)</text>
-<circle cx="547.0" cy="23.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="547.0" y="17.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1 (459.27M ops/s)</text>
+<circle cx="305.0" cy="23.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="305.0" y="17.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1 (459.27M ops/s)</text>
+<circle cx="547.0" cy="59.1" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="547.0" y="51.1" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.5.0</text>
 </svg>
