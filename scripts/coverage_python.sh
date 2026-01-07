@@ -45,3 +45,4 @@ echo "💡 Note: Since rustychickpeas is a Rust extension module,"
 echo "   coverage will show 0% for the extension code itself."
 echo "   This report tracks which Python test code is executed."
 
+

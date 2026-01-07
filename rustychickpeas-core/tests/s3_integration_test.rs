@@ -345,6 +345,7 @@ fn test_load_relationships_from_s3() {
             Some(vec!["weight", "since"]),
             None,
             None, // deduplication
+            None, // key_property_columns
         )
         .expect("Failed to load relationships from S3");
     
@@ -401,6 +402,7 @@ fn test_load_relationships_from_s3_with_deduplication() {
             None,
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelType),
+            None, // key_property_columns
         )
         .expect("Failed to load relationships from S3");
     
@@ -477,6 +479,7 @@ fn test_load_nodes_and_relationships_from_s3() {
             Some(vec!["weight"]),
             None,
             None,
+            None, // key_property_columns
         )
         .expect("Failed to load relationships from S3");
     

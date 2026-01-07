@@ -40,6 +40,70 @@ pub enum RelationshipDeduplication {
     CreateUniqueByRelTypeAndKeyProperties,
 }
 
+/// Reference to a node in relationship loading
+/// Specifies how to find nodes when creating relationships from parquet data
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeReference {
+    /// Reference by node ID column (u32/i64) - current/default behavior
+    /// The column contains numeric node IDs that map directly to internal node IDs
+    Id(String),
+
+    /// Reference by single property lookup
+    /// Looks up nodes by a property value (e.g., find node where uuid="abc-123")
+    Property {
+        /// Column name in parquet file containing the property value
+        column: String,
+        /// Property key name to match against
+        property_key: String,
+        /// Optional label to filter nodes (improves performance)
+        label: Option<String>,
+    },
+
+    /// Reference by composite property lookup
+    /// Looks up nodes by multiple property values (e.g., name + birthdate)
+    CompositeProperty {
+        /// Column names in parquet file (in order)
+        columns: Vec<String>,
+        /// Property key names to match against (in same order as columns)
+        property_keys: Vec<String>,
+        /// Optional label to filter nodes (improves performance)
+        label: Option<String>,
+    },
+}
+
+impl NodeReference {
+    /// Create an ID-based node reference
+    pub fn id(column: impl Into<String>) -> Self {
+        NodeReference::Id(column.into())
+    }
+
+    /// Create a single property lookup reference
+    pub fn property(
+        column: impl Into<String>,
+        property_key: impl Into<String>,
+        label: Option<impl Into<String>>,
+    ) -> Self {
+        NodeReference::Property {
+            column: column.into(),
+            property_key: property_key.into(),
+            label: label.map(|l| l.into()),
+        }
+    }
+
+    /// Create a composite property lookup reference
+    pub fn composite(
+        columns: Vec<String>,
+        property_keys: Vec<String>,
+        label: Option<impl Into<String>>,
+    ) -> Self {
+        NodeReference::CompositeProperty {
+            columns,
+            property_keys,
+            label: label.map(|l| l.into()),
+        }
+    }
+}
+
 /// Label for nodes
 /// Uses interned string ID for memory efficiency
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

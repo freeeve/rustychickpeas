@@ -283,6 +283,7 @@ fn bulk_load_relationships_with_deduplication_benchmark(c: &mut Criterion) {
                         None,
                         None,
                         Some(RelationshipDeduplication::CreateUniqueByRelType),
+                        None, // key_property_columns
                     ).unwrap();
                     black_box(builder);
                 });

@@ -3,7 +3,7 @@
 use crate::graph_builder::GraphBuilder;
 use crate::error::{Result, GraphError};
 use crate::graph_snapshot::{GraphSnapshot, ValueId};
-use crate::types::NodeId;
+use crate::types::{NodeId, Label};
 use arrow::array::*;
 use arrow::datatypes::*;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -512,10 +512,122 @@ impl GraphBuilder {
         Ok(node_ids)
     }
 
+    /// Build an index from a single property value to node IDs
+    ///
+    /// Used for property-based node lookup during relationship loading.
+    /// Returns a HashMap where keys are property values and values are node IDs.
+    ///
+    /// # Arguments
+    /// * `property_key` - The property key to index
+    /// * `label` - Optional label to filter nodes
+    ///
+    /// # Returns
+    /// * HashMap from ValueId to Vec<NodeId> (multiple nodes can have same property value)
+    pub fn build_property_index(
+        &self,
+        property_key: &str,
+        label: Option<&str>,
+    ) -> HashMap<ValueId, Vec<NodeId>> {
+        let mut index: HashMap<ValueId, Vec<NodeId>> = HashMap::new();
+
+        // Intern label if provided for comparison
+        let label_id: Option<Label> = label.map(|l| {
+            let id = self.interner.get_or_intern(l);
+            Label::new(id)
+        });
+
+        // Build index by iterating through all nodes
+        for node_id in 0..self.next_node_id {
+            // Filter by label if specified
+            if let Some(required_label) = label_id {
+                let node_labels = &self.node_labels[node_id as usize];
+                if !node_labels.contains(&required_label) {
+                    continue;
+                }
+            }
+
+            // Add to index if property exists
+            if let Some(value_id) = self.prop(node_id, property_key) {
+                index.entry(value_id).or_default().push(node_id);
+            }
+        }
+
+        index
+    }
+
+    /// Build a composite property index from multiple property values to node IDs
+    ///
+    /// Used for multi-property node lookup during relationship loading.
+    ///
+    /// # Arguments
+    /// * `property_keys` - The property keys to index (in order)
+    /// * `label` - Optional label to filter nodes
+    ///
+    /// # Returns
+    /// * HashMap from DedupKey to Vec<NodeId> (composite key to node IDs)
+    pub fn build_composite_property_index(
+        &self,
+        property_keys: &[&str],
+        label: Option<&str>,
+    ) -> HashMap<crate::types::DedupKey, Vec<NodeId>> {
+        use crate::types::DedupKey;
+
+        let mut index: HashMap<DedupKey, Vec<NodeId>> = HashMap::new();
+
+        // Intern label if provided for comparison
+        let label_id: Option<Label> = label.map(|l| {
+            let id = self.interner.get_or_intern(l);
+            Label::new(id)
+        });
+
+        // Build index by iterating through all nodes
+        for node_id in 0..self.next_node_id {
+            // Filter by label if specified
+            if let Some(required_label) = label_id {
+                let node_labels = &self.node_labels[node_id as usize];
+                if !node_labels.contains(&required_label) {
+                    continue;
+                }
+            }
+
+            // Collect all property values for this node
+            let mut values: Vec<ValueId> = Vec::with_capacity(property_keys.len());
+            let mut all_found = true;
+
+            for key in property_keys {
+                if let Some(value_id) = self.prop(node_id, key) {
+                    values.push(value_id);
+                } else {
+                    all_found = false;
+                    break;
+                }
+            }
+
+            // Only add to index if all properties exist
+            if all_found && values.len() == property_keys.len() {
+                let key = DedupKey::from_slice(&values);
+                index.entry(key).or_default().push(node_id);
+            }
+        }
+
+        index
+    }
+
     /// Load relationships from a Parquet file into the builder
-    /// 
+    ///
     /// If `rel_type_column` is None, `fixed_rel_type` must be provided.
     /// If `rel_type_column` is Some, it reads the type from that column.
+    ///
+    /// # Arguments
+    /// * `path` - Path to Parquet file (local or S3)
+    /// * `start_node_column` - Column name for start node IDs
+    /// * `end_node_column` - Column name for end node IDs
+    /// * `rel_type_column` - Optional column name for relationship type
+    /// * `property_columns` - Optional list of property columns to load. If None, loads all except ID/type columns.
+    /// * `fixed_rel_type` - Fixed relationship type (used if rel_type_column is None)
+    /// * `deduplication` - Optional deduplication strategy
+    /// * `key_property_columns` - Optional list of property columns to use as uniqueness key when
+    ///   deduplication is CreateUniqueByRelTypeAndKeyProperties. If None, uses all property_columns.
     pub fn load_relationships_from_parquet(
         &mut self,
         path: &str,
@@ -525,12 +637,13 @@ impl GraphBuilder {
         property_columns: Option<Vec<&str>>,
         fixed_rel_type: Option<&str>,
         deduplication: Option<crate::types::RelationshipDeduplication>,
+        key_property_columns: Option<Vec<&str>>,
     ) -> Result<Vec<(u32, u32)>> {
         use crate::types::RelationshipDeduplication;
-        
+
         // Create Parquet reader (handles both local and S3)
         let (mut reader, schema) = create_parquet_reader(path)?;
-        
+
         // Set up deduplication tracking
         let mut seen_by_type: HashMap<(u32, u32, u32), ()> = HashMap::new(); // (u, v, rel_type_id) -> ()
         let mut seen_by_type_and_props: HashMap<(u32, u32, u32, Vec<ValueId>), ()> = HashMap::new(); // (u, v, rel_type_id, key_props) -> ()
@@ -573,6 +686,19 @@ impl GraphBuilder {
                 .map(|s| s.as_str())
                 .collect()
         });
+
+        // Determine effective key columns for deduplication
+        // If key_property_columns is specified, use those; otherwise use all prop_cols (backward compat)
+        let effective_key_cols: Vec<&str> = match (&deduplication, &key_property_columns) {
+            (Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties), Some(keys)) => {
+                keys.clone()
+            }
+            (Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties), None) => {
+                // Backward compatibility: use all property columns
+                prop_cols.clone()
+            }
+            _ => Vec::new(), // Not used for other dedup strategies
+        };
 
         // Stream batches and process them immediately (no accumulation in memory)
         let mut rel_ids = Vec::new();
@@ -697,11 +823,12 @@ impl GraphBuilder {
             }
 
             // First, extract property values for deduplication if needed
+            // Uses effective_key_cols which is either explicit key_property_columns or all prop_cols
             let mut key_props_per_row: Vec<Option<Vec<ValueId>>> = vec![None; batch.num_rows()];
             if matches!(deduplication, Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties)) {
                 for i in 0..batch.num_rows() {
                     let mut key_props = Vec::new();
-                    for prop_col in &prop_cols {
+                    for prop_col in &effective_key_cols {
                         if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == prop_col) {
                             let column = batch.column(column_idx);
                             let field = schema.field(column_idx);
@@ -892,6 +1019,427 @@ impl GraphBuilder {
 
         Ok(rel_ids)
     }
+
+    /// Load relationships from Parquet with flexible node reference support
+    ///
+    /// This version supports looking up nodes by:
+    /// - Node ID column (current behavior)
+    /// - Single property lookup (e.g., find node by UUID)
+    /// - Composite property lookup (e.g., find node by name + birthdate)
+    ///
+    /// # Arguments
+    /// * `path` - Path to Parquet file (local or S3)
+    /// * `start_node_ref` - How to identify start nodes
+    /// * `end_node_ref` - How to identify end nodes
+    /// * `rel_type_column` - Optional column name for relationship type
+    /// * `property_columns` - Optional list of property columns to load
+    /// * `fixed_rel_type` - Fixed relationship type (used if rel_type_column is None)
+    /// * `deduplication` - Optional deduplication strategy
+    /// * `key_property_columns` - Optional subset of property columns for uniqueness
+    ///
+    /// # Returns
+    /// * Vec of (start_node_id, end_node_id) pairs for created relationships
+    pub fn load_relationships_from_parquet_v2(
+        &mut self,
+        path: &str,
+        start_node_ref: crate::types::NodeReference,
+        end_node_ref: crate::types::NodeReference,
+        rel_type_column: Option<&str>,
+        property_columns: Option<Vec<&str>>,
+        fixed_rel_type: Option<&str>,
+        deduplication: Option<crate::types::RelationshipDeduplication>,
+        key_property_columns: Option<Vec<&str>>,
+    ) -> Result<Vec<(u32, u32)>> {
+        use crate::types::{NodeReference, DedupKey, RelationshipDeduplication};
+
+        // Build property indexes for node lookup based on reference types
+        enum NodeIndex {
+            Id,  // No index needed, use ID column directly
+            Single(HashMap<ValueId, Vec<NodeId>>),
+            Composite(HashMap<DedupKey, Vec<NodeId>>),
+        }
+
+        let start_index = match &start_node_ref {
+            NodeReference::Id(_) => NodeIndex::Id,
+            NodeReference::Property { property_key, label, .. } => {
+                NodeIndex::Single(self.build_property_index(property_key, label.as_deref()))
+            }
+            NodeReference::CompositeProperty { property_keys, label, .. } => {
+                let keys: Vec<&str> = property_keys.iter().map(|s| s.as_str()).collect();
+                NodeIndex::Composite(self.build_composite_property_index(&keys, label.as_deref()))
+            }
+        };
+
+        let end_index = match &end_node_ref {
+            NodeReference::Id(_) => NodeIndex::Id,
+            NodeReference::Property { property_key, label, .. } => {
+                NodeIndex::Single(self.build_property_index(property_key, label.as_deref()))
+            }
+            NodeReference::CompositeProperty { property_keys, label, .. } => {
+                let keys: Vec<&str> = property_keys.iter().map(|s| s.as_str()).collect();
+                NodeIndex::Composite(self.build_composite_property_index(&keys, label.as_deref()))
+            }
+        };
+
+        // Create Parquet reader
+        let (mut reader, schema) = create_parquet_reader(path)?;
+
+        // Set up deduplication tracking
+        let mut seen_by_type: HashMap<(u32, u32, u32), ()> = HashMap::new();
+        let mut seen_by_type_and_props: HashMap<(u32, u32, u32, Vec<ValueId>), ()> = HashMap::new();
+
+        // Get column names from NodeReference
+        let start_columns: Vec<&str> = match &start_node_ref {
+            NodeReference::Id(col) => vec![col.as_str()],
+            NodeReference::Property { column, .. } => vec![column.as_str()],
+            NodeReference::CompositeProperty { columns, .. } => columns.iter().map(|s| s.as_str()).collect(),
+        };
+        let end_columns: Vec<&str> = match &end_node_ref {
+            NodeReference::Id(col) => vec![col.as_str()],
+            NodeReference::Property { column, .. } => vec![column.as_str()],
+            NodeReference::CompositeProperty { columns, .. } => columns.iter().map(|s| s.as_str()).collect(),
+        };
+
+        // Find column indices
+        let start_col_indices: Vec<usize> = start_columns.iter()
+            .map(|col| schema.fields().iter().position(|f| f.name() == *col)
+                .ok_or_else(|| GraphError::BulkLoadError(format!("Start column '{}' not found", col))))
+            .collect::<Result<Vec<_>>>()?;
+        let end_col_indices: Vec<usize> = end_columns.iter()
+            .map(|col| schema.fields().iter().position(|f| f.name() == *col)
+                .ok_or_else(|| GraphError::BulkLoadError(format!("End column '{}' not found", col))))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Handle relationship type
+        let rel_type_idx = rel_type_column.and_then(|col| {
+            schema.fields().iter().position(|f| f.name() == col)
+        });
+        if rel_type_column.is_some() && rel_type_idx.is_none() {
+            return Err(GraphError::BulkLoadError(format!(
+                "Relationship type column '{}' not found",
+                rel_type_column.unwrap()
+            )));
+        }
+
+        // Validate: must have either rel_type_column or fixed_rel_type
+        if rel_type_idx.is_none() && fixed_rel_type.is_none() {
+            return Err(GraphError::BulkLoadError(
+                "Either rel_type_column or fixed_rel_type must be provided".to_string()
+            ));
+        }
+
+        // Determine property columns
+        let prop_cols: Vec<&str> = property_columns.clone().unwrap_or_else(|| Vec::new());
+
+        // Determine effective key columns for deduplication
+        let effective_key_cols: Vec<&str> = match (&deduplication, &key_property_columns) {
+            (Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties), Some(keys)) => {
+                keys.clone()
+            }
+            (Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties), None) => {
+                prop_cols.clone()
+            }
+            _ => Vec::new(),
+        };
+
+        let mut rel_ids: Vec<(u32, u32)> = Vec::new();
+
+        // Helper to extract ValueId from a column value at row i
+        fn extract_value_id(
+            column: &dyn arrow::array::Array,
+            field: &Field,
+            i: usize,
+            interner: &crate::interner::StringInterner,
+        ) -> Option<ValueId> {
+            match field.data_type() {
+                DataType::Int64 => {
+                    column.as_any().downcast_ref::<Int64Array>()
+                        .filter(|arr| !arr.is_null(i))
+                        .map(|arr| ValueId::I64(arr.value(i)))
+                }
+                DataType::Int32 => {
+                    column.as_any().downcast_ref::<Int32Array>()
+                        .filter(|arr| !arr.is_null(i))
+                        .map(|arr| ValueId::I64(arr.value(i) as i64))
+                }
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    column.as_any().downcast_ref::<StringArray>()
+                        .filter(|arr| !arr.is_null(i))
+                        .map(|arr| ValueId::Str(interner.get_or_intern(arr.value(i))))
+                }
+                DataType::Float64 => {
+                    column.as_any().downcast_ref::<Float64Array>()
+                        .filter(|arr| !arr.is_null(i))
+                        .map(|arr| ValueId::F64(arr.value(i).to_bits()))
+                }
+                DataType::Boolean => {
+                    column.as_any().downcast_ref::<BooleanArray>()
+                        .filter(|arr| !arr.is_null(i))
+                        .map(|arr| ValueId::Bool(arr.value(i)))
+                }
+                _ => None,
+            }
+        }
+
+        // Process batches
+        while let Some(batch_result) = reader.next() {
+            let batch = batch_result.map_err(|e| GraphError::BulkLoadError(e.to_string()))?;
+
+            // Extract start and end node IDs for each row
+            let mut start_nodes: Vec<Option<NodeId>> = vec![None; batch.num_rows()];
+            let mut end_nodes: Vec<Option<NodeId>> = vec![None; batch.num_rows()];
+
+            // Resolve start nodes
+            match &start_index {
+                NodeIndex::Id => {
+                    // Direct ID lookup
+                    let column = batch.column(start_col_indices[0]);
+                    for i in 0..batch.num_rows() {
+                        if let Some(id_array) = column.as_any().downcast_ref::<Int64Array>() {
+                            if !id_array.is_null(i) {
+                                start_nodes[i] = Some(id_array.value(i) as NodeId);
+                            }
+                        } else if let Some(id_array) = column.as_any().downcast_ref::<Int32Array>() {
+                            if !id_array.is_null(i) {
+                                start_nodes[i] = Some(id_array.value(i) as NodeId);
+                            }
+                        } else if let Some(id_array) = column.as_any().downcast_ref::<UInt32Array>() {
+                            if !id_array.is_null(i) {
+                                start_nodes[i] = Some(id_array.value(i));
+                            }
+                        }
+                    }
+                }
+                NodeIndex::Single(index) => {
+                    // Single property lookup
+                    let column = batch.column(start_col_indices[0]);
+                    let field = schema.field(start_col_indices[0]);
+                    for i in 0..batch.num_rows() {
+                        if let Some(value_id) = extract_value_id(column.as_ref(), field, i, &self.interner) {
+                            if let Some(node_ids) = index.get(&value_id) {
+                                // Use first matching node (or could error if multiple)
+                                start_nodes[i] = node_ids.first().copied();
+                            }
+                        }
+                    }
+                }
+                NodeIndex::Composite(index) => {
+                    // Composite property lookup
+                    for i in 0..batch.num_rows() {
+                        let mut values: Vec<ValueId> = Vec::with_capacity(start_col_indices.len());
+                        let mut all_found = true;
+                        for &col_idx in &start_col_indices {
+                            let column = batch.column(col_idx);
+                            let field = schema.field(col_idx);
+                            if let Some(value_id) = extract_value_id(column.as_ref(), field, i, &self.interner) {
+                                values.push(value_id);
+                            } else {
+                                all_found = false;
+                                break;
+                            }
+                        }
+                        if all_found && values.len() == start_col_indices.len() {
+                            let key = DedupKey::from_slice(&values);
+                            if let Some(node_ids) = index.get(&key) {
+                                start_nodes[i] = node_ids.first().copied();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Resolve end nodes (same logic as start)
+            match &end_index {
+                NodeIndex::Id => {
+                    let column = batch.column(end_col_indices[0]);
+                    for i in 0..batch.num_rows() {
+                        if let Some(id_array) = column.as_any().downcast_ref::<Int64Array>() {
+                            if !id_array.is_null(i) {
+                                end_nodes[i] = Some(id_array.value(i) as NodeId);
+                            }
+                        } else if let Some(id_array) = column.as_any().downcast_ref::<Int32Array>() {
+                            if !id_array.is_null(i) {
+                                end_nodes[i] = Some(id_array.value(i) as NodeId);
+                            }
+                        } else if let Some(id_array) = column.as_any().downcast_ref::<UInt32Array>() {
+                            if !id_array.is_null(i) {
+                                end_nodes[i] = Some(id_array.value(i));
+                            }
+                        }
+                    }
+                }
+                NodeIndex::Single(index) => {
+                    let column = batch.column(end_col_indices[0]);
+                    let field = schema.field(end_col_indices[0]);
+                    for i in 0..batch.num_rows() {
+                        if let Some(value_id) = extract_value_id(column.as_ref(), field, i, &self.interner) {
+                            if let Some(node_ids) = index.get(&value_id) {
+                                end_nodes[i] = node_ids.first().copied();
+                            }
+                        }
+                    }
+                }
+                NodeIndex::Composite(index) => {
+                    for i in 0..batch.num_rows() {
+                        let mut values: Vec<ValueId> = Vec::with_capacity(end_col_indices.len());
+                        let mut all_found = true;
+                        for &col_idx in &end_col_indices {
+                            let column = batch.column(col_idx);
+                            let field = schema.field(col_idx);
+                            if let Some(value_id) = extract_value_id(column.as_ref(), field, i, &self.interner) {
+                                values.push(value_id);
+                            } else {
+                                all_found = false;
+                                break;
+                            }
+                        }
+                        if all_found && values.len() == end_col_indices.len() {
+                            let key = DedupKey::from_slice(&values);
+                            if let Some(node_ids) = index.get(&key) {
+                                end_nodes[i] = node_ids.first().copied();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Extract relationship types
+            let rel_types: Vec<Option<&str>> = if let Some(idx) = rel_type_idx {
+                let column = batch.column(idx);
+                if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
+                    (0..batch.num_rows())
+                        .map(|i| if string_array.is_null(i) { None } else { Some(string_array.value(i)) })
+                        .collect()
+                } else {
+                    vec![None; batch.num_rows()]
+                }
+            } else {
+                vec![fixed_rel_type; batch.num_rows()]
+            };
+
+            // Extract key properties for deduplication
+            let mut key_props_per_row: Vec<Option<Vec<ValueId>>> = vec![None; batch.num_rows()];
+            if !effective_key_cols.is_empty() {
+                for i in 0..batch.num_rows() {
+                    let mut key_props: Vec<ValueId> = Vec::new();
+                    for prop_col in &effective_key_cols {
+                        if let Some(col_idx) = schema.fields().iter().position(|f| f.name() == *prop_col) {
+                            let column = batch.column(col_idx);
+                            let field = schema.field(col_idx);
+                            if let Some(val) = extract_value_id(column.as_ref(), field, i, &self.interner) {
+                                key_props.push(val);
+                            }
+                        }
+                    }
+                    if !key_props.is_empty() {
+                        key_props_per_row[i] = Some(key_props);
+                    }
+                }
+            }
+
+            // Track relationship indices for property setting
+            let mut row_to_rel_idx: Vec<Option<usize>> = vec![None; batch.num_rows()];
+
+            // Add relationships with deduplication
+            for i in 0..batch.num_rows() {
+                if let (Some(start_id), Some(end_id), Some(rel_type)) = (start_nodes[i], end_nodes[i], rel_types[i]) {
+                    let rel_type_id = self.interner.get_or_intern(rel_type);
+                    let mut should_add = true;
+
+                    // Check deduplication
+                    match deduplication {
+                        Some(RelationshipDeduplication::CreateAll) | None => {
+                            should_add = true;
+                        }
+                        Some(RelationshipDeduplication::CreateUniqueByRelType) => {
+                            let key = (start_id, end_id, rel_type_id);
+                            if seen_by_type.contains_key(&key) {
+                                should_add = false;
+                            } else {
+                                seen_by_type.insert(key, ());
+                            }
+                        }
+                        Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties) => {
+                            if let Some(Some(ref key_props)) = key_props_per_row.get(i) {
+                                let key = (start_id, end_id, rel_type_id, key_props.clone());
+                                if seen_by_type_and_props.contains_key(&key) {
+                                    should_add = false;
+                                } else {
+                                    seen_by_type_and_props.insert(key, ());
+                                }
+                            }
+                        }
+                    }
+
+                    if should_add {
+                        let rel_idx = self.rels.len();
+                        self.add_rel(start_id, end_id, rel_type);
+                        rel_ids.push((start_id, end_id));
+                        row_to_rel_idx[i] = Some(rel_idx);
+                    }
+                }
+            }
+
+            // Extract and set relationship properties
+            for prop_col in &prop_cols {
+                if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == *prop_col) {
+                    let column = batch.column(column_idx);
+                    let field = schema.field(column_idx);
+
+                    for i in 0..batch.num_rows() {
+                        if let Some(rel_idx) = row_to_rel_idx[i] {
+                            match field.data_type() {
+                                DataType::Utf8 | DataType::LargeUtf8 => {
+                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
+                                        if !string_array.is_null(i) {
+                                            let k = self.interner.get_or_intern(prop_col);
+                                            let v = self.interner.get_or_intern(string_array.value(i));
+                                            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
+                                        }
+                                    }
+                                }
+                                DataType::Int64 => {
+                                    if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
+                                        if !int_array.is_null(i) {
+                                            let k = self.interner.get_or_intern(prop_col);
+                                            self.rel_col_i64.entry(k).or_default().push((rel_idx, int_array.value(i)));
+                                        }
+                                    }
+                                }
+                                DataType::Float64 => {
+                                    if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
+                                        if !float_array.is_null(i) {
+                                            let k = self.interner.get_or_intern(prop_col);
+                                            self.rel_col_f64.entry(k).or_default().push((rel_idx, float_array.value(i)));
+                                        }
+                                    }
+                                }
+                                DataType::Boolean => {
+                                    if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
+                                        if !bool_array.is_null(i) {
+                                            let k = self.interner.get_or_intern(prop_col);
+                                            self.rel_col_bool.entry(k).or_default().push((rel_idx, bool_array.value(i)));
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
+                                        if !string_array.is_null(i) {
+                                            let k = self.interner.get_or_intern(prop_col);
+                                            let v = self.interner.get_or_intern(string_array.value(i));
+                                            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(rel_ids)
+    }
 }
 
 /// Create a GraphSnapshot from Parquet files using GraphBuilder
@@ -935,6 +1483,7 @@ pub fn read_from_parquet(
             rel_property_columns,
             None, // No fixed type, use column
             None, // deduplication
+            None, // key_property_columns
         )?;
     }
 
@@ -1108,6 +1657,7 @@ mod tests {
             None,
             None,
             None, // deduplication
+            None, // key_property_columns
         ).unwrap();
         
         assert_eq!(rel_ids.len(), 4);
@@ -1133,6 +1683,7 @@ mod tests {
             None,
             Some("KNOWS"), // Fixed type
             None, // deduplication
+            None, // key_property_columns
         ).unwrap();
         
         assert_eq!(rel_ids.len(), 4);
@@ -1180,6 +1731,7 @@ mod tests {
             None,
             None,
             None, // deduplication
+            None, // key_property_columns
         ).unwrap();
         
         assert_eq!(rel_ids.len(), 2);
@@ -1238,6 +1790,7 @@ mod tests {
             None,
             None,
             None, // deduplication
+            None, // key_property_columns
         );
         
         assert!(result.is_err());
@@ -1257,6 +1810,7 @@ mod tests {
             None,
             None, // No fixed type either
             None, // deduplication
+            None, // key_property_columns
         );
         
         assert!(result.is_err());
@@ -1443,6 +1997,7 @@ mod tests {
             None,
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelType),
+            None, // key_property_columns
         ).unwrap();
         
         assert_eq!(rel_ids.len(), 4);
@@ -1498,6 +2053,7 @@ mod tests {
             Some(vec!["weight"]),
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            None, // key_property_columns
         ).unwrap();
         
         // Should deduplicate the first two relationships (same from, to, type, weight)
@@ -1548,8 +2104,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -1596,8 +2153,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -1637,7 +2195,7 @@ mod tests {
         for i in 1..=3 {
             builder.add_node(Some(i), &["Node"]);
         }
-        
+
         let rel_ids = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -1646,8 +2204,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         // Only the first relationship should be added (others have null nodes)
         assert_eq!(rel_ids.len(), 1);
         assert_eq!(builder.rel_count(), 1);
@@ -1702,11 +2261,12 @@ mod tests {
             Some(vec!["weight", "verified"]),
             None,
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         assert_eq!(rel_ids.len(), 2);
         assert_eq!(builder.rel_count(), 2);
-        
+
         // Verify properties were set
         let snapshot = builder.finalize(None);
         // Check first relationship (CSR position 0)
@@ -1928,7 +2488,7 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Node"]);
         builder.add_node(Some(2), &["Node"]);
-        
+
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -1937,8 +2497,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2087,8 +2648,9 @@ mod tests {
             None,
             Some("KNOWS"), // Fixed type
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         assert_eq!(rel_ids.len(), 2);
         assert_eq!(builder.rel_count(), 2);
     }
@@ -2112,8 +2674,9 @@ mod tests {
             None,
             None,
             Some(RelationshipDeduplication::CreateAll), // Explicitly create all
+            None, // key_property_columns
         ).unwrap();
-        
+
         assert_eq!(rel_ids.len(), 4);
         assert_eq!(builder.rel_count(), 4);
     }
@@ -2163,8 +2726,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         assert_eq!(rel_ids.len(), 2);
         assert_eq!(rel_ids, vec![(1, 2), (2, 3)]);
     }
@@ -2203,7 +2767,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(2), &["Node"]);
-        
+
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -2212,8 +2776,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2262,8 +2827,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         // Only first relationship should be added (second has null type)
         assert_eq!(rel_ids.len(), 1);
         assert_eq!(builder.rel_count(), 1);
@@ -2316,6 +2882,7 @@ mod tests {
             None, // No property columns
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            None, // key_property_columns
         ).unwrap();
         
         // Should treat as unique (add all) since no key properties
@@ -2420,6 +2987,7 @@ mod tests {
             Some(vec!["weight"]), // Property column, but all null
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            None, // key_property_columns
         ).unwrap();
         
         // Should treat as unique (add all) since no key properties (all null)
@@ -2536,11 +3104,12 @@ mod tests {
             Some(vec!["name", "weight", "count", "active"]),
             None,
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         assert_eq!(rel_ids.len(), 1);
         assert_eq!(builder.rel_count(), 1);
-        
+
         // Verify all property types were set
         let snapshot = builder.finalize(None);
         let csr_pos = 0u32;
@@ -2704,8 +3273,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2727,8 +3297,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2750,8 +3321,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2791,7 +3363,7 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Node"]);
         builder.add_node(Some(2), &["Node"]);
-        
+
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -2800,8 +3372,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2841,7 +3414,7 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Node"]);
         builder.add_node(Some(2), &["Node"]);
-        
+
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -2850,8 +3423,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -2891,7 +3465,7 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Node"]);
         builder.add_node(Some(2), &["Node"]);
-        
+
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -2900,8 +3474,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         assert!(result.is_err());
     }
 
@@ -3038,7 +3613,7 @@ mod tests {
         for i in 1..=3 {
             builder.add_node(Some(i), &["Node"]);
         }
-        
+
         let rel_ids = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -3047,8 +3622,9 @@ mod tests {
             None,
             None,
             None,
+            None, // key_property_columns
         ).unwrap();
-        
+
         // Only the first relationship should be added (others have null nodes)
         assert_eq!(rel_ids.len(), 1);
         assert_eq!(builder.rel_count(), 1);
@@ -3157,8 +3733,9 @@ mod tests {
             Some(vec!["created"]),
             None,
             None,
+            None, // key_property_columns
         );
-        
+
         // Should succeed (relationship loaded, but property might not be set due to type mismatch)
         assert!(result.is_ok());
         let rel_ids = result.unwrap();
@@ -3736,6 +4313,7 @@ mod tests {
             Some(vec!["weight"]), // Property column, but all null
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            None, // key_property_columns
         ).unwrap();
         
         // Should treat as unique (add all) since key_props is empty
@@ -3795,11 +4373,744 @@ mod tests {
             Some(vec!["weight", "verified"]),
             None,
             Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            None, // key_property_columns
         ).unwrap();
         
         // First two relationships have same (from, to, type, weight, verified), so should be deduplicated
         assert_eq!(rel_ids.len(), 2);
         assert_eq!(builder.rel_count(), 2);
+    }
+
+    // ============================================================================
+    // Node Properties Tests - Comprehensive verification that properties are saved
+    // ============================================================================
+
+    #[test]
+    fn test_load_nodes_3_rows_simple_with_properties() {
+        // Reproduces a simple 3-row parquet test case to verify properties are saved
+        use arrow::array::{Int64Array, StringArray, Float64Array, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int64, false),
+            Field::new("score", DataType::Float64, false),
+            Field::new("active", DataType::Boolean, false),
+        ]);
+
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let names = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
+        let ages = Int64Array::from(vec![30, 25, 35]);
+        let scores = Float64Array::from(vec![95.5, 88.0, 92.5]);
+        let active = BooleanArray::from(vec![true, false, true]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(ids),
+                Arc::new(names),
+                Arc::new(ages),
+                Arc::new(scores),
+                Arc::new(active),
+            ],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("simple_3_rows.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name", "age", "score", "active"]),
+            None,
+            None,
+        ).unwrap();
+
+        // Verify all nodes loaded
+        assert_eq!(node_ids.len(), 3);
+        assert_eq!(node_ids, vec![1, 2, 3]);
+
+        // Verify properties are accessible via builder.prop() BEFORE finalization
+        // Node 1: Alice, 30, 95.5, true
+        let name1 = builder.prop(1, "name");
+        assert!(name1.is_some(), "Node 1 should have 'name' property");
+        if let Some(ValueId::Str(sid)) = name1 {
+            assert_eq!(builder.resolve_string(sid), "Alice");
+        } else {
+            panic!("Expected string ValueId for name");
+        }
+
+        let age1 = builder.prop(1, "age");
+        assert!(age1.is_some(), "Node 1 should have 'age' property");
+        assert_eq!(age1, Some(ValueId::I64(30)));
+
+        let score1 = builder.prop(1, "score");
+        assert!(score1.is_some(), "Node 1 should have 'score' property");
+        if let Some(ValueId::F64(bits)) = score1 {
+            let f = f64::from_bits(bits);
+            assert!((f - 95.5).abs() < 0.001);
+        } else {
+            panic!("Expected f64 ValueId for score");
+        }
+
+        let active1 = builder.prop(1, "active");
+        assert!(active1.is_some(), "Node 1 should have 'active' property");
+        assert_eq!(active1, Some(ValueId::Bool(true)));
+
+        // Node 2: Bob, 25, 88.0, false
+        let name2 = builder.prop(2, "name");
+        assert!(name2.is_some(), "Node 2 should have 'name' property");
+        if let Some(ValueId::Str(sid)) = name2 {
+            assert_eq!(builder.resolve_string(sid), "Bob");
+        }
+
+        let age2 = builder.prop(2, "age");
+        assert_eq!(age2, Some(ValueId::I64(25)));
+
+        let active2 = builder.prop(2, "active");
+        assert_eq!(active2, Some(ValueId::Bool(false)));
+
+        // Node 3: Charlie, 35, 92.5, true
+        let name3 = builder.prop(3, "name");
+        assert!(name3.is_some(), "Node 3 should have 'name' property");
+        if let Some(ValueId::Str(sid)) = name3 {
+            assert_eq!(builder.resolve_string(sid), "Charlie");
+        }
+
+        let age3 = builder.prop(3, "age");
+        assert_eq!(age3, Some(ValueId::I64(35)));
+    }
+
+    #[test]
+    fn test_load_nodes_properties_persist_after_finalize() {
+        // Verify properties survive finalization into GraphSnapshot
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int64, false),
+        ]);
+
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let names = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
+        let ages = Int64Array::from(vec![30, 25, 35]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(names), Arc::new(ages)],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("props_finalize.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name", "age"]),
+            None,
+            None,
+        ).unwrap();
+
+        // Finalize to snapshot
+        let snapshot = builder.finalize(None);
+
+        // Verify properties in snapshot
+        let name1 = snapshot.prop(1, "name");
+        assert!(name1.is_some(), "Snapshot node 1 should have 'name' property");
+
+        let age1 = snapshot.prop(1, "age");
+        assert!(age1.is_some(), "Snapshot node 1 should have 'age' property");
+        assert_eq!(age1, Some(ValueId::I64(30)));
+
+        // Verify all nodes have properties
+        for node_id in [1u32, 2, 3] {
+            let name = snapshot.prop(node_id, "name");
+            assert!(name.is_some(), "Node {} should have 'name' property in snapshot", node_id);
+
+            let age = snapshot.prop(node_id, "age");
+            assert!(age.is_some(), "Node {} should have 'age' property in snapshot", node_id);
+        }
+    }
+
+    #[test]
+    fn test_load_nodes_properties_with_auto_id() {
+        // Verify properties work when node IDs are auto-generated
+        use arrow::array::{StringArray, Int64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        // No ID column - IDs will be auto-generated
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int64, false),
+        ]);
+
+        let names = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
+        let ages = Int64Array::from(vec![30, 25, 35]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(names), Arc::new(ages)],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("auto_id_props.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            None, // No ID column - auto-generate
+            None,
+            Some(vec!["name", "age"]),
+            None,
+            None,
+        ).unwrap();
+
+        // Verify 3 nodes were created
+        assert_eq!(node_ids.len(), 3);
+
+        // Verify each auto-generated node has properties
+        for &node_id in &node_ids {
+            let name = builder.prop(node_id, "name");
+            assert!(name.is_some(), "Auto-ID node {} should have 'name' property", node_id);
+
+            let age = builder.prop(node_id, "age");
+            assert!(age.is_some(), "Auto-ID node {} should have 'age' property", node_id);
+        }
+
+        // Verify specific values (auto-generated IDs start from 0)
+        let name0 = builder.prop(node_ids[0], "name");
+        if let Some(ValueId::Str(sid)) = name0 {
+            assert_eq!(builder.resolve_string(sid), "Alice");
+        }
+
+        let age0 = builder.prop(node_ids[0], "age");
+        assert_eq!(age0, Some(ValueId::I64(30)));
+    }
+
+    #[test]
+    fn test_load_nodes_properties_with_deduplication() {
+        // Verify properties are correctly set on deduplicated nodes
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),      // Used for dedup
+            Field::new("age", DataType::Int64, false),
+            Field::new("city", DataType::Utf8, false),
+        ]);
+
+        // Two rows with same name (will be deduplicated)
+        let ids = Int64Array::from(vec![1, 2, 3]);
+        let names = StringArray::from(vec!["Alice", "Alice", "Bob"]); // First two have same name
+        let ages = Int64Array::from(vec![30, 31, 25]); // Different ages
+        let cities = StringArray::from(vec!["NYC", "LA", "Chicago"]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ids), Arc::new(names), Arc::new(ages), Arc::new(cities)],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("dedup_props.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        let node_ids = builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["name", "age", "city"]),
+            Some(vec!["name"]), // Deduplicate by name
+            None,
+        ).unwrap();
+
+        // Should have 3 node IDs returned (even though 2 are deduplicated internally)
+        // But unique nodes based on name = 2 (Alice, Bob)
+        // The dedup_map should have 2 entries
+        assert_eq!(builder.dedup_map.len(), 2, "Should have 2 unique names in dedup_map");
+
+        // Verify node 1 (first Alice) has properties
+        let name1 = builder.prop(1, "name");
+        assert!(name1.is_some(), "Node 1 should have 'name' property");
+        if let Some(ValueId::Str(sid)) = name1 {
+            assert_eq!(builder.resolve_string(sid), "Alice");
+        }
+
+        // The first occurrence's properties should be set
+        let age1 = builder.prop(1, "age");
+        assert!(age1.is_some(), "Node 1 should have 'age' property");
+
+        let city1 = builder.prop(1, "city");
+        assert!(city1.is_some(), "Node 1 should have 'city' property");
+
+        // Verify node 3 (Bob) has properties
+        let name3 = builder.prop(3, "name");
+        assert!(name3.is_some(), "Node 3 should have 'name' property");
+        if let Some(ValueId::Str(sid)) = name3 {
+            assert_eq!(builder.resolve_string(sid), "Bob");
+        }
+
+        let age3 = builder.prop(3, "age");
+        assert_eq!(age3, Some(ValueId::I64(25)));
+    }
+
+    #[test]
+    fn test_load_nodes_all_property_types() {
+        // Test all supported property types
+        use arrow::array::{Int64Array, Int32Array, StringArray, Float64Array, BooleanArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("str_prop", DataType::Utf8, false),
+            Field::new("i64_prop", DataType::Int64, false),
+            Field::new("f64_prop", DataType::Float64, false),
+            Field::new("bool_prop", DataType::Boolean, false),
+            Field::new("i32_id", DataType::Int32, false), // Int32 should work too
+        ]);
+
+        let ids = Int64Array::from(vec![1]);
+        let str_props = StringArray::from(vec!["test_string"]);
+        let i64_props = Int64Array::from(vec![42i64]);
+        let f64_props = Float64Array::from(vec![3.14159]);
+        let bool_props = BooleanArray::from(vec![true]);
+        let i32_ids = Int32Array::from(vec![100i32]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(ids),
+                Arc::new(str_props),
+                Arc::new(i64_props),
+                Arc::new(f64_props),
+                Arc::new(bool_props),
+                Arc::new(i32_ids),
+            ],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("all_types.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder.load_nodes_from_parquet(
+            file_path.to_str().unwrap(),
+            Some("id"),
+            None,
+            Some(vec!["str_prop", "i64_prop", "f64_prop", "bool_prop"]),
+            None,
+            None,
+        ).unwrap();
+
+        // Verify string property
+        let str_val = builder.prop(1, "str_prop");
+        assert!(str_val.is_some(), "Should have string property");
+        if let Some(ValueId::Str(sid)) = str_val {
+            assert_eq!(builder.resolve_string(sid), "test_string");
+        } else {
+            panic!("Expected Str ValueId");
+        }
+
+        // Verify i64 property
+        let i64_val = builder.prop(1, "i64_prop");
+        assert_eq!(i64_val, Some(ValueId::I64(42)));
+
+        // Verify f64 property
+        let f64_val = builder.prop(1, "f64_prop");
+        assert!(f64_val.is_some(), "Should have f64 property");
+        if let Some(ValueId::F64(bits)) = f64_val {
+            let f = f64::from_bits(bits);
+            assert!((f - 3.14159).abs() < 0.00001);
+        } else {
+            panic!("Expected F64 ValueId");
+        }
+
+        // Verify bool property
+        let bool_val = builder.prop(1, "bool_prop");
+        assert_eq!(bool_val, Some(ValueId::Bool(true)));
+    }
+
+    #[test]
+    fn test_load_relationships_with_key_property_columns_subset() {
+        // Test that key_property_columns allows deduplicating on a subset of property_columns
+        // Scenario: Load many properties but only use some for deduplication
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("key_id", DataType::Utf8, false),     // Used for dedup
+            Field::new("amount", DataType::Float64, false),  // NOT used for dedup
+            Field::new("note", DataType::Utf8, true),        // NOT used for dedup
+        ]);
+
+        // Two relationships with same key_id but different amounts/notes
+        // With key_property_columns=["key_id"], they should be deduplicated
+        let from = Int64Array::from(vec![1, 1]);
+        let to = Int64Array::from(vec![2, 2]);
+        let types = StringArray::from(vec!["TRANSFER", "TRANSFER"]);
+        let key_ids = StringArray::from(vec!["txn-001", "txn-001"]); // Same key
+        let amounts = Float64Array::from(vec![100.0, 200.0]);  // Different
+        let notes = StringArray::from(vec![Some("first"), Some("second")]);  // Different
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(from),
+                Arc::new(to),
+                Arc::new(types),
+                Arc::new(key_ids),
+                Arc::new(amounts),
+                Arc::new(notes),
+            ],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("key_cols_subset.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+
+        use crate::types::RelationshipDeduplication;
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["key_id", "amount", "note"]), // Load all properties
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            Some(vec!["key_id"]), // Only deduplicate by key_id
+        ).unwrap();
+
+        // Should deduplicate because key_id is the same
+        assert_eq!(rel_ids.len(), 1, "Should deduplicate by key_id only");
+    }
+
+    #[test]
+    fn test_load_relationships_key_property_columns_backward_compat() {
+        // Test backward compatibility: when key_property_columns is None,
+        // all property_columns are used for deduplication
+        use arrow::array::{Int64Array, StringArray, Float64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+            Field::new("key_id", DataType::Utf8, false),
+            Field::new("amount", DataType::Float64, false),
+        ]);
+
+        // Two relationships with same key_id but different amounts
+        // With key_property_columns=None, both should be kept (different composite keys)
+        let from = Int64Array::from(vec![1, 1]);
+        let to = Int64Array::from(vec![2, 2]);
+        let types = StringArray::from(vec!["TRANSFER", "TRANSFER"]);
+        let key_ids = StringArray::from(vec!["txn-001", "txn-001"]); // Same
+        let amounts = Float64Array::from(vec![100.0, 200.0]);  // Different
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(from),
+                Arc::new(to),
+                Arc::new(types),
+                Arc::new(key_ids),
+                Arc::new(amounts),
+            ],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("key_cols_backward.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(2), &["Node"]);
+
+        use crate::types::RelationshipDeduplication;
+        let rel_ids = builder.load_relationships_from_parquet(
+            file_path.to_str().unwrap(),
+            "from",
+            "to",
+            Some("type"),
+            Some(vec!["key_id", "amount"]), // Load both
+            None,
+            Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            None, // key_property_columns = None -> use all property_columns
+        ).unwrap();
+
+        // Should keep both because (key_id, amount) is different
+        assert_eq!(rel_ids.len(), 2, "Should keep both when all props differ");
+    }
+
+    #[test]
+    fn test_load_relationships_v2_with_id_reference() {
+        // Test v2 function with NodeReference::Id (same as v1 behavior)
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use crate::types::NodeReference;
+
+        let temp_dir = TempDir::new().unwrap();
+        let schema = Schema::new(vec![
+            Field::new("from", DataType::Int64, false),
+            Field::new("to", DataType::Int64, false),
+            Field::new("type", DataType::Utf8, false),
+        ]);
+
+        let from = Int64Array::from(vec![1, 2]);
+        let to = Int64Array::from(vec![2, 3]);
+        let types = StringArray::from(vec!["KNOWS", "FOLLOWS"]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from), Arc::new(to), Arc::new(types)],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("v2_id_ref.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut builder = GraphBuilder::new(None, None);
+        for i in 1..=3 {
+            builder.add_node(Some(i), &["Person"]);
+        }
+
+        let rel_ids = builder.load_relationships_from_parquet_v2(
+            file_path.to_str().unwrap(),
+            NodeReference::id("from"),
+            NodeReference::id("to"),
+            Some("type"),
+            None,
+            None,
+            None,
+            None,
+        ).unwrap();
+
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(rel_ids[0], (1, 2));
+        assert_eq!(rel_ids[1], (2, 3));
+    }
+
+    #[test]
+    fn test_load_relationships_v2_with_property_reference() {
+        // Test v2 function with NodeReference::Property (single property lookup)
+        use arrow::array::StringArray;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use crate::types::NodeReference;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create relationship parquet with UUIDs instead of node IDs
+        let schema = Schema::new(vec![
+            Field::new("from_uuid", DataType::Utf8, false),
+            Field::new("to_uuid", DataType::Utf8, false),
+            Field::new("rel_type", DataType::Utf8, false),
+        ]);
+
+        let from_uuids = StringArray::from(vec!["uuid-alice", "uuid-bob"]);
+        let to_uuids = StringArray::from(vec!["uuid-bob", "uuid-charlie"]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(from_uuids), Arc::new(to_uuids), Arc::new(types)],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("v2_prop_ref.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Create nodes with uuid properties
+        let mut builder = GraphBuilder::new(None, None);
+        let alice = builder.add_node(None, &["Person"]);
+        builder.set_prop_str(alice, "uuid", "uuid-alice");
+        let bob = builder.add_node(None, &["Person"]);
+        builder.set_prop_str(bob, "uuid", "uuid-bob");
+        let charlie = builder.add_node(None, &["Person"]);
+        builder.set_prop_str(charlie, "uuid", "uuid-charlie");
+
+        // Load relationships using property lookup
+        let rel_ids = builder.load_relationships_from_parquet_v2(
+            file_path.to_str().unwrap(),
+            NodeReference::property("from_uuid", "uuid", Some("Person")),
+            NodeReference::property("to_uuid", "uuid", Some("Person")),
+            Some("rel_type"),
+            None,
+            None,
+            None,
+            None,
+        ).unwrap();
+
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(rel_ids[0], (alice, bob));
+        assert_eq!(rel_ids[1], (bob, charlie));
+    }
+
+    #[test]
+    fn test_load_relationships_v2_with_composite_reference() {
+        // Test v2 function with NodeReference::CompositeProperty
+        use arrow::array::StringArray;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+        use crate::types::NodeReference;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create relationship parquet with composite keys (name + city)
+        let schema = Schema::new(vec![
+            Field::new("from_name", DataType::Utf8, false),
+            Field::new("from_city", DataType::Utf8, false),
+            Field::new("to_name", DataType::Utf8, false),
+            Field::new("to_city", DataType::Utf8, false),
+            Field::new("rel_type", DataType::Utf8, false),
+        ]);
+
+        let from_names = StringArray::from(vec!["Alice", "Bob"]);
+        let from_cities = StringArray::from(vec!["NYC", "LA"]);
+        let to_names = StringArray::from(vec!["Bob", "Alice"]);
+        let to_cities = StringArray::from(vec!["LA", "NYC"]);
+        let types = StringArray::from(vec!["KNOWS", "KNOWS"]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(from_names),
+                Arc::new(from_cities),
+                Arc::new(to_names),
+                Arc::new(to_cities),
+                Arc::new(types),
+            ],
+        ).unwrap();
+
+        let file_path = temp_dir.path().join("v2_composite_ref.parquet");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Create nodes with name + city properties
+        let mut builder = GraphBuilder::new(None, None);
+        let alice = builder.add_node(None, &["Person"]);
+        builder.set_prop_str(alice, "name", "Alice");
+        builder.set_prop_str(alice, "city", "NYC");
+        let bob = builder.add_node(None, &["Person"]);
+        builder.set_prop_str(bob, "name", "Bob");
+        builder.set_prop_str(bob, "city", "LA");
+
+        // Load relationships using composite property lookup
+        let rel_ids = builder.load_relationships_from_parquet_v2(
+            file_path.to_str().unwrap(),
+            NodeReference::composite(
+                vec!["from_name".to_string(), "from_city".to_string()],
+                vec!["name".to_string(), "city".to_string()],
+                Some("Person"),
+            ),
+            NodeReference::composite(
+                vec!["to_name".to_string(), "to_city".to_string()],
+                vec!["name".to_string(), "city".to_string()],
+                Some("Person"),
+            ),
+            Some("rel_type"),
+            None,
+            None,
+            None,
+            None,
+        ).unwrap();
+
+        assert_eq!(rel_ids.len(), 2);
+        assert_eq!(rel_ids[0], (alice, bob));
+        assert_eq!(rel_ids[1], (bob, alice));
     }
 }
 

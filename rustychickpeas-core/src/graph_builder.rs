@@ -323,6 +323,69 @@ impl GraphBuilder {
         }
     }
 
+    /// Set multiple properties on a single relationship by index
+    /// More efficient than individual set_rel_prop_* calls when setting many properties
+    ///
+    /// # Arguments
+    /// * `rel_idx` - The relationship index (from add_rel return or find_rel_index)
+    /// * `props` - Slice of (key, value) pairs where value is a PropertyValue
+    pub fn set_rel_props_by_index(&mut self, rel_idx: usize, props: &[(&str, crate::types::PropertyValue)]) {
+        for (key, value) in props {
+            let k = self.interner.get_or_intern(key);
+            match value {
+                crate::types::PropertyValue::String(s) => {
+                    let v = self.interner.get_or_intern(s);
+                    self.rel_col_str.entry(k).or_default().push((rel_idx, v));
+                }
+                crate::types::PropertyValue::InternedString(v) => {
+                    self.rel_col_str.entry(k).or_default().push((rel_idx, *v));
+                }
+                crate::types::PropertyValue::Integer(v) => {
+                    self.rel_col_i64.entry(k).or_default().push((rel_idx, *v));
+                }
+                crate::types::PropertyValue::Float(v) => {
+                    self.rel_col_f64.entry(k).or_default().push((rel_idx, *v));
+                }
+                crate::types::PropertyValue::Boolean(v) => {
+                    self.rel_col_bool.entry(k).or_default().push((rel_idx, *v));
+                }
+            }
+        }
+    }
+
+    /// Bulk set properties on multiple relationships
+    /// Much more efficient than individual calls when setting properties on many relationships
+    ///
+    /// # Arguments
+    /// * `rel_props` - Slice of (u, v, rel_type, properties) tuples
+    ///
+    /// # Returns
+    /// Number of relationships that were found and had properties set
+    pub fn set_rel_props(
+        &mut self,
+        rel_props: &[(NodeId, NodeId, &str, Vec<(&str, crate::types::PropertyValue)>)],
+    ) -> usize {
+        // Build a quick lookup map for relationship indices
+        // Key: (u, v, rel_type_id), Value: rel_idx
+        let mut rel_index_map: hashbrown::HashMap<(NodeId, NodeId, u32), usize> = hashbrown::HashMap::new();
+
+        for (idx, &(u, v)) in self.rels.iter().enumerate() {
+            let rel_type_id = self.rel_types[idx].id();
+            rel_index_map.insert((u, v, rel_type_id), idx);
+        }
+
+        let mut count = 0;
+        for (u, v, rel_type, props) in rel_props {
+            if let Some(type_id) = self.interner.get(rel_type) {
+                if let Some(&rel_idx) = rel_index_map.get(&(*u, *v, type_id)) {
+                    self.set_rel_props_by_index(rel_idx, props);
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     /// Get property key ID for a string (returns None if key hasn't been interned yet)
     pub fn property_key_id(&self, key: &str) -> Option<PropertyKey> {
         self.interner.get(key)
@@ -1882,5 +1945,97 @@ mod tests {
         let weight_val = ValueId::I64(5);
         let prop = snapshot.relationship_property(csr_pos, "weight");
         assert_eq!(prop, Some(weight_val));
+    }
+
+    #[test]
+    fn test_set_rel_props() {
+        use crate::types::PropertyValue;
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_node(Some(3), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+        builder.add_rel(2, 3, "FOLLOWS");
+        builder.add_rel(1, 3, "KNOWS");
+
+        // Bulk set properties
+        let count = builder.set_rel_props(&[
+            (1, 2, "KNOWS", vec![
+                ("since", PropertyValue::String("2020".to_string())),
+                ("weight", PropertyValue::Integer(5)),
+            ]),
+            (2, 3, "FOLLOWS", vec![
+                ("since", PropertyValue::String("2021".to_string())),
+                ("active", PropertyValue::Boolean(true)),
+            ]),
+            (1, 3, "KNOWS", vec![
+                ("since", PropertyValue::String("2022".to_string())),
+                ("score", PropertyValue::Float(0.95)),
+            ]),
+        ]);
+
+        assert_eq!(count, 3, "Should have set properties on 3 relationships");
+
+        // Verify properties were set
+        let rel_idx_1_2 = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+        let rel_idx_2_3 = builder.find_rel_index(2, 3, "FOLLOWS").unwrap();
+        let rel_idx_1_3 = builder.find_rel_index(1, 3, "KNOWS").unwrap();
+
+        // Check (1, 2, KNOWS) properties
+        let since_key = builder.interner.get_or_intern("since");
+        let since_2020 = builder.interner.get_or_intern("2020");
+        assert!(builder.rel_col_str.get(&since_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx_1_2 && *val == since_2020));
+
+        let weight_key = builder.interner.get_or_intern("weight");
+        assert!(builder.rel_col_i64.get(&weight_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx_1_2 && *val == 5));
+
+        // Check (2, 3, FOLLOWS) properties
+        let since_2021 = builder.interner.get_or_intern("2021");
+        assert!(builder.rel_col_str.get(&since_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx_2_3 && *val == since_2021));
+
+        let active_key = builder.interner.get_or_intern("active");
+        assert!(builder.rel_col_bool.get(&active_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx_2_3 && *val == true));
+
+        // Check (1, 3, KNOWS) properties
+        let since_2022 = builder.interner.get_or_intern("2022");
+        assert!(builder.rel_col_str.get(&since_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx_1_3 && *val == since_2022));
+
+        let score_key = builder.interner.get_or_intern("score");
+        assert!(builder.rel_col_f64.get(&score_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx_1_3 && (*val - 0.95).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_set_rel_props_by_index() {
+        use crate::types::PropertyValue;
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder.add_node(Some(1), &["Person"]);
+        builder.add_node(Some(2), &["Person"]);
+        builder.add_rel(1, 2, "KNOWS");
+
+        let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
+
+        // Set multiple properties by index
+        builder.set_rel_props_by_index(rel_idx, &[
+            ("since", PropertyValue::String("2020".to_string())),
+            ("weight", PropertyValue::Integer(5)),
+            ("score", PropertyValue::Float(0.85)),
+            ("verified", PropertyValue::Boolean(true)),
+        ]);
+
+        // Verify all properties
+        let since_key = builder.interner.get_or_intern("since");
+        let since_val = builder.interner.get_or_intern("2020");
+        assert!(builder.rel_col_str.get(&since_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && *val == since_val));
+
+        let weight_key = builder.interner.get_or_intern("weight");
+        assert!(builder.rel_col_i64.get(&weight_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && *val == 5));
+
+        let score_key = builder.interner.get_or_intern("score");
+        assert!(builder.rel_col_f64.get(&score_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && (*val - 0.85).abs() < 0.001));
+
+        let verified_key = builder.interner.get_or_intern("verified");
+        assert!(builder.rel_col_bool.get(&verified_key).unwrap().iter().any(|(idx, val)| *idx == rel_idx && *val == true));
     }
 }

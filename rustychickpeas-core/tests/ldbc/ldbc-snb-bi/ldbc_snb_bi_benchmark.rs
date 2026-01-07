@@ -190,6 +190,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("knows"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -204,6 +205,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("hasInterest"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -218,6 +220,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("likes"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -232,6 +235,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("likes"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -246,6 +250,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("hasMember"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -260,6 +265,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("hasTag"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -274,6 +280,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("hasTag"),
             None,
+            None, // key_property_columns
         );
     }
 
@@ -288,6 +295,7 @@ fn load_ldbc_graph() -> GraphSnapshot {
             None,
             Some("hasTag"),
             None,
+            None, // key_property_columns
         );
     }
 

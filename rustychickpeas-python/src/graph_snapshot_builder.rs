@@ -7,6 +7,73 @@ use crate::graph_snapshot::GraphSnapshot;
 use crate::rusty_chickpeas::RustyChickpeas;
 use crate::utils::py_to_property_value;
 
+/// Parse a Python object into a NodeReference
+/// Accepts:
+/// - String: NodeReference::Id(column_name)
+/// - Dict with "column" and "property_key": NodeReference::Property
+/// - Dict with "columns" and "property_keys": NodeReference::CompositeProperty
+fn parse_node_reference(py_obj: &pyo3::types::PyAny) -> PyResult<rustychickpeas_core::types::NodeReference> {
+    use rustychickpeas_core::types::NodeReference;
+
+    // Try string first (simple ID column)
+    if let Ok(col_name) = py_obj.extract::<String>() {
+        return Ok(NodeReference::Id(col_name));
+    }
+
+    // Try dict (property lookup)
+    if let Ok(dict) = py_obj.downcast::<PyDict>() {
+        // Check for composite property (has "columns" key)
+        if let Some(columns_any) = dict.get_item("columns")? {
+            let columns: Vec<String> = columns_any.extract()?;
+            let property_keys: Vec<String> = dict
+                .get_item("property_keys")?
+                .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Dict with 'columns' must also have 'property_keys'"
+                ))?
+                .extract()?;
+            let label: Option<String> = dict
+                .get_item("label")?
+                .map(|v| v.extract())
+                .transpose()?;
+
+            return Ok(NodeReference::CompositeProperty {
+                columns,
+                property_keys,
+                label,
+            });
+        }
+
+        // Check for single property (has "column" key)
+        if let Some(column_any) = dict.get_item("column")? {
+            let column: String = column_any.extract()?;
+            let property_key: String = dict
+                .get_item("property_key")?
+                .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Dict with 'column' must also have 'property_key'"
+                ))?
+                .extract()?;
+            let label: Option<String> = dict
+                .get_item("label")?
+                .map(|v| v.extract())
+                .transpose()?;
+
+            return Ok(NodeReference::Property {
+                column,
+                property_key,
+                label,
+            });
+        }
+
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Dict must have either 'column' (single property) or 'columns' (composite property)"
+        ));
+    }
+
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "Node reference must be a string (column name) or dict (property lookup spec)"
+    ))
+}
+
 /// Python wrapper for GraphBuilder
 #[pyclass(name = "GraphSnapshotBuilder")]
 pub struct GraphSnapshotBuilder {
@@ -77,20 +144,20 @@ impl GraphSnapshotBuilder {
         Ok(())
     }
 
-    /// Set multiple properties at once from a dictionary
-    /// 
+    /// Set multiple node properties at once from a dictionary
+    ///
     /// This is more efficient than calling set_prop() multiple times because
     /// it reduces FFI overhead by batching all property updates in a single call.
-    /// 
+    ///
     /// # Arguments
     /// * `node_id` - Node ID (must be u32)
     /// * `properties` - Dictionary of property key-value pairs
-    /// 
+    ///
     /// # Example
     /// ```python
-    /// builder.set_props(1, {"name": "Alice", "age": 30, "active": True})
+    /// builder.set_node_props(1, {"name": "Alice", "age": 30, "active": True})
     /// ```
-    fn set_props(&mut self, node_id: u32, properties: &PyDict) -> PyResult<()> {
+    fn set_node_props(&mut self, node_id: u32, properties: &PyDict) -> PyResult<()> {
         for (key_obj, value_obj) in properties {
             let key: String = key_obj.extract()?;
             let value: &PyAny = value_obj;
@@ -181,6 +248,94 @@ impl GraphSnapshotBuilder {
         Ok(())
     }
 
+    /// Set multiple properties on a single relationship
+    ///
+    /// More efficient than multiple set_rel_prop() calls for the same relationship.
+    ///
+    /// Args:
+    ///     u: Start node ID (u32)
+    ///     v: End node ID (u32)
+    ///     rel_type: Relationship type string
+    ///     properties: Dict of property key -> value (str, int, float, or bool)
+    ///
+    /// Example:
+    ///     builder.set_rel_props(1, 2, "KNOWS", {"since": "2020", "weight": 5})
+    fn set_rel_props(&mut self, u: u32, v: u32, rel_type: String, properties: &PyDict) -> PyResult<()> {
+        for (key_obj, value_obj) in properties {
+            let key: String = key_obj.extract()?;
+            let value: &PyAny = value_obj;
+
+            // Check bool first, as True/False can be extracted as int
+            if let Ok(b) = value.extract::<bool>() {
+                self.builder.set_rel_prop_bool(u, v, &rel_type, &key, b);
+            } else if let Ok(s) = value.extract::<String>() {
+                self.builder.set_rel_prop_str(u, v, &rel_type, &key, &s);
+            } else if let Ok(i) = value.extract::<i64>() {
+                self.builder.set_rel_prop_i64(u, v, &rel_type, &key, i);
+            } else if let Ok(f) = value.extract::<f64>() {
+                self.builder.set_rel_prop_f64(u, v, &rel_type, &key, f);
+            } else {
+                return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    format!("Property value for key '{}' must be str, int, float, or bool", key)
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Bulk set properties on multiple relationships
+    ///
+    /// Much more efficient than individual calls when setting properties on many relationships.
+    /// Builds an internal index once and uses it for all lookups.
+    ///
+    /// Args:
+    ///     rel_props: List of (u, v, rel_type, properties) tuples where:
+    ///         - u: Start node ID (u32)
+    ///         - v: End node ID (u32)
+    ///         - rel_type: Relationship type string
+    ///         - properties: Dict of property key -> value (str, int, float, or bool)
+    ///
+    /// Returns:
+    ///     Number of relationships that were found and had properties set
+    ///
+    /// Example:
+    ///     builder.set_rel_props_bulk([
+    ///         (1, 2, "KNOWS", {"since": "2020", "weight": 5}),
+    ///         (2, 3, "FOLLOWS", {"since": "2021", "active": True}),
+    ///     ])
+    fn set_rel_props_bulk(&mut self, rel_props: Vec<(u32, u32, String, &PyDict)>) -> PyResult<usize> {
+        use rustychickpeas_core::types::PropertyValue;
+
+        // Convert Python data to Rust types
+        let mut rust_rel_props: Vec<(u32, u32, String, Vec<(String, PropertyValue)>)> = Vec::with_capacity(rel_props.len());
+
+        for (u, v, rel_type, props_dict) in rel_props {
+            let mut props: Vec<(String, PropertyValue)> = Vec::with_capacity(props_dict.len());
+
+            for (key, value) in props_dict.iter() {
+                let key_str: String = key.extract()?;
+                let prop_val = py_to_property_value(value)?;
+                props.push((key_str, prop_val));
+            }
+
+            rust_rel_props.push((u, v, rel_type, props));
+        }
+
+        // Convert to the format expected by the Rust function
+        let converted: Vec<(u32, u32, &str, Vec<(&str, PropertyValue)>)> = rust_rel_props
+            .iter()
+            .map(|(u, v, rel_type, props)| {
+                let props_refs: Vec<(&str, PropertyValue)> = props
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.clone()))
+                    .collect();
+                (*u, *v, rel_type.as_str(), props_refs)
+            })
+            .collect();
+
+        Ok(self.builder.set_rel_props(&converted))
+    }
+
     /// Load nodes from a Parquet file into the builder
     /// 
     /// # Arguments
@@ -216,6 +371,18 @@ impl GraphSnapshotBuilder {
     }
 
     /// Load relationships from a Parquet file into the builder
+    ///
+    /// Args:
+    ///     path: Path to Parquet file (local or S3)
+    ///     start_node_column: Column name for start node IDs
+    ///     end_node_column: Column name for end node IDs
+    ///     rel_type_column: Optional column name for relationship type
+    ///     property_columns: Optional list of property columns to load
+    ///     fixed_rel_type: Fixed relationship type (used if rel_type_column is None)
+    ///     deduplication: Optional deduplication strategy ("CreateAll", "CreateUniqueByRelType", "CreateUniqueByRelTypeAndKeyProperties")
+    ///     key_property_columns: Optional list of property columns to use as uniqueness key when
+    ///         deduplication is "CreateUniqueByRelTypeAndKeyProperties". If None, uses all property_columns.
+    #[pyo3(signature = (path, start_node_column, end_node_column, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
     fn load_relationships_from_parquet(
         &mut self,
         path: String,
@@ -225,15 +392,17 @@ impl GraphSnapshotBuilder {
         property_columns: Option<Vec<String>>,
         fixed_rel_type: Option<String>,
         deduplication: Option<String>,
+        key_property_columns: Option<Vec<String>>,
     ) -> PyResult<Vec<(u32, u32)>> {
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let key_cols = key_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let dedup = deduplication.as_ref().and_then(|s| match s.as_str() {
             "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
             "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
             "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
             _ => None,
         });
-        
+
         self.builder
             .load_relationships_from_parquet(
                 &path,
@@ -243,6 +412,62 @@ impl GraphSnapshotBuilder {
                 prop_cols,
                 fixed_rel_type.as_deref(),
                 dedup,
+                key_cols,
+            )
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    /// Load relationships from a Parquet file with flexible node reference support
+    ///
+    /// This version supports looking up nodes by:
+    /// - Node ID column (string): use the column directly as node ID
+    /// - Single property lookup (dict): {"column": "uuid_col", "property_key": "uuid", "label": "Person"}
+    /// - Composite property lookup (dict): {"columns": ["name", "city"], "property_keys": ["name", "city"], "label": "Person"}
+    ///
+    /// Args:
+    ///     path: Path to Parquet file (local or S3)
+    ///     start_node: String (column name for node ID) or dict (property lookup spec)
+    ///     end_node: String (column name for node ID) or dict (property lookup spec)
+    ///     rel_type_column: Optional column name for relationship type
+    ///     property_columns: Optional list of property columns to load
+    ///     fixed_rel_type: Fixed relationship type (used if rel_type_column is None)
+    ///     deduplication: Optional deduplication strategy
+    ///     key_property_columns: Optional list of property columns for uniqueness
+    #[pyo3(signature = (path, start_node, end_node, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
+    fn load_relationships_from_parquet_v2(
+        &mut self,
+        path: String,
+        start_node: &pyo3::types::PyAny,
+        end_node: &pyo3::types::PyAny,
+        rel_type_column: Option<String>,
+        property_columns: Option<Vec<String>>,
+        fixed_rel_type: Option<String>,
+        deduplication: Option<String>,
+        key_property_columns: Option<Vec<String>>,
+    ) -> PyResult<Vec<(u32, u32)>> {
+        // Parse start_node reference
+        let start_ref = parse_node_reference(start_node)?;
+        let end_ref = parse_node_reference(end_node)?;
+
+        let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let key_cols = key_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let dedup = deduplication.as_ref().and_then(|s| match s.as_str() {
+            "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
+            "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
+            "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+            _ => None,
+        });
+
+        self.builder
+            .load_relationships_from_parquet_v2(
+                &path,
+                start_ref,
+                end_ref,
+                rel_type_column.as_deref(),
+                prop_cols,
+                fixed_rel_type.as_deref(),
+                dedup,
+                key_cols,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
