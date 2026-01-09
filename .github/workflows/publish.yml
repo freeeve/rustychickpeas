@@ -217,12 +217,8 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # Trusted Publishing (OIDC) - no API token needed
+          # Trusted Publishing (OIDC) - enabled automatically via id-token: write permission
           # Requires: PyPI Trusted Publisher configured at https://pypi.org/manage/project/rustychickpeas/settings/publishing/
-          trusted-publishing: true
-          
-          # Production PyPI (no repository-url needed, defaults to pypi.org)
-          # The action automatically publishes only .whl and .tar.gz files from dist/
           skip-existing: true
           print-hash: true 
       
