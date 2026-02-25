@@ -15,6 +15,231 @@ use hashbrown::HashMap;
 use futures::TryStreamExt;
 use roaring::RoaringBitmap;
 
+/// Extract a string value from an Arrow array column, supporting both Utf8 (StringArray)
+/// and LargeUtf8 (LargeStringArray) types. Returns None if the value is null or the
+/// column is not a string type.
+fn extract_string_value(column: &ArrayRef, i: usize) -> Option<&str> {
+    if let Some(arr) = column.as_any().downcast_ref::<StringArray>() {
+        if !arr.is_null(i) { Some(arr.value(i)) } else { None }
+    } else if let Some(arr) = column.as_any().downcast_ref::<LargeStringArray>() {
+        if !arr.is_null(i) { Some(arr.value(i)) } else { None }
+    } else {
+        None
+    }
+}
+
+/// Extract a ValueId from an Arrow column value at row i.
+/// Shared helper used by deduplication key extraction, property-based node lookup,
+/// and relationship key property extraction.
+fn extract_value_id(
+    column: &dyn arrow::array::Array,
+    field: &Field,
+    i: usize,
+    interner: &crate::interner::StringInterner,
+) -> Option<ValueId> {
+    match field.data_type() {
+        DataType::Int64 => {
+            column.as_any().downcast_ref::<Int64Array>()
+                .filter(|arr| !arr.is_null(i))
+                .map(|arr| ValueId::I64(arr.value(i)))
+        }
+        DataType::Int32 => {
+            column.as_any().downcast_ref::<Int32Array>()
+                .filter(|arr| !arr.is_null(i))
+                .map(|arr| ValueId::I64(arr.value(i) as i64))
+        }
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            if let Some(arr) = column.as_any().downcast_ref::<StringArray>() {
+                if !arr.is_null(i) {
+                    Some(ValueId::Str(interner.get_or_intern(arr.value(i))))
+                } else {
+                    None
+                }
+            } else if let Some(arr) = column.as_any().downcast_ref::<LargeStringArray>() {
+                if !arr.is_null(i) {
+                    Some(ValueId::Str(interner.get_or_intern(arr.value(i))))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        DataType::Float64 => {
+            column.as_any().downcast_ref::<Float64Array>()
+                .filter(|arr| !arr.is_null(i))
+                .map(|arr| ValueId::from_f64(arr.value(i)))
+        }
+        DataType::Boolean => {
+            column.as_any().downcast_ref::<BooleanArray>()
+                .filter(|arr| !arr.is_null(i))
+                .map(|arr| ValueId::Bool(arr.value(i)))
+        }
+        _ => None,
+    }
+}
+
+/// Set a node property on the builder from an Arrow column value.
+/// Handles Utf8, LargeUtf8, Int64, Float64, Boolean, and fallback to string.
+fn set_node_property_from_arrow(
+    builder: &mut GraphBuilder,
+    node_id: NodeId,
+    key: &str,
+    column: &ArrayRef,
+    data_type: &DataType,
+    i: usize,
+) {
+    match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            if let Some(val) = extract_string_value(column, i) {
+                builder.set_prop_str(node_id, key, val);
+            }
+        }
+        DataType::Int64 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Int64Array>() {
+                if !arr.is_null(i) {
+                    builder.set_prop_i64(node_id, key, arr.value(i));
+                }
+            }
+        }
+        DataType::Float64 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Float64Array>() {
+                if !arr.is_null(i) {
+                    builder.set_prop_f64(node_id, key, arr.value(i));
+                }
+            }
+        }
+        DataType::Boolean => {
+            if let Some(arr) = column.as_any().downcast_ref::<BooleanArray>() {
+                if !arr.is_null(i) {
+                    builder.set_prop_bool(node_id, key, arr.value(i));
+                }
+            }
+        }
+        _ => {
+            // Fallback: try string conversion
+            if let Some(val) = extract_string_value(column, i) {
+                builder.set_prop_str(node_id, key, val);
+            }
+        }
+    }
+}
+
+/// Set a relationship property on the builder from an Arrow column value.
+/// Handles Utf8, LargeUtf8, Int64, Float64, Boolean, and fallback to string.
+fn set_rel_property_from_arrow(
+    builder: &mut GraphBuilder,
+    rel_idx: usize,
+    key: &str,
+    column: &ArrayRef,
+    data_type: &DataType,
+    i: usize,
+) {
+    let k = builder.interner.get_or_intern(key);
+    match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            if let Some(val) = extract_string_value(column, i) {
+                let v = builder.interner.get_or_intern(val);
+                builder.rel_col_str.entry(k).or_default().push((rel_idx, v));
+            }
+        }
+        DataType::Int64 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Int64Array>() {
+                if !arr.is_null(i) {
+                    builder.rel_col_i64.entry(k).or_default().push((rel_idx, arr.value(i)));
+                }
+            }
+        }
+        DataType::Float64 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Float64Array>() {
+                if !arr.is_null(i) {
+                    builder.rel_col_f64.entry(k).or_default().push((rel_idx, arr.value(i)));
+                }
+            }
+        }
+        DataType::Boolean => {
+            if let Some(arr) = column.as_any().downcast_ref::<BooleanArray>() {
+                if !arr.is_null(i) {
+                    builder.rel_col_bool.entry(k).or_default().push((rel_idx, arr.value(i)));
+                }
+            }
+        }
+        _ => {
+            // Fallback: try string conversion
+            if let Some(val) = extract_string_value(column, i) {
+                let v = builder.interner.get_or_intern(val);
+                builder.rel_col_str.entry(k).or_default().push((rel_idx, v));
+            }
+        }
+    }
+}
+
+/// Validate that all specified column names exist in the Parquet schema.
+/// Returns SchemaError for any missing columns.
+fn validate_columns_exist(schema: &Schema, columns: &[&str], context: &str) -> Result<()> {
+    for col_name in columns {
+        if schema.fields().iter().position(|f| f.name() == col_name).is_none() {
+            return Err(GraphError::SchemaError(
+                format!("{} column '{}' not found in parquet schema", context, col_name)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Extract node IDs from an integer column (Int64 or Int32).
+/// Returns CapacityError for out-of-range values.
+fn extract_node_ids_from_column(
+    column: &ArrayRef,
+    num_rows: usize,
+    column_name: &str,
+) -> Result<Vec<Option<NodeId>>> {
+    let mut ids = Vec::with_capacity(num_rows);
+    if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
+        for i in 0..num_rows {
+            if int_array.is_null(i) {
+                ids.push(None);
+            } else {
+                let val = int_array.value(i);
+                if val < 0 || val > u32::MAX as i64 {
+                    return Err(GraphError::CapacityError(
+                        format!("{} node ID {} out of u32 range", column_name, val)
+                    ));
+                }
+                ids.push(Some(val as u32));
+            }
+        }
+    } else if let Some(int_array) = column.as_any().downcast_ref::<Int32Array>() {
+        for i in 0..num_rows {
+            if int_array.is_null(i) {
+                ids.push(None);
+            } else {
+                let val = int_array.value(i);
+                if val < 0 {
+                    return Err(GraphError::CapacityError(
+                        format!("{} node ID {} cannot be negative", column_name, val)
+                    ));
+                }
+                ids.push(Some(val as u32));
+            }
+        }
+    } else {
+        return Err(GraphError::SchemaError(
+            format!("{} column must be Int64 or Int32", column_name)
+        ));
+    }
+    Ok(ids)
+}
+
+/// Generate the next node ID from the builder, returning CapacityError on overflow.
+fn next_auto_node_id(builder: &mut GraphBuilder) -> Result<NodeId> {
+    let id = builder.next_node_id;
+    builder.next_node_id = id.checked_add(1).ok_or_else(|| {
+        GraphError::CapacityError("Node ID counter exceeded u32::MAX".to_string())
+    })?;
+    Ok(id)
+}
+
 /// Enum to handle both sync (local file) and async (S3) Parquet readers
 enum ParquetReaderEnum {
     Sync(parquet::arrow::arrow_reader::ParquetRecordBatchReader),
@@ -159,9 +384,26 @@ impl GraphBuilder {
             self.enable_node_deduplication(unique_props.clone());
         }
 
-        // Get column names (needed for processing)
+        // Validate configured columns exist in the parquet schema
         let all_columns: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
         let label_cols = label_columns.unwrap_or_default();
+
+        // Validate node ID column exists
+        if let Some(id_col) = node_id_column {
+            validate_columns_exist(&schema, &[id_col], "Node ID")?;
+        }
+        // Validate label columns exist
+        validate_columns_exist(&schema, &label_cols, "Label")?;
+
+        // Validate property columns exist if explicitly specified
+        if let Some(ref props) = property_columns {
+            validate_columns_exist(&schema, props, "Property")?;
+        }
+        // Validate unique property columns exist if specified
+        if let Some(ref unique_props) = unique_properties {
+            validate_columns_exist(&schema, unique_props, "Unique property")?;
+        }
+
         let prop_cols = property_columns.unwrap_or_else(|| {
             all_columns
                 .iter()
@@ -200,49 +442,11 @@ impl GraphBuilder {
             }
 
             // Extract node IDs (optional - None means auto-generate)
-            let mut node_ids_batch: Vec<Option<NodeId>> = Vec::with_capacity(batch.num_rows());
-            if let Some(idx) = node_id_idx {
-                let id_col = batch.column(idx);
-                // Support both Int64 and Int32 for node IDs
-                if let Some(int_array) = id_col.as_any().downcast_ref::<Int64Array>() {
-                    for i in 0..batch.num_rows() {
-                        if int_array.is_null(i) {
-                            node_ids_batch.push(None); // Auto-generate
-                        } else {
-                            let val = int_array.value(i);
-                            if val < 0 || val > u32::MAX as i64 {
-                                return Err(GraphError::BulkLoadError(
-                                    format!("Node ID {} exceeds u32::MAX ({})", val, u32::MAX)
-                                ));
-                            }
-                            node_ids_batch.push(Some(val as u32));
-                        }
-                    }
-                } else if let Some(int_array) = id_col.as_any().downcast_ref::<Int32Array>() {
-                    for i in 0..batch.num_rows() {
-                        if int_array.is_null(i) {
-                            node_ids_batch.push(None); // Auto-generate
-                        } else {
-                            let val = int_array.value(i);
-                            if val < 0 {
-                                return Err(GraphError::BulkLoadError(
-                                    format!("Node ID {} cannot be negative", val)
-                                ));
-                            }
-                            node_ids_batch.push(Some(val as u32));
-                        }
-                    }
-                } else {
-                    return Err(GraphError::BulkLoadError(
-                        "Node ID column must be Int64 or Int32".to_string()
-                    ));
-                }
+            let mut node_ids_batch: Vec<Option<NodeId>> = if let Some(idx) = node_id_idx {
+                extract_node_ids_from_column(batch.column(idx), batch.num_rows(), "Node ID")?
             } else {
-                // No ID column - all auto-generate
-                for _i in 0..batch.num_rows() {
-                    node_ids_batch.push(None);
-                }
-            }
+                vec![None; batch.num_rows()]
+            };
 
             // Extract labels
             let mut labels_per_row: Vec<Vec<&str>> = vec![Vec::new(); batch.num_rows()];
@@ -257,11 +461,9 @@ impl GraphBuilder {
             for label_col in &label_cols {
                 if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == label_col) {
                     let column = batch.column(column_idx);
-                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                        for i in 0..batch.num_rows() {
-                            if !string_array.is_null(i) {
-                                labels_per_row[i].push(string_array.value(i));
-                            }
+                    for i in 0..batch.num_rows() {
+                        if let Some(val) = extract_string_value(column, i) {
+                            labels_per_row[i].push(val);
                         }
                     }
                 }
@@ -296,79 +498,16 @@ impl GraphBuilder {
                     for i in 0..batch.num_rows() {
                         let mut dedup_key = Vec::with_capacity(unique_props.len());
                         let mut all_present = true;
-                        
+
                         for (_col_idx, field, column) in &dedup_columns {
-                            let val = match field.data_type() {
-                                DataType::Utf8 | DataType::LargeUtf8 => {
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let val = string_array.value(i);
-                                            let interned = self.interner.get_or_intern(val);
-                                            Some(ValueId::Str(interned))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DataType::Int64 => {
-                                    if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
-                                        if !int_array.is_null(i) {
-                                            Some(ValueId::I64(int_array.value(i)))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DataType::Float64 => {
-                                    if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
-                                        if !float_array.is_null(i) {
-                                            Some(ValueId::from_f64(float_array.value(i)))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DataType::Boolean => {
-                                    if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
-                                        if !bool_array.is_null(i) {
-                                            Some(ValueId::Bool(bool_array.value(i)))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                _ => {
-                                    // Convert to string
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let val = string_array.value(i);
-                                            let interned = self.interner.get_or_intern(val);
-                                            Some(ValueId::Str(interned))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                            };
-                            
-                            if let Some(v) = val {
+                            if let Some(v) = extract_value_id(column.as_ref(), field, i, &self.interner) {
                                 dedup_key.push(v);
                             } else {
                                 all_present = false;
                                 break;
                             }
                         }
-                        
+
                         if all_present && !dedup_key.is_empty() {
                             dedup_keys_per_row[i] = Some(crate::types::DedupKey::from_slice(&dedup_key));
                         }
@@ -406,15 +545,10 @@ impl GraphBuilder {
                         } else {
                             // First time seeing this combination, add to map
                             // Need to get or generate the node ID first
-                            let node_id = node_ids_batch[i].unwrap_or_else(|| {
-                                // Auto-generate if not set
-                                let id = self.next_node_id;
-                                self.next_node_id = id.wrapping_add(1);
-                                if self.next_node_id == 0 {
-                                    panic!("Node ID counter wrapped around (exceeded u32::MAX)");
-                                }
-                                id
-                            });
+                            let node_id = match node_ids_batch[i] {
+                                Some(id) => id,
+                                None => next_auto_node_id(self)?,
+                            };
                             node_ids_batch[i] = Some(node_id);
                             // OPTIMIZATION: DedupKey uses Copy for small tuples, so cloning is cheap
                             self.dedup_map.insert(dedup_key.clone(), node_id);
@@ -426,7 +560,7 @@ impl GraphBuilder {
             // Second pass: apply deduplication updates (now we can call self methods)
             for (_i, existing_node_id, merged_labels) in dedup_updates {
                 let labels_refs: Vec<&str> = merged_labels.iter().map(|s| s.as_str()).collect();
-                self.add_node(Some(existing_node_id), &labels_refs);
+                self.add_node(Some(existing_node_id), &labels_refs)?;
             }
 
             // Extract properties (after deduplication, so properties go to correct node_id)
@@ -434,57 +568,18 @@ impl GraphBuilder {
                 if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == prop_col) {
                     let column = batch.column(column_idx);
                     let field = schema.field(column_idx);
-                    
+
                     for i in 0..batch.num_rows() {
                         // Get node ID (auto-generate if None)
-                        let node_id = node_ids_batch[i].unwrap_or_else(|| {
-                            // Auto-generate if not set
-                            let id = self.next_node_id;
-                            self.next_node_id = id.wrapping_add(1);
-                            if self.next_node_id == 0 {
-                                panic!("Node ID counter wrapped around (exceeded u32::MAX)");
+                        let node_id = match node_ids_batch[i] {
+                            Some(id) => id,
+                            None => {
+                                let id = next_auto_node_id(self)?;
+                                node_ids_batch[i] = Some(id);
+                                id
                             }
-                            node_ids_batch[i] = Some(id); // Update the batch
-                            id
-                        });
-                        match field.data_type() {
-                            DataType::Utf8 | DataType::LargeUtf8 => {
-                                if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                    if !string_array.is_null(i) {
-                                        self.set_prop_str(node_id, prop_col, string_array.value(i));
-                                    }
-                                }
-                            }
-                            DataType::Int64 => {
-                                if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
-                                    if !int_array.is_null(i) {
-                                        self.set_prop_i64(node_id, prop_col, int_array.value(i));
-                                    }
-                                }
-                            }
-                            DataType::Float64 => {
-                                if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
-                                    if !float_array.is_null(i) {
-                                        self.set_prop_f64(node_id, prop_col, float_array.value(i));
-                                    }
-                                }
-                            }
-                            DataType::Boolean => {
-                                if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
-                                    if !bool_array.is_null(i) {
-                                        self.set_prop_bool(node_id, prop_col, bool_array.value(i));
-                                    }
-                                }
-                            }
-                            _ => {
-                                // Convert to string
-                                if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                    if !string_array.is_null(i) {
-                                        self.set_prop_str(node_id, prop_col, string_array.value(i));
-                                    }
-                                }
-                            }
-                        }
+                        };
+                        set_node_property_from_arrow(self, node_id, prop_col, column, field.data_type(), i);
                     }
                 }
             }
@@ -494,7 +589,7 @@ impl GraphBuilder {
             for i in 0..node_ids_batch.len() {
                 if !processed_in_dedup.contains(&i) {
                     let labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
-                    let actual_id = self.add_node(node_ids_batch[i], &labels);
+                    let actual_id = self.add_node(node_ids_batch[i], &labels)?;
                     // Update the batch with the actual ID (in case it was auto-generated)
                     node_ids_batch[i] = Some(actual_id);
                 }
@@ -651,10 +746,10 @@ impl GraphBuilder {
         // Find column indices (needed before processing batches)
         let start_node_idx = schema.fields().iter()
             .position(|f| f.name() == start_node_column)
-            .ok_or_else(|| GraphError::BulkLoadError(format!("Column '{}' not found", start_node_column)))?;
+            .ok_or_else(|| GraphError::SchemaError(format!("Start node column '{}' not found in parquet schema", start_node_column)))?;
         let end_node_idx = schema.fields().iter()
             .position(|f| f.name() == end_node_column)
-            .ok_or_else(|| GraphError::BulkLoadError(format!("Column '{}' not found", end_node_column)))?;
+            .ok_or_else(|| GraphError::SchemaError(format!("End node column '{}' not found in parquet schema", end_node_column)))?;
         
         // Handle relationship type: either from column or fixed value
         let rel_type_idx = rel_type_column.and_then(|col| {
@@ -662,11 +757,11 @@ impl GraphBuilder {
         });
         
         if rel_type_column.is_some() && rel_type_idx.is_none() {
-            return Err(GraphError::BulkLoadError(
-                format!("Relationship type column '{}' not found", rel_type_column.unwrap())
+            return Err(GraphError::SchemaError(
+                format!("Relationship type column '{}' not found in parquet schema", rel_type_column.unwrap())
             ));
         }
-        
+
         if rel_type_column.is_none() && fixed_rel_type.is_none() {
             return Err(GraphError::BulkLoadError(
                 "Either rel_type_column or fixed_rel_type must be provided".to_string()
@@ -717,100 +812,30 @@ impl GraphBuilder {
                 rel_ids.reserve(batch.num_rows() * 10); // Conservative estimate
                 first_batch = false;
             }
-            // Extract start/end nodes
-            let start_col = batch.column(start_node_idx);
-            let end_col = batch.column(end_node_idx);
-            
+            // Extract start/end node IDs using shared helper
+            let start_nodes = extract_node_ids_from_column(
+                batch.column(start_node_idx), batch.num_rows(), "Start"
+            )?;
+            let end_nodes = extract_node_ids_from_column(
+                batch.column(end_node_idx), batch.num_rows(), "End"
+            )?;
+
             // Extract relationship types (either from column or use fixed type)
             let rel_type_col = rel_type_idx.map(|idx| batch.column(idx));
-
-            let mut start_nodes = Vec::with_capacity(batch.num_rows());
-            let mut end_nodes = Vec::with_capacity(batch.num_rows());
             let mut rel_types = Vec::with_capacity(batch.num_rows());
 
-            // Support both Int64 and Int32 for node IDs (LDBC SNB uses both)
-            if let Some(int_array) = start_col.as_any().downcast_ref::<Int64Array>() {
-                for i in 0..batch.num_rows() {
-                    if int_array.is_null(i) {
-                        start_nodes.push(None);
-                    } else {
-                        let val = int_array.value(i);
-                        if val < 0 || val > u32::MAX as i64 {
-                            return Err(GraphError::BulkLoadError(
-                                format!("Start node ID {} exceeds u32::MAX ({})", val, u32::MAX)
-                            ));
-                        }
-                        start_nodes.push(Some(val as u32));
-                    }
-                }
-            } else if let Some(int_array) = start_col.as_any().downcast_ref::<Int32Array>() {
-                for i in 0..batch.num_rows() {
-                    if int_array.is_null(i) {
-                        start_nodes.push(None);
-                    } else {
-                        let val = int_array.value(i);
-                        if val < 0 {
-                            return Err(GraphError::BulkLoadError(
-                                format!("Start node ID {} cannot be negative", val)
-                            ));
-                        }
-                        start_nodes.push(Some(val as u32));
-                    }
-                }
-            } else {
-                return Err(GraphError::BulkLoadError(
-                    format!("Start node column '{}' must be Int64 or Int32", start_node_column)
-                ));
-            }
-
-            if let Some(int_array) = end_col.as_any().downcast_ref::<Int64Array>() {
-                for i in 0..batch.num_rows() {
-                    if int_array.is_null(i) {
-                        end_nodes.push(None);
-                    } else {
-                        let val = int_array.value(i);
-                        if val < 0 || val > u32::MAX as i64 {
-                            return Err(GraphError::BulkLoadError(
-                                format!("End node ID {} exceeds u32::MAX ({})", val, u32::MAX)
-                            ));
-                        }
-                        end_nodes.push(Some(val as u32));
-                    }
-                }
-            } else if let Some(int_array) = end_col.as_any().downcast_ref::<Int32Array>() {
-                for i in 0..batch.num_rows() {
-                    if int_array.is_null(i) {
-                        end_nodes.push(None);
-                    } else {
-                        let val = int_array.value(i);
-                        if val < 0 {
-                            return Err(GraphError::BulkLoadError(
-                                format!("End node ID {} cannot be negative", val)
-                            ));
-                        }
-                        end_nodes.push(Some(val as u32));
-                    }
-                }
-            } else {
-                return Err(GraphError::BulkLoadError(
-                    format!("End node column '{}' must be Int64 or Int32", end_node_column)
-                ));
-            }
-
-            // Extract relationship types
-            if let Some(col) = rel_type_col {
-                if let Some(string_array) = col.as_any().downcast_ref::<StringArray>() {
-                    for i in 0..batch.num_rows() {
-                        if string_array.is_null(i) {
-                            rel_types.push(None);
-                        } else {
-                            rel_types.push(Some(string_array.value(i)));
-                        }
-                    }
-                } else {
-                    return Err(GraphError::BulkLoadError(
-                        "Relationship type column must be String".to_string()
+            // Extract relationship types (supports both Utf8 and LargeUtf8)
+            if let Some(col) = &rel_type_col {
+                // Verify string column type
+                let has_strings = col.as_any().downcast_ref::<StringArray>().is_some()
+                    || col.as_any().downcast_ref::<LargeStringArray>().is_some();
+                if !has_strings {
+                    return Err(GraphError::SchemaError(
+                        "Relationship type column must be String (Utf8 or LargeUtf8)".to_string()
                     ));
+                }
+                for i in 0..batch.num_rows() {
+                    rel_types.push(extract_string_value(col, i));
                 }
             } else if let Some(fixed_type) = fixed_rel_type {
                 for _i in 0..batch.num_rows() {
@@ -832,69 +857,7 @@ impl GraphBuilder {
                         if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == prop_col) {
                             let column = batch.column(column_idx);
                             let field = schema.field(column_idx);
-                            let val = match field.data_type() {
-                                DataType::Utf8 | DataType::LargeUtf8 => {
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let val = string_array.value(i);
-                                            let interned = self.interner.get_or_intern(val);
-                                            Some(ValueId::Str(interned))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DataType::Int64 => {
-                                    if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
-                                        if !int_array.is_null(i) {
-                                            Some(ValueId::I64(int_array.value(i)))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DataType::Float64 => {
-                                    if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
-                                        if !float_array.is_null(i) {
-                                            Some(ValueId::from_f64(float_array.value(i)))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DataType::Boolean => {
-                                    if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
-                                        if !bool_array.is_null(i) {
-                                            Some(ValueId::Bool(bool_array.value(i)))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                                _ => {
-                                    // Convert to string
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let val = string_array.value(i);
-                                            let interned = self.interner.get_or_intern(val);
-                                            Some(ValueId::Str(interned))
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                }
-                            };
-                            if let Some(v) = val {
+                            if let Some(v) = extract_value_id(column.as_ref(), field, i, &self.interner) {
                                 key_props.push(v);
                             }
                         }
@@ -909,20 +872,23 @@ impl GraphBuilder {
             // This avoids O(n) search for each property set
             let mut row_to_rel_idx: Vec<Option<usize>> = vec![None; batch.num_rows()];
             
-            // Add relationships with deduplication
+            // Add relationships with deduplication and node existence check
             for i in 0..batch.num_rows() {
                 if let (Some(start_id), Some(end_id), Some(rel_type)) = (start_nodes[i], end_nodes[i], rel_types[i]) {
+                    // Skip relationships where start or end node doesn't exist in the builder
+                    if !self.known_nodes.contains(start_id) || !self.known_nodes.contains(end_id) {
+                        continue;
+                    }
+
                     let rel_type_id = self.interner.get_or_intern(rel_type);
                     let mut should_add = true;
-                    
+
                     // Check deduplication
                     match deduplication {
-                        Some(RelationshipDeduplication::CreateAll) => {
-                            // No deduplication, always add
+                        Some(RelationshipDeduplication::CreateAll) | None => {
                             should_add = true;
                         }
                         Some(RelationshipDeduplication::CreateUniqueByRelType) => {
-                            // Check if (u, v, rel_type) already exists
                             let key = (start_id, end_id, rel_type_id);
                             if seen_by_type.contains_key(&key) {
                                 should_add = false;
@@ -931,7 +897,6 @@ impl GraphBuilder {
                             }
                         }
                         Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties) => {
-                            // Use pre-extracted key properties
                             if let Some(Some(ref key_props)) = key_props_per_row.get(i) {
                                 let key = (start_id, end_id, rel_type_id, key_props.clone());
                                 if seen_by_type_and_props.contains_key(&key) {
@@ -940,11 +905,6 @@ impl GraphBuilder {
                                     seen_by_type_and_props.insert(key, ());
                                 }
                             }
-                            // If no key properties, treat as unique (add it)
-                        }
-                        None => {
-                            // Default: no deduplication
-                            should_add = true;
                         }
                     }
                     
@@ -962,55 +922,10 @@ impl GraphBuilder {
                 if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == prop_col) {
                     let column = batch.column(column_idx);
                     let field = schema.field(column_idx);
-                    
+
                     for i in 0..batch.num_rows() {
-                        // Use the tracked relationship index instead of searching
                         if let Some(rel_idx) = row_to_rel_idx[i] {
-                            match field.data_type() {
-                                DataType::Utf8 | DataType::LargeUtf8 => {
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            let v = self.interner.get_or_intern(string_array.value(i));
-                                            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
-                                        }
-                                    }
-                                }
-                                DataType::Int64 => {
-                                    if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
-                                        if !int_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            self.rel_col_i64.entry(k).or_default().push((rel_idx, int_array.value(i)));
-                                        }
-                                    }
-                                }
-                                DataType::Float64 => {
-                                    if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
-                                        if !float_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            self.rel_col_f64.entry(k).or_default().push((rel_idx, float_array.value(i)));
-                                        }
-                                    }
-                                }
-                                DataType::Boolean => {
-                                    if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
-                                        if !bool_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            self.rel_col_bool.entry(k).or_default().push((rel_idx, bool_array.value(i)));
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    // Convert to string
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            let v = self.interner.get_or_intern(string_array.value(i));
-                                            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
-                                        }
-                                    }
-                                }
-                            }
+                            set_rel_property_from_arrow(self, rel_idx, prop_col, column, field.data_type(), i);
                         }
                     }
                 }
@@ -1143,43 +1058,6 @@ impl GraphBuilder {
         };
 
         let mut rel_ids: Vec<(u32, u32)> = Vec::new();
-
-        // Helper to extract ValueId from a column value at row i
-        fn extract_value_id(
-            column: &dyn arrow::array::Array,
-            field: &Field,
-            i: usize,
-            interner: &crate::interner::StringInterner,
-        ) -> Option<ValueId> {
-            match field.data_type() {
-                DataType::Int64 => {
-                    column.as_any().downcast_ref::<Int64Array>()
-                        .filter(|arr| !arr.is_null(i))
-                        .map(|arr| ValueId::I64(arr.value(i)))
-                }
-                DataType::Int32 => {
-                    column.as_any().downcast_ref::<Int32Array>()
-                        .filter(|arr| !arr.is_null(i))
-                        .map(|arr| ValueId::I64(arr.value(i) as i64))
-                }
-                DataType::Utf8 | DataType::LargeUtf8 => {
-                    column.as_any().downcast_ref::<StringArray>()
-                        .filter(|arr| !arr.is_null(i))
-                        .map(|arr| ValueId::Str(interner.get_or_intern(arr.value(i))))
-                }
-                DataType::Float64 => {
-                    column.as_any().downcast_ref::<Float64Array>()
-                        .filter(|arr| !arr.is_null(i))
-                        .map(|arr| ValueId::F64(arr.value(i).to_bits()))
-                }
-                DataType::Boolean => {
-                    column.as_any().downcast_ref::<BooleanArray>()
-                        .filter(|arr| !arr.is_null(i))
-                        .map(|arr| ValueId::Bool(arr.value(i)))
-                }
-                _ => None,
-            }
-        }
 
         // Process batches
         while let Some(batch_result) = reader.next() {
@@ -1340,9 +1218,14 @@ impl GraphBuilder {
             // Track relationship indices for property setting
             let mut row_to_rel_idx: Vec<Option<usize>> = vec![None; batch.num_rows()];
 
-            // Add relationships with deduplication
+            // Add relationships with deduplication and node existence check
             for i in 0..batch.num_rows() {
                 if let (Some(start_id), Some(end_id), Some(rel_type)) = (start_nodes[i], end_nodes[i], rel_types[i]) {
+                    // Skip relationships where start or end node doesn't exist
+                    if !self.known_nodes.contains(start_id) || !self.known_nodes.contains(end_id) {
+                        continue;
+                    }
+
                     let rel_type_id = self.interner.get_or_intern(rel_type);
                     let mut should_add = true;
 
@@ -1388,50 +1271,7 @@ impl GraphBuilder {
 
                     for i in 0..batch.num_rows() {
                         if let Some(rel_idx) = row_to_rel_idx[i] {
-                            match field.data_type() {
-                                DataType::Utf8 | DataType::LargeUtf8 => {
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            let v = self.interner.get_or_intern(string_array.value(i));
-                                            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
-                                        }
-                                    }
-                                }
-                                DataType::Int64 => {
-                                    if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
-                                        if !int_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            self.rel_col_i64.entry(k).or_default().push((rel_idx, int_array.value(i)));
-                                        }
-                                    }
-                                }
-                                DataType::Float64 => {
-                                    if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
-                                        if !float_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            self.rel_col_f64.entry(k).or_default().push((rel_idx, float_array.value(i)));
-                                        }
-                                    }
-                                }
-                                DataType::Boolean => {
-                                    if let Some(bool_array) = column.as_any().downcast_ref::<BooleanArray>() {
-                                        if !bool_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            self.rel_col_bool.entry(k).or_default().push((rel_idx, bool_array.value(i)));
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                                        if !string_array.is_null(i) {
-                                            let k = self.interner.get_or_intern(prop_col);
-                                            let v = self.interner.get_or_intern(string_array.value(i));
-                                            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
-                                        }
-                                    }
-                                }
-                            }
+                            set_rel_property_from_arrow(self, rel_idx, prop_col, column, field.data_type(), i);
                         }
                     }
                 }
@@ -1646,7 +1486,7 @@ mod tests {
         // First add nodes
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -1672,7 +1512,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -1720,7 +1560,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i as u32), &["Node"]);
+            builder.add_node(Some(i as u32), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -1985,7 +1825,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         use crate::types::RelationshipDeduplication;
@@ -2041,7 +1881,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         use crate::types::RelationshipDeduplication;
@@ -2094,7 +1934,7 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(2), &["Node"]).unwrap();
         
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -2143,7 +1983,7 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
         
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -2193,7 +2033,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
 
         let rel_ids = builder.load_relationships_from_parquet(
@@ -2250,7 +2090,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -2278,22 +2118,20 @@ mod tests {
     fn test_load_nodes_with_deduplication_missing_column() {
         let temp_dir = TempDir::new().unwrap();
         let nodes_path = create_test_nodes_parquet(&temp_dir);
-        
+
         let mut builder = GraphBuilder::new(None, None);
-        // Try to deduplicate by a column that doesn't exist
-        let node_ids = builder.load_nodes_from_parquet(
+        // Try to deduplicate by a column that doesn't exist - should return SchemaError
+        let result = builder.load_nodes_from_parquet(
             nodes_path.to_str().unwrap(),
             Some("id"),
             Some(vec!["label"]),
             Some(vec!["name"]),
             Some(vec!["nonexistent"]), // Column doesn't exist
             None, // default_label
-        ).unwrap();
-        
-        // Should still load nodes, but deduplication won't work (column not found)
-        assert_eq!(node_ids.len(), 5);
-        // dedup_map should be empty since no valid dedup columns
-        assert_eq!(builder.dedup_map.len(), 0);
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]
@@ -2486,8 +2324,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -2535,9 +2373,7 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        // LargeUtf8 is handled in the match but LargeStringArray doesn't downcast to StringArray
-        // So it falls through to the _ case which tries to convert to string
-        // This test just ensures the code path is exercised
+        // LargeUtf8 is now properly handled via extract_string_value helper
         let result = builder.load_nodes_from_parquet(
             file_path.to_str().unwrap(),
             Some("id"),
@@ -2546,11 +2382,13 @@ mod tests {
             None,
             None, // default_label
         );
-        
-        // Should succeed (even if properties aren't set due to type mismatch)
+
         assert!(result.is_ok());
         let node_ids = result.unwrap();
         assert_eq!(node_ids.len(), 2);
+        // LargeUtf8 properties should now be correctly set
+        assert!(builder.prop(1, "name").is_some());
+        assert!(builder.prop(2, "name").is_some());
     }
 
     #[test]
@@ -2637,7 +2475,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -2662,7 +2500,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         use crate::types::RelationshipDeduplication;
@@ -2715,7 +2553,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -2766,7 +2604,7 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -2816,7 +2654,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -2869,7 +2707,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=2 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         use crate::types::RelationshipDeduplication;
@@ -2975,7 +2813,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=2 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         use crate::types::RelationshipDeduplication;
@@ -3093,7 +2931,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=2 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let rel_ids = builder.load_relationships_from_parquet(
@@ -3262,7 +3100,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let result = builder.load_relationships_from_parquet(
@@ -3286,7 +3124,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let result = builder.load_relationships_from_parquet(
@@ -3310,7 +3148,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=5 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         let result = builder.load_relationships_from_parquet(
@@ -3361,8 +3199,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -3412,8 +3250,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -3463,8 +3301,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
@@ -3611,7 +3449,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
 
         let rel_ids = builder.load_relationships_from_parquet(
@@ -3719,8 +3557,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
         
         // Should succeed, but Date64 will fall through to the _ case
         // which tries to convert to string, but Date64Array doesn't downcast to StringArray
@@ -3828,21 +3666,18 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         // Request deduplication by email and username, but username doesn't exist
-        // This should clear dedup_columns and skip deduplication for this batch
-        let node_ids = builder.load_nodes_from_parquet(
+        // Should now return SchemaError
+        let result = builder.load_nodes_from_parquet(
             file_path.to_str().unwrap(),
             Some("id"),
             Some(vec!["label"]),
             Some(vec!["email"]),
             Some(vec!["email", "username"]), // username doesn't exist
             None, // default_label
-        ).unwrap();
-        
-        // All nodes should be loaded (deduplication skipped due to missing column)
-        assert_eq!(node_ids.len(), 2);
-        assert_eq!(builder.node_count(), 2);
-        // dedup_map should be empty since deduplication was skipped
-        assert_eq!(builder.dedup_map.len(), 0);
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]
@@ -3992,9 +3827,7 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        // LargeUtf8 is handled in the match, but LargeStringArray doesn't downcast to StringArray
-        // So it falls through to the _ case which tries string conversion
-        // But LargeStringArray doesn't downcast to StringArray, so dedup_key will be None
+        // LargeUtf8 is now properly handled via extract_string_value / extract_value_id
         let node_ids = builder.load_nodes_from_parquet(
             file_path.to_str().unwrap(),
             Some("id"),
@@ -4003,10 +3836,11 @@ mod tests {
             Some(vec!["email"]), // Deduplicate by LargeUtf8
             None, // default_label
         ).unwrap();
-        
-        // Both nodes should be loaded (deduplication won't work due to type mismatch)
-        assert_eq!(node_ids.len(), 2);
-        assert_eq!(builder.node_count(), 2);
+
+        // Both rows have the same email, deduplication should now work with LargeUtf8
+        assert_eq!(node_ids.len(), 1);
+        assert_eq!(builder.node_count(), 1);
+        assert!(builder.dedup_map.len() > 0);
     }
 
     #[test]
@@ -4300,8 +4134,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
         
         use crate::types::RelationshipDeduplication;
         // Request deduplication by type and key props, but all key props are null
@@ -4360,7 +4194,7 @@ mod tests {
         
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Node"]);
+            builder.add_node(Some(i), &["Node"]).unwrap();
         }
         
         use crate::types::RelationshipDeduplication;
@@ -4831,8 +4665,8 @@ mod tests {
         writer.close().unwrap();
 
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         use crate::types::RelationshipDeduplication;
         let rel_ids = builder.load_relationships_from_parquet(
@@ -4897,8 +4731,8 @@ mod tests {
         writer.close().unwrap();
 
         let mut builder = GraphBuilder::new(None, None);
-        builder.add_node(Some(1), &["Node"]);
-        builder.add_node(Some(2), &["Node"]);
+        builder.add_node(Some(1), &["Node"]).unwrap();
+        builder.add_node(Some(2), &["Node"]).unwrap();
 
         use crate::types::RelationshipDeduplication;
         let rel_ids = builder.load_relationships_from_parquet(
@@ -4952,7 +4786,7 @@ mod tests {
 
         let mut builder = GraphBuilder::new(None, None);
         for i in 1..=3 {
-            builder.add_node(Some(i), &["Person"]);
+            builder.add_node(Some(i), &["Person"]).unwrap();
         }
 
         let rel_ids = builder.load_relationships_from_parquet_v2(
@@ -5009,11 +4843,11 @@ mod tests {
 
         // Create nodes with uuid properties
         let mut builder = GraphBuilder::new(None, None);
-        let alice = builder.add_node(None, &["Person"]);
+        let alice = builder.add_node(None, &["Person"]).unwrap();
         builder.set_prop_str(alice, "uuid", "uuid-alice");
-        let bob = builder.add_node(None, &["Person"]);
+        let bob = builder.add_node(None, &["Person"]).unwrap();
         builder.set_prop_str(bob, "uuid", "uuid-bob");
-        let charlie = builder.add_node(None, &["Person"]);
+        let charlie = builder.add_node(None, &["Person"]).unwrap();
         builder.set_prop_str(charlie, "uuid", "uuid-charlie");
 
         // Load relationships using property lookup
@@ -5081,10 +4915,10 @@ mod tests {
 
         // Create nodes with name + city properties
         let mut builder = GraphBuilder::new(None, None);
-        let alice = builder.add_node(None, &["Person"]);
+        let alice = builder.add_node(None, &["Person"]).unwrap();
         builder.set_prop_str(alice, "name", "Alice");
         builder.set_prop_str(alice, "city", "NYC");
-        let bob = builder.add_node(None, &["Person"]);
+        let bob = builder.add_node(None, &["Person"]).unwrap();
         builder.set_prop_str(bob, "name", "Bob");
         builder.set_prop_str(bob, "city", "LA");
 

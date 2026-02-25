@@ -11,6 +11,17 @@ pub enum Direction {
     Both,
 }
 
+#[pymethods]
+impl Direction {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            Direction::Outgoing => "Direction.Outgoing",
+            Direction::Incoming => "Direction.Incoming",
+            Direction::Both => "Direction.Both",
+        }
+    }
+}
+
 impl From<Direction> for rustychickpeas_core::Direction {
     fn from(dir: Direction) -> Self {
         match dir {

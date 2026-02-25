@@ -165,7 +165,7 @@ class TestGraphSnapshotBuilderProperties:
     
     def test_set_props_batch(self, builder):
         """Test setting multiple properties at once"""
-        builder.set_props(0, {"name": "Alice", "age": 30, "active": True})
+        builder.set_node_props(0, {"name": "Alice", "age": 30, "active": True})
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)

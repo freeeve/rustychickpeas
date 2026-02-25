@@ -331,7 +331,7 @@ fn test_load_relationships_from_s3() {
     // First add nodes
     let mut builder = GraphBuilder::new(None, None);
     for i in 1..=5 {
-        builder.add_node(Some(i), &["Node"]);
+        builder.add_node(Some(i), &["Node"]).unwrap();
     }
     
     // Test loading relationships from S3
@@ -387,7 +387,7 @@ fn test_load_relationships_from_s3_with_deduplication() {
     // First add nodes
     let mut builder = GraphBuilder::new(None, None);
     for i in 1..=5 {
-        builder.add_node(Some(i), &["Node"]);
+        builder.add_node(Some(i), &["Node"]).unwrap();
     }
     
     // Test loading relationships with deduplication by type

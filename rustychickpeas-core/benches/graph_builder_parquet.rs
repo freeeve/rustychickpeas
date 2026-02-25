@@ -328,7 +328,7 @@ fn parquet_vs_regular_builder_benchmark(c: &mut Criterion) {
                     let mut builder = GraphBuilder::new(Some(size), Some(0));
                     for i in 0..size {
                         let labels = if i % 2 == 0 { vec!["Person"] } else { vec!["Company"] };
-                        builder.add_node(Some(i as u32), &labels);
+                        builder.add_node(Some(i as u32), &labels).unwrap();
                         builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
                         builder.set_prop_bool(i as u32, "active", i % 2 == 0);
                     }
@@ -413,7 +413,7 @@ fn parquet_vs_regular_with_dedup_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let labels = if i % 2 == 0 { vec!["Person"] } else { vec!["Company"] };
                         let email = format!("user{}@example.com", i / 10);
-                        builder.add_node(Some(i as u32), &labels);
+                        builder.add_node(Some(i as u32), &labels).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                         builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
                     }
@@ -434,7 +434,7 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
         setup_builder.enable_node_deduplication(vec!["email"]);
         for i in 0..*size {
             let email = format!("user{}@example.com", i / 10);
-            setup_builder.add_node(Some(i as u32), &["Person"]);
+            setup_builder.add_node(Some(i as u32), &["Person"]).unwrap();
             setup_builder.set_prop_str(i as u32, "email", &email);
         }
         for i in 0..*size {
@@ -453,7 +453,7 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
                     builder.enable_node_deduplication(vec!["email"]);
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                     }
                     for i in 0..size {
@@ -476,7 +476,7 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
                     let mut builder = GraphBuilder::new(Some(size), Some(size));
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                     }
                     for i in 0..size {

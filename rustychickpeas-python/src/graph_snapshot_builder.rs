@@ -78,6 +78,20 @@ fn parse_node_reference(py_obj: &pyo3::types::PyAny) -> PyResult<rustychickpeas_
 #[pyclass(name = "GraphSnapshotBuilder")]
 pub struct GraphSnapshotBuilder {
     pub(crate) builder: GraphBuilder,
+    pub(crate) version_str: Option<String>,
+    pub(crate) finalized: bool,
+}
+
+impl GraphSnapshotBuilder {
+    /// Check if the builder has been finalized and raise an error if so
+    fn check_not_finalized(&self) -> PyResult<()> {
+        if self.finalized {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "GraphSnapshotBuilder has already been finalized"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -85,12 +99,17 @@ impl GraphSnapshotBuilder {
     #[new]
     #[pyo3(signature = (version=None, capacity_nodes=None, capacity_rels=None))]
     fn new(version: Option<String>, capacity_nodes: Option<usize>, capacity_rels: Option<usize>) -> Self {
-        let builder = if let Some(v) = version {
-            GraphBuilder::with_version(&v, capacity_nodes, capacity_rels)
+        let builder = if let Some(ref v) = version {
+            GraphBuilder::with_version(v, capacity_nodes, capacity_rels)
         } else {
             GraphBuilder::new(capacity_nodes, capacity_rels)
         };
-        Self { builder }
+        Self { builder, version_str: version, finalized: false }
+    }
+
+    fn __repr__(&self) -> String {
+        let version = self.version_str.as_deref().unwrap_or("None");
+        format!("GraphSnapshotBuilder(version={})", version)
     }
 
     /// Add a node with labels
@@ -104,8 +123,10 @@ impl GraphSnapshotBuilder {
     /// The node ID that was used (either the provided ID or the auto-generated one)
     #[pyo3(signature = (labels, *, node_id = None))]
     fn add_node(&mut self, labels: Vec<String>, node_id: Option<u32>) -> PyResult<u32> {
+        self.check_not_finalized()?;
         let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-        Ok(self.builder.add_node(node_id, &label_refs))
+        self.builder.add_node(node_id, &label_refs)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Add a relationship
@@ -115,6 +136,7 @@ impl GraphSnapshotBuilder {
     /// * `v` - End node ID (must be u32)
     /// * `rel_type` - Relationship type string
     fn add_rel(&mut self, u: u32, v: u32, rel_type: String) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.add_rel(u, v, &rel_type);
         Ok(())
     }
@@ -127,6 +149,7 @@ impl GraphSnapshotBuilder {
     /// * `key` - Property key string
     /// * `value` - Property value (str, int, float, or bool)
     fn set_prop(&mut self, node_id: u32, key: String, value: &PyAny) -> PyResult<()> {
+        self.check_not_finalized()?;
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
             self.builder.set_prop_bool(node_id, &key, b);
@@ -158,6 +181,7 @@ impl GraphSnapshotBuilder {
     /// builder.set_node_props(1, {"name": "Alice", "age": 30, "active": True})
     /// ```
     fn set_node_props(&mut self, node_id: u32, properties: &PyDict) -> PyResult<()> {
+        self.check_not_finalized()?;
         for (key_obj, value_obj) in properties {
             let key: String = key_obj.extract()?;
             let value: &PyAny = value_obj;
@@ -182,24 +206,28 @@ impl GraphSnapshotBuilder {
 
     /// Set string property
     fn set_prop_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_prop_str(node_id, &key, &value);
         Ok(())
     }
 
     /// Set i64 property
     fn set_prop_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_prop_i64(node_id, &key, value);
         Ok(())
     }
 
     /// Set f64 property
     fn set_prop_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_prop_f64(node_id, &key, value);
         Ok(())
     }
 
     /// Set boolean property
     fn set_prop_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_prop_bool(node_id, &key, value);
         Ok(())
     }
@@ -207,30 +235,35 @@ impl GraphSnapshotBuilder {
     /// Set string property on a relationship
     /// Finds the relationship by (u, v, rel_type) and sets the property
     fn set_rel_prop_str(&mut self, u: u32, v: u32, rel_type: String, key: String, value: String) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_rel_prop_str(u, v, &rel_type, &key, &value);
         Ok(())
     }
 
     /// Set i64 property on a relationship
     fn set_rel_prop_i64(&mut self, u: u32, v: u32, rel_type: String, key: String, value: i64) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_rel_prop_i64(u, v, &rel_type, &key, value);
         Ok(())
     }
 
     /// Set f64 property on a relationship
     fn set_rel_prop_f64(&mut self, u: u32, v: u32, rel_type: String, key: String, value: f64) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_rel_prop_f64(u, v, &rel_type, &key, value);
         Ok(())
     }
 
     /// Set boolean property on a relationship
     fn set_rel_prop_bool(&mut self, u: u32, v: u32, rel_type: String, key: String, value: bool) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_rel_prop_bool(u, v, &rel_type, &key, value);
         Ok(())
     }
 
     /// Set property on a relationship with automatic type detection
     fn set_rel_prop(&mut self, u: u32, v: u32, rel_type: String, key: String, value: &PyAny) -> PyResult<()> {
+        self.check_not_finalized()?;
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
             self.builder.set_rel_prop_bool(u, v, &rel_type, &key, b);
@@ -261,6 +294,7 @@ impl GraphSnapshotBuilder {
     /// Example:
     ///     builder.set_rel_props(1, 2, "KNOWS", {"since": "2020", "weight": 5})
     fn set_rel_props(&mut self, u: u32, v: u32, rel_type: String, properties: &PyDict) -> PyResult<()> {
+        self.check_not_finalized()?;
         for (key_obj, value_obj) in properties {
             let key: String = key_obj.extract()?;
             let value: &PyAny = value_obj;
@@ -304,6 +338,7 @@ impl GraphSnapshotBuilder {
     ///         (2, 3, "FOLLOWS", {"since": "2021", "active": True}),
     ///     ])
     fn set_rel_props_bulk(&mut self, rel_props: Vec<(u32, u32, String, &PyDict)>) -> PyResult<usize> {
+        self.check_not_finalized()?;
         use rustychickpeas_core::types::PropertyValue;
 
         // Convert Python data to Rust types
@@ -354,6 +389,7 @@ impl GraphSnapshotBuilder {
         unique_properties: Option<Vec<String>>,
         default_label: Option<String>,
     ) -> PyResult<Vec<u32>> {
+        self.check_not_finalized()?;
         let label_cols = label_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let unique_props = unique_properties.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
@@ -394,6 +430,7 @@ impl GraphSnapshotBuilder {
         deduplication: Option<String>,
         key_property_columns: Option<Vec<String>>,
     ) -> PyResult<Vec<(u32, u32)>> {
+        self.check_not_finalized()?;
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let key_cols = key_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let dedup = deduplication.as_ref().and_then(|s| match s.as_str() {
@@ -445,6 +482,7 @@ impl GraphSnapshotBuilder {
         deduplication: Option<String>,
         key_property_columns: Option<Vec<String>>,
     ) -> PyResult<Vec<(u32, u32)>> {
+        self.check_not_finalized()?;
         // Parse start_node reference
         let start_ref = parse_node_reference(start_node)?;
         let end_ref = parse_node_reference(end_node)?;
@@ -498,6 +536,7 @@ impl GraphSnapshotBuilder {
     /// Update property with automatic type detection
     /// Automatically calls the correct type-specific method based on the value type
     fn update_prop(&mut self, node_id: u32, key: String, value: &PyAny) -> PyResult<()> {
+        self.check_not_finalized()?;
         // Check if property exists first
         if self.builder.prop(node_id, &key).is_none() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -524,24 +563,28 @@ impl GraphSnapshotBuilder {
 
     /// Update string property (removes old, sets new)
     fn update_prop_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.update_prop_str(node_id, &key, &value);
         Ok(())
     }
 
     /// Update i64 property
     fn update_prop_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.update_prop_i64(node_id, &key, value);
         Ok(())
     }
 
     /// Update f64 property
     fn update_prop_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.update_prop_f64(node_id, &key, value);
         Ok(())
     }
 
     /// Update boolean property
     fn update_prop_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.update_prop_bool(node_id, &key, value);
         Ok(())
     }
@@ -593,7 +636,9 @@ impl GraphSnapshotBuilder {
     /// Set the version for this snapshot
     /// This version will be stored with the snapshot when finalized
     fn set_version(&mut self, version: String) -> PyResult<()> {
+        self.check_not_finalized()?;
         self.builder.set_version(&version);
+        self.version_str = Some(version);
         Ok(())
     }
 
@@ -605,7 +650,8 @@ impl GraphSnapshotBuilder {
     ///   If None, all properties will be indexed lazily on first access (saves memory).
     #[pyo3(signature = (index_properties=None))]
     fn finalize(&mut self, index_properties: Option<Vec<String>>) -> PyResult<GraphSnapshot> {
-        // We need to take ownership to finalize, so we'll use replace
+        self.check_not_finalized()?;
+        self.finalized = true;
         let builder = std::mem::replace(&mut self.builder, GraphBuilder::new(None, None));
         
         // Convert Vec<String> to Vec<&str> for the Rust API
@@ -632,6 +678,8 @@ impl GraphSnapshotBuilder {
     ///   If None, all properties will be indexed lazily on first access (saves memory).
     #[pyo3(signature = (manager, index_properties=None))]
     fn finalize_into(&mut self, manager: &RustyChickpeas, index_properties: Option<Vec<String>>) -> PyResult<()> {
+        self.check_not_finalized()?;
+        self.finalized = true;
         let builder = std::mem::replace(&mut self.builder, GraphBuilder::new(None, None));
         
         // Convert Vec<String> to Vec<&str> for the Rust API

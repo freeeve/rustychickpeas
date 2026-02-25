@@ -40,7 +40,16 @@ impl RustyChickpeas {
             capacity_nodes,
             capacity_rels,
         );
-        GraphSnapshotBuilder { builder }
+        GraphSnapshotBuilder { builder, version_str: version, finalized: false }
+    }
+
+    fn __repr__(&self) -> String {
+        let versions = self.manager.versions();
+        format!("RustyChickpeas(versions=[{}])", versions.join(", "))
+    }
+
+    fn __len__(&self) -> usize {
+        self.manager.len()
     }
 
     /// Get a graph snapshot by version

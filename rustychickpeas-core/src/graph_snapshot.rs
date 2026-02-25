@@ -4,7 +4,7 @@
 //! and columnar storage for properties, providing maximum query performance.
 
 use crate::bitmap::NodeSet;
-use crate::types::{Label, NodeId, PropertyKey, RelationshipType};
+use crate::types::{Direction, Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
 use std::sync::Mutex;
@@ -96,8 +96,39 @@ impl Column {
     }
 
     /// Get property value for a node (tries dense first, then sparse)
+    #[inline]
     pub fn get(&self, node_id: NodeId) -> Option<ValueId> {
         self.get_dense(node_id).or_else(|| self.get_sparse(node_id))
+    }
+
+    /// Iterate over all (NodeId, ValueId) entries in this column
+    pub fn iter_entries(&self) -> Box<dyn Iterator<Item = (NodeId, ValueId)> + '_> {
+        match self {
+            Column::DenseI64(col) => Box::new(
+                col.iter().enumerate().map(|(i, &v)| (i as NodeId, ValueId::I64(v)))
+            ),
+            Column::DenseF64(col) => Box::new(
+                col.iter().enumerate().map(|(i, &v)| (i as NodeId, ValueId::from_f64(v)))
+            ),
+            Column::DenseBool(col) => Box::new(
+                col.iter().enumerate().map(|(i, b)| (i as NodeId, ValueId::Bool(*b)))
+            ),
+            Column::DenseStr(col) => Box::new(
+                col.iter().enumerate().map(|(i, &v)| (i as NodeId, ValueId::Str(v)))
+            ),
+            Column::SparseI64(col) => Box::new(
+                col.iter().map(|&(id, v)| (id, ValueId::I64(v)))
+            ),
+            Column::SparseF64(col) => Box::new(
+                col.iter().map(|&(id, v)| (id, ValueId::from_f64(v)))
+            ),
+            Column::SparseBool(col) => Box::new(
+                col.iter().map(|&(id, v)| (id, ValueId::Bool(v)))
+            ),
+            Column::SparseStr(col) => Box::new(
+                col.iter().map(|&(id, v)| (id, ValueId::Str(v)))
+            ),
+        }
     }
 }
 
@@ -242,98 +273,28 @@ impl IntoValueId for String {
 
 impl GraphSnapshot {
     /// Build the property index for a specific key by scanning the column
-    /// This is used in tests and as a convenience wrapper
     #[cfg(test)]
     fn build_property_index_for_key(column: &Column) -> HashMap<ValueId, NodeSet> {
         Self::build_property_index_for_key_and_label(column, None)
     }
-    
-    /// Build the property index for a specific key and label by scanning the column
-    /// If label_nodes is Some, only nodes in that set are included in the index
-    /// If label_nodes is None, all nodes are included (backward compatibility)
+
+    /// Build the property index for a specific key and label using Column::iter_entries.
+    /// If label_nodes is Some, only nodes in that set are included in the index.
     fn build_property_index_for_key_and_label(column: &Column, label_nodes: Option<&NodeSet>) -> HashMap<ValueId, NodeSet> {
-        use roaring::RoaringBitmap;
         let mut key_index: HashMap<ValueId, Vec<NodeId>> = HashMap::new();
-        
-        // Helper to check if a node should be included
-        let should_include = |node_id: NodeId| -> bool {
-            label_nodes.map_or(true, |nodes| nodes.contains(node_id))
-        };
-        
-        // Scan the column and group nodes by value
-        match column {
-            Column::DenseI64(col) => {
-                for (node_id, &val) in col.iter().enumerate() {
-                    let node_id = node_id as u32;
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::I64(val)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::DenseF64(col) => {
-                for (node_id, &val) in col.iter().enumerate() {
-                    let node_id = node_id as u32;
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::from_f64(val)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::DenseBool(col) => {
-                for (node_id, val) in col.iter().enumerate() {
-                    let node_id = node_id as u32;
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::Bool(*val)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::DenseStr(col) => {
-                for (node_id, &str_id) in col.iter().enumerate() {
-                    let node_id = node_id as u32;
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::Str(str_id)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::SparseI64(col) => {
-                for &(node_id, val) in col.iter() {
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::I64(val)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::SparseF64(col) => {
-                for &(node_id, val) in col.iter() {
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::from_f64(val)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::SparseBool(col) => {
-                for &(node_id, val) in col.iter() {
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::Bool(val)).or_default().push(node_id);
-                    }
-                }
-            }
-            Column::SparseStr(col) => {
-                for &(node_id, str_id) in col.iter() {
-                    if should_include(node_id) {
-                        key_index.entry(ValueId::Str(str_id)).or_default().push(node_id);
-                    }
-                }
+
+        for (node_id, val_id) in column.iter_entries() {
+            if label_nodes.map_or(true, |nodes| nodes.contains(node_id)) {
+                key_index.entry(val_id).or_default().push(node_id);
             }
         }
-        
-        // Convert Vec<NodeId> to NodeSet (RoaringBitmap)
-        let mut key_index_final: HashMap<ValueId, NodeSet> = HashMap::new();
-        for (val_id, mut node_ids) in key_index {
+
+        key_index.into_iter().map(|(val_id, mut node_ids)| {
             node_ids.sort_unstable();
             node_ids.dedup();
             let bitmap = RoaringBitmap::from_sorted_iter(node_ids.into_iter()).unwrap();
-            key_index_final.insert(val_id, NodeSet::new(bitmap));
-        }
-        
-        key_index_final
+            (val_id, NodeSet::new(bitmap))
+        }).collect()
     }
 
     /// Create a new empty snapshot
@@ -357,7 +318,128 @@ impl GraphSnapshot {
         }
     }
 
+    /// Resolve relationship type strings to internal IDs. Returns None if the input
+    /// is None or all strings are unknown (same semantics as "no filter").
+    fn resolve_rel_types(&self, rel_types: Option<&[&str]>) -> Option<Vec<RelationshipType>> {
+        rel_types.and_then(|types| {
+            let ids: Vec<RelationshipType> = types
+                .iter()
+                .filter_map(|s| self.relationship_type_from_str(s))
+                .collect();
+            if ids.is_empty() { None } else { Some(ids) }
+        })
+    }
+
+    /// Generic neighbor lookup from a CSR direction (offsets, nbrs, types).
+    fn neighbors_by_type_from_csr(
+        offsets: &[u32],
+        nbrs: &[NodeId],
+        types: &[RelationshipType],
+        node_id: NodeId,
+        allowed_types: Option<&std::collections::HashSet<RelationshipType>>,
+    ) -> Vec<NodeId> {
+        if node_id as usize >= offsets.len().saturating_sub(1) {
+            return Vec::new();
+        }
+        let start = offsets[node_id as usize] as usize;
+        let end = offsets[node_id as usize + 1] as usize;
+        match allowed_types {
+            None => nbrs[start..end].to_vec(),
+            Some(allowed) => nbrs[start..end].iter()
+                .zip(types[start..end].iter())
+                .filter_map(|(&nbr, &rt)| if allowed.contains(&rt) { Some(nbr) } else { None })
+                .collect(),
+        }
+    }
+
+    /// Generic neighbor-with-positions lookup from a CSR direction.
+    fn neighbors_with_positions_from_csr(
+        offsets: &[u32],
+        nbrs: &[NodeId],
+        types: &[RelationshipType],
+        node_id: NodeId,
+        allowed_types: Option<&std::collections::HashSet<RelationshipType>>,
+    ) -> Vec<(NodeId, RelationshipType, u32)> {
+        if node_id as usize >= offsets.len().saturating_sub(1) {
+            return Vec::new();
+        }
+        let start = offsets[node_id as usize] as usize;
+        let end = offsets[node_id as usize + 1] as usize;
+        let iter = nbrs[start..end].iter()
+            .zip(types[start..end].iter())
+            .enumerate()
+            .map(|(idx, (&nbr, &rt))| (nbr, rt, (start + idx) as u32));
+        match allowed_types {
+            None => iter.collect(),
+            Some(allowed) => iter.filter(|(_, rt, _)| allowed.contains(rt)).collect(),
+        }
+    }
+
+    /// Get neighbors for a direction using a pre-computed allowed-types set.
+    fn get_neighbors_for_direction(
+        &self,
+        node_id: NodeId,
+        direction: Direction,
+        allowed_types: &Option<std::collections::HashSet<RelationshipType>>,
+    ) -> Vec<NodeId> {
+        let at = allowed_types.as_ref();
+        match direction {
+            Direction::Outgoing => Self::neighbors_by_type_from_csr(
+                &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+            ),
+            Direction::Incoming => Self::neighbors_by_type_from_csr(
+                &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+            ),
+            Direction::Both => {
+                let mut both = Self::neighbors_by_type_from_csr(
+                    &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+                );
+                both.extend(Self::neighbors_by_type_from_csr(
+                    &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+                ));
+                both
+            }
+        }
+    }
+
+    /// Get neighbors with CSR positions for a direction using a pre-computed allowed-types set.
+    fn get_neighbors_with_positions_for_direction(
+        &self,
+        node_id: NodeId,
+        direction: Direction,
+        allowed_types: &Option<std::collections::HashSet<RelationshipType>>,
+    ) -> Vec<(NodeId, RelationshipType, u32)> {
+        let at = allowed_types.as_ref();
+        match direction {
+            Direction::Outgoing => Self::neighbors_with_positions_from_csr(
+                &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+            ),
+            Direction::Incoming => Self::neighbors_with_positions_from_csr(
+                &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+            ),
+            Direction::Both => {
+                let mut both = Self::neighbors_with_positions_from_csr(
+                    &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+                );
+                both.extend(Self::neighbors_with_positions_from_csr(
+                    &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+                ));
+                both
+            }
+        }
+    }
+
+    /// Get the reversed direction for backward BFS passes
+    fn reverse_direction(direction: Direction) -> Direction {
+        match direction {
+            Direction::Outgoing => Direction::Incoming,
+            Direction::Incoming => Direction::Outgoing,
+            Direction::Both => Direction::Both,
+        }
+    }
+
     /// Get outgoing neighbors of a node (CSR format)
+    #[inline]
     pub fn out_neighbors(&self, node_id: NodeId) -> &[NodeId] {
         if node_id as usize >= self.out_offsets.len().saturating_sub(1) {
             return &[];
@@ -368,6 +450,7 @@ impl GraphSnapshot {
     }
 
     /// Get incoming neighbors of a node (CSR format)
+    #[inline]
     pub fn in_neighbors(&self, node_id: NodeId) -> &[NodeId] {
         if node_id as usize >= self.in_offsets.len().saturating_sub(1) {
             return &[];
@@ -404,39 +487,14 @@ impl GraphSnapshot {
     /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
     pub fn out_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
-        let rel_type_ids: Vec<RelationshipType> = rel_types.iter()
+        let ids: Vec<RelationshipType> = rel_types.iter()
             .filter_map(|s| self.relationship_type_from_str(s))
             .collect();
-        self.out_neighbors_by_type_id(node_id, &rel_type_ids)
-    }
-
-    /// Get outgoing neighbors filtered by relationship types (internal ID-based version)
-    fn out_neighbors_by_type_id(&self, node_id: NodeId, rel_types: &[RelationshipType]) -> Vec<NodeId> {
-        if node_id as usize >= self.out_offsets.len().saturating_sub(1) {
-            return Vec::new();
-        }
-        let start = self.out_offsets[node_id as usize] as usize;
-        let end = self.out_offsets[node_id as usize + 1] as usize;
-        
-        if rel_types.is_empty() {
-            // No filter, return all
-            return self.out_nbrs[start..end].to_vec();
-        }
-        
-        // Build a set of allowed types for fast lookup
-        let allowed_types: std::collections::HashSet<RelationshipType> = rel_types.iter().copied().collect();
-        
-        self.out_nbrs[start..end]
-            .iter()
-            .zip(self.out_types[start..end].iter())
-            .filter_map(|(&nbr, &rel_type)| {
-                if allowed_types.contains(&rel_type) {
-                    Some(nbr)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        let allowed: Option<std::collections::HashSet<RelationshipType>> =
+            if ids.is_empty() { None } else { Some(ids.into_iter().collect()) };
+        Self::neighbors_by_type_from_csr(
+            &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, allowed.as_ref(),
+        )
     }
 
     /// Get incoming neighbors filtered by relationship types
@@ -466,39 +524,14 @@ impl GraphSnapshot {
     /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
     pub fn in_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
-        let rel_type_ids: Vec<RelationshipType> = rel_types.iter()
+        let ids: Vec<RelationshipType> = rel_types.iter()
             .filter_map(|s| self.relationship_type_from_str(s))
             .collect();
-        self.in_neighbors_by_type_id(node_id, &rel_type_ids)
-    }
-
-    /// Get incoming neighbors filtered by relationship types (internal ID-based version)
-    fn in_neighbors_by_type_id(&self, node_id: NodeId, rel_types: &[RelationshipType]) -> Vec<NodeId> {
-        if node_id as usize >= self.in_offsets.len().saturating_sub(1) {
-            return Vec::new();
-        }
-        let start = self.in_offsets[node_id as usize] as usize;
-        let end = self.in_offsets[node_id as usize + 1] as usize;
-        
-        if rel_types.is_empty() {
-            // No filter, return all
-            return self.in_nbrs[start..end].to_vec();
-        }
-        
-        // Build a set of allowed types for fast lookup
-        let allowed_types: std::collections::HashSet<RelationshipType> = rel_types.iter().copied().collect();
-        
-        self.in_nbrs[start..end]
-            .iter()
-            .zip(self.in_types[start..end].iter())
-            .filter_map(|(&nbr, &rel_type)| {
-                if allowed_types.contains(&rel_type) {
-                    Some(nbr)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        let allowed: Option<std::collections::HashSet<RelationshipType>> =
+            if ids.is_empty() { None } else { Some(ids.into_iter().collect()) };
+        Self::neighbors_by_type_from_csr(
+            &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, allowed.as_ref(),
+        )
     }
 
     /// Check if one node can reach another via traversal
@@ -546,87 +579,41 @@ impl GraphSnapshot {
         &self,
         from: NodeId,
         to: NodeId,
-        direction: crate::types::Direction,
+        direction: Direction,
         rel_types: Option<&[&str]>,
         max_depth: Option<u32>,
     ) -> bool {
-        // Early exit: same node
         if from == to {
             return true;
         }
 
-        // Convert relationship type strings to IDs if provided
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.and_then(|types| {
-            let ids: Vec<RelationshipType> = types
-                .iter()
-                .filter_map(|s| self.relationship_type_from_str(s))
-                .collect();
-            if ids.is_empty() {
-                None
-            } else {
-                Some(ids)
-            }
-        });
+        // Pre-compute HashSet once for the entire BFS
+        let allowed_types: Option<std::collections::HashSet<RelationshipType>> =
+            self.resolve_rel_types(rel_types).map(|ids| ids.into_iter().collect());
 
-        // BFS: queue of (node, depth)
         let mut queue = std::collections::VecDeque::new();
         queue.push_back((from, 0u32));
-        
-        // Track visited nodes to avoid cycles (using RoaringBitmap for efficiency)
         let mut visited = RoaringBitmap::new();
         visited.insert(from);
 
         while let Some((current, depth)) = queue.pop_front() {
-            // Check depth limit
             if let Some(max) = max_depth {
                 if depth >= max {
                     continue;
                 }
             }
 
-            // Get neighbors based on direction and relationship type filter
-            let neighbors = match direction {
-                crate::types::Direction::Outgoing => {
-                    if let Some(ref type_ids) = rel_type_ids {
-                        self.out_neighbors_by_type_id(current, type_ids)
-                    } else {
-                        self.out_neighbors(current).to_vec()
-                    }
-                }
-                crate::types::Direction::Incoming => {
-                    if let Some(ref type_ids) = rel_type_ids {
-                        self.in_neighbors_by_type_id(current, type_ids)
-                    } else {
-                        self.in_neighbors(current).to_vec()
-                    }
-                }
-                crate::types::Direction::Both => {
-                    let mut both = Vec::new();
-                    if let Some(ref type_ids) = rel_type_ids {
-                        both.extend(self.out_neighbors_by_type_id(current, type_ids));
-                        both.extend(self.in_neighbors_by_type_id(current, type_ids));
-                    } else {
-                        both.extend(self.out_neighbors(current));
-                        both.extend(self.in_neighbors(current));
-                    }
-                    both
-                }
-            };
-
-            // Check each neighbor
-            for neighbor in neighbors {
+            for neighbor in self.get_neighbors_for_direction(current, direction, &allowed_types) {
                 if neighbor == to {
-                    return true; // Found target!
+                    return true;
                 }
-
-                // Add to queue if not visited
                 if visited.insert(neighbor) {
                     queue.push_back((neighbor, depth + 1));
                 }
             }
         }
 
-        false // Target not reachable
+        false
     }
 
     /// Bidirectional BFS to find paths between source and target node sets
@@ -689,11 +676,64 @@ impl GraphSnapshot {
     ///     &source, &target, Direction::Both, None, None, None, None
     /// );
     /// ```
+    /// BFS expand step shared by forward and backward passes of bidirectional_bfs.
+    fn bfs_expand_step<NF, RF>(
+        &self,
+        queue: &mut std::collections::VecDeque<(NodeId, u32)>,
+        visited_nodes: &mut RoaringBitmap,
+        visited_rels: &mut RoaringBitmap,
+        other_visited_nodes: &RoaringBitmap,
+        direction: Direction,
+        allowed_types: &Option<std::collections::HashSet<RelationshipType>>,
+        node_filter: &Option<NF>,
+        rel_filter: &Option<RF>,
+        max_depth: Option<u32>,
+        is_backward: bool,
+    ) where
+        NF: Fn(NodeId, &GraphSnapshot) -> bool,
+        RF: Fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool,
+    {
+        if queue.is_empty() {
+            return;
+        }
+        let current_level_size = queue.len();
+        for _ in 0..current_level_size {
+            let (current, depth) = queue.pop_front().unwrap();
+            if let Some(max) = max_depth {
+                if depth >= max {
+                    continue;
+                }
+            }
+            let neighbors = self.get_neighbors_with_positions_for_direction(current, direction, allowed_types);
+            for (neighbor, rel_type, csr_pos) in neighbors {
+                if let Some(ref rf) = rel_filter {
+                    let (from, to) = if is_backward { (neighbor, current) } else { (current, neighbor) };
+                    if !rf(from, to, rel_type, csr_pos, self) {
+                        continue;
+                    }
+                }
+                if other_visited_nodes.contains(neighbor) {
+                    visited_rels.insert(csr_pos);
+                    if visited_nodes.insert(neighbor) {
+                        if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
+                            queue.push_back((neighbor, depth + 1));
+                        }
+                    }
+                } else if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
+                    if visited_nodes.insert(neighbor) {
+                        visited_rels.insert(csr_pos);
+                        queue.push_back((neighbor, depth + 1));
+                    }
+                }
+            }
+        }
+    }
+
     pub fn bidirectional_bfs<NF, RF>(
         &self,
         source_nodes: &NodeSet,
         target_nodes: &NodeSet,
-        direction: crate::types::Direction,
+        direction: Direction,
         rel_types: Option<&[&str]>,
         node_filter: Option<NF>,
         rel_filter: Option<RF>,
@@ -703,30 +743,17 @@ impl GraphSnapshot {
         NF: Fn(NodeId, &GraphSnapshot) -> bool,
         RF: Fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool,
     {
-        // Convert relationship type strings to IDs if provided
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.and_then(|types| {
-            let ids: Vec<RelationshipType> = types
-                .iter()
-                .filter_map(|s| self.relationship_type_from_str(s))
-                .collect();
-            if ids.is_empty() {
-                None
-            } else {
-                Some(ids)
-            }
-        });
+        // Pre-compute allowed types HashSet once for the entire BFS
+        let allowed_types: Option<std::collections::HashSet<RelationshipType>> =
+            self.resolve_rel_types(rel_types).map(|ids| ids.into_iter().collect());
 
-        // Track visited nodes and relationships from forward and backward searches
         let mut forward_visited_nodes = RoaringBitmap::new();
         let mut forward_visited_rels = RoaringBitmap::new();
         let mut backward_visited_nodes = RoaringBitmap::new();
         let mut backward_visited_rels = RoaringBitmap::new();
-
-        // Initialize queues: (node_id, depth)
         let mut forward_queue = std::collections::VecDeque::new();
         let mut backward_queue = std::collections::VecDeque::new();
 
-        // Initialize forward search from source nodes
         for node_id in source_nodes.iter() {
             if node_filter.as_ref().map_or(true, |f| f(node_id, self)) {
                 forward_visited_nodes.insert(node_id);
@@ -734,7 +761,6 @@ impl GraphSnapshot {
             }
         }
 
-        // Initialize backward search from target nodes
         for node_id in target_nodes.iter() {
             if node_filter.as_ref().map_or(true, |f| f(node_id, self)) {
                 backward_visited_nodes.insert(node_id);
@@ -742,156 +768,35 @@ impl GraphSnapshot {
             }
         }
 
-        // Early exit if source and target sets overlap
         let intersection = &forward_visited_nodes & &backward_visited_nodes;
         if !intersection.is_empty() {
-            // Return intersection of nodes and empty rel set (direct connection)
             return (intersection, RoaringBitmap::new());
         }
 
-        // Alternate between forward and backward BFS until they meet or queues are empty
+        let backward_direction = Self::reverse_direction(direction);
+
         while !forward_queue.is_empty() || !backward_queue.is_empty() {
-            // Forward BFS step
-            if !forward_queue.is_empty() {
-                let current_level_size = forward_queue.len();
-                for _ in 0..current_level_size {
-                    let (current, depth) = forward_queue.pop_front().unwrap();
-                    
-                    // Check depth limit
-                    if let Some(max) = max_depth {
-                        if depth >= max {
-                            continue;
-                        }
-                    }
-
-                    // Get neighbors with CSR positions based on direction
-                    let neighbors = match direction {
-                        crate::types::Direction::Outgoing => {
-                            self.get_outgoing_neighbors_with_positions(current, &rel_type_ids)
-                        }
-                        crate::types::Direction::Incoming => {
-                            self.get_incoming_neighbors_with_positions(current, &rel_type_ids)
-                        }
-                        crate::types::Direction::Both => {
-                            let mut both = self.get_outgoing_neighbors_with_positions(current, &rel_type_ids);
-                            both.extend(self.get_incoming_neighbors_with_positions(current, &rel_type_ids));
-                            both
-                        }
-                    };
-                    
-                    for (neighbor, rel_type, csr_pos) in neighbors {
-                        // Check relationship filter
-                        if let Some(ref rf) = rel_filter {
-                            if !rf(current, neighbor, rel_type, csr_pos, self) {
-                                continue;
-                            }
-                        }
-
-                        // Check if we've met the backward search
-                        if backward_visited_nodes.contains(neighbor) {
-                            // Found intersection! Mark this relationship and node
-                            forward_visited_rels.insert(csr_pos);
-                            // Continue exploring from this node to find all paths (if not already visited)
-                            if forward_visited_nodes.insert(neighbor) {
-                                if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                                    forward_queue.push_back((neighbor, depth + 1));
-                                }
-                            }
-                        } else {
-                            // Check node filter and add to queue
-                            if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                                if forward_visited_nodes.insert(neighbor) {
-                                    // Only track relationship if we're continuing traversal
-                                    forward_visited_rels.insert(csr_pos);
-                                    forward_queue.push_back((neighbor, depth + 1));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Backward BFS step
-            if !backward_queue.is_empty() {
-                let current_level_size = backward_queue.len();
-                for _ in 0..current_level_size {
-                    let (current, depth) = backward_queue.pop_front().unwrap();
-                    
-                    // Check depth limit
-                    if let Some(max) = max_depth {
-                        if depth >= max {
-                            continue;
-                        }
-                    }
-
-                    // Get neighbors with CSR positions based on direction (backward uses opposite)
-                    let neighbors = match direction {
-                        crate::types::Direction::Outgoing => {
-                            // Backward search uses incoming (reverse of forward)
-                            self.get_incoming_neighbors_with_positions(current, &rel_type_ids)
-                        }
-                        crate::types::Direction::Incoming => {
-                            // Backward search uses outgoing (reverse of forward)
-                            self.get_outgoing_neighbors_with_positions(current, &rel_type_ids)
-                        }
-                        crate::types::Direction::Both => {
-                            // Both directions for backward search too
-                            let mut both = self.get_outgoing_neighbors_with_positions(current, &rel_type_ids);
-                            both.extend(self.get_incoming_neighbors_with_positions(current, &rel_type_ids));
-                            both
-                        }
-                    };
-                    
-                    for (neighbor, rel_type, csr_pos) in neighbors {
-                        // Check relationship filter
-                        if let Some(ref rf) = rel_filter {
-                            if !rf(neighbor, current, rel_type, csr_pos, self) {
-                                continue;
-                            }
-                        }
-
-                        // Check if we've met the forward search
-                        if forward_visited_nodes.contains(neighbor) {
-                            // Found intersection! Mark this relationship and node
-                            backward_visited_rels.insert(csr_pos);
-                            // Continue exploring from this node to find all paths (if not already visited)
-                            if backward_visited_nodes.insert(neighbor) {
-                                if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                                    backward_queue.push_back((neighbor, depth + 1));
-                                }
-                            }
-                        } else {
-                            // Check node filter and add to queue
-                            if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                                if backward_visited_nodes.insert(neighbor) {
-                                    // Only track relationship if we're continuing traversal
-                                    backward_visited_rels.insert(csr_pos);
-                                    backward_queue.push_back((neighbor, depth + 1));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Continue until both queues are empty to explore all paths
-            // Don't break early - we want to find all nodes on all paths
+            self.bfs_expand_step(
+                &mut forward_queue, &mut forward_visited_nodes, &mut forward_visited_rels,
+                &backward_visited_nodes, direction, &allowed_types,
+                &node_filter, &rel_filter, max_depth, false,
+            );
+            self.bfs_expand_step(
+                &mut backward_queue, &mut backward_visited_nodes, &mut backward_visited_rels,
+                &forward_visited_nodes, backward_direction, &allowed_types,
+                &node_filter, &rel_filter, max_depth, true,
+            );
         }
 
-        // Return intersection of nodes and union of relationships
-        // The intersection includes all nodes that are reachable from both source and target,
-        // which are the nodes on paths between them
-        // The relationship union includes all relationships visited from both sides
-        // that could be on paths between source and target
         let intersection_nodes = &forward_visited_nodes & &backward_visited_nodes;
-        let union_rels = &forward_visited_rels | &backward_visited_rels;
-        
-        // If intersection is empty, there's no path between source and target
-        // Return empty results
         if intersection_nodes.is_empty() {
             return (RoaringBitmap::new(), RoaringBitmap::new());
         }
-        
+
+        // NOTE: union_rels includes all relationships visited from both sides,
+        // not just those connecting nodes in the intersection. Filtering to only
+        // path-relevant relationships would require path reconstruction.
+        let union_rels = &forward_visited_rels | &backward_visited_rels;
         (intersection_nodes, union_rels)
     }
 
@@ -964,7 +869,7 @@ impl GraphSnapshot {
     pub fn bfs<NF, RF>(
         &self,
         start_nodes: &NodeSet,
-        direction: crate::types::Direction,
+        direction: Direction,
         rel_types: Option<&[&str]>,
         node_filter: Option<NF>,
         rel_filter: Option<RF>,
@@ -974,29 +879,15 @@ impl GraphSnapshot {
         NF: Fn(NodeId, &GraphSnapshot) -> bool,
         RF: Fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool,
     {
-        // Convert relationship type strings to IDs if provided
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.and_then(|types| {
-            let ids: Vec<RelationshipType> = types
-                .iter()
-                .filter_map(|s| self.relationship_type_from_str(s))
-                .collect();
-            if ids.is_empty() {
-                None
-            } else {
-                Some(ids)
-            }
-        });
+        // Pre-compute allowed types HashSet once for the entire BFS
+        let allowed_types: Option<std::collections::HashSet<RelationshipType>> =
+            self.resolve_rel_types(rel_types).map(|ids| ids.into_iter().collect());
 
-        // BFS queue: (node_id, depth)
         let mut queue = std::collections::VecDeque::new();
-        
-        // Track visited nodes and relationships
         let mut visited_nodes = RoaringBitmap::new();
         let mut visited_rels = RoaringBitmap::new();
 
-        // Initialize queue with starting nodes
-        let start_node_ids: Vec<NodeId> = start_nodes.iter().collect();
-        for node_id in start_node_ids {
+        for node_id in start_nodes.iter() {
             if node_filter.as_ref().map_or(true, |f| f(node_id, self)) {
                 if visited_nodes.insert(node_id) {
                     queue.push_back((node_id, 0u32));
@@ -1004,46 +895,24 @@ impl GraphSnapshot {
             }
         }
 
-        // BFS traversal
         while let Some((current, depth)) = queue.pop_front() {
-            // Check depth limit
             if let Some(max) = max_depth {
                 if depth >= max {
                     continue;
                 }
             }
 
-            // Get neighbors with CSR positions based on direction
-            let neighbors = match direction {
-                crate::types::Direction::Outgoing => {
-                    self.get_outgoing_neighbors_with_positions(current, &rel_type_ids)
-                }
-                crate::types::Direction::Incoming => {
-                    self.get_incoming_neighbors_with_positions(current, &rel_type_ids)
-                }
-                crate::types::Direction::Both => {
-                    let mut both = self.get_outgoing_neighbors_with_positions(current, &rel_type_ids);
-                    both.extend(self.get_incoming_neighbors_with_positions(current, &rel_type_ids));
-                    both
-                }
-            };
+            let neighbors = self.get_neighbors_with_positions_for_direction(current, direction, &allowed_types);
 
             for (neighbor, rel_type, csr_pos) in neighbors {
-                // Check relationship filter
                 if let Some(ref rf) = rel_filter {
-                    let from = current;
-                    let to = neighbor;
-                    if !rf(from, to, rel_type, csr_pos, self) {
+                    if !rf(current, neighbor, rel_type, csr_pos, self) {
                         continue;
                     }
                 }
 
-                // Check node filter and add to visited/queue
                 if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                    // Mark relationship as visited
                     visited_rels.insert(csr_pos);
-                    
-                    // Add node to visited and queue if not already visited
                     if visited_nodes.insert(neighbor) {
                         queue.push_back((neighbor, depth + 1));
                     }
@@ -1052,84 +921,6 @@ impl GraphSnapshot {
         }
 
         (visited_nodes, visited_rels)
-    }
-
-    /// Get outgoing neighbors with their CSR positions and relationship types
-    /// Returns Vec of (neighbor_node_id, rel_type, csr_position)
-    fn get_outgoing_neighbors_with_positions(
-        &self,
-        node_id: NodeId,
-        rel_type_ids: &Option<Vec<RelationshipType>>,
-    ) -> Vec<(NodeId, RelationshipType, u32)> {
-        if node_id as usize >= self.out_offsets.len().saturating_sub(1) {
-            return Vec::new();
-        }
-        let start = self.out_offsets[node_id as usize] as usize;
-        let end = self.out_offsets[node_id as usize + 1] as usize;
-        
-        let mut result = Vec::new();
-        
-        if let Some(ref allowed_types) = rel_type_ids {
-            let allowed_set: std::collections::HashSet<RelationshipType> = allowed_types.iter().copied().collect();
-            for (idx, (&nbr, &rel_type)) in self.out_nbrs[start..end]
-                .iter()
-                .zip(self.out_types[start..end].iter())
-                .enumerate()
-            {
-                if allowed_set.contains(&rel_type) {
-                    result.push((nbr, rel_type, (start + idx) as u32));
-                }
-            }
-        } else {
-            for (idx, (&nbr, &rel_type)) in self.out_nbrs[start..end]
-                .iter()
-                .zip(self.out_types[start..end].iter())
-                .enumerate()
-            {
-                result.push((nbr, rel_type, (start + idx) as u32));
-            }
-        }
-        
-        result
-    }
-
-    /// Get incoming neighbors with their CSR positions and relationship types
-    /// Returns Vec of (neighbor_node_id, rel_type, csr_position)
-    fn get_incoming_neighbors_with_positions(
-        &self,
-        node_id: NodeId,
-        rel_type_ids: &Option<Vec<RelationshipType>>,
-    ) -> Vec<(NodeId, RelationshipType, u32)> {
-        if node_id as usize >= self.in_offsets.len().saturating_sub(1) {
-            return Vec::new();
-        }
-        let start = self.in_offsets[node_id as usize] as usize;
-        let end = self.in_offsets[node_id as usize + 1] as usize;
-        
-        let mut result = Vec::new();
-        
-        if let Some(ref allowed_types) = rel_type_ids {
-            let allowed_set: std::collections::HashSet<RelationshipType> = allowed_types.iter().copied().collect();
-            for (idx, (&nbr, &rel_type)) in self.in_nbrs[start..end]
-                .iter()
-                .zip(self.in_types[start..end].iter())
-                .enumerate()
-            {
-                if allowed_set.contains(&rel_type) {
-                    result.push((nbr, rel_type, (start + idx) as u32));
-                }
-            }
-        } else {
-            for (idx, (&nbr, &rel_type)) in self.in_nbrs[start..end]
-                .iter()
-                .zip(self.in_types[start..end].iter())
-                .enumerate()
-            {
-                result.push((nbr, rel_type, (start + idx) as u32));
-            }
-        }
-        
-        result
     }
 
     /// Get nodes with a specific label
@@ -1198,29 +989,27 @@ impl GraphSnapshot {
         self.nodes_with_property_id(label_id, key_id, value_id)
     }
 
-    /// Get nodes with a specific property value (internal ID-based version)
+    /// Get nodes with a specific property value (internal ID-based version).
+    /// Uses check-release-build-reacquire pattern to avoid holding the mutex during index build.
     fn nodes_with_property_id(&self, label: Label, key: PropertyKey, value: ValueId) -> Option<NodeSet> {
-        // Lock the index
-        let mut index = self.prop_index.lock().unwrap();
-        
-        // Check if index for this (label, key) combination already exists
         let index_key = (label, key);
-        if !index.contains_key(&index_key) {
-            // Build index for this (label, key) combination by scanning the column
-            // First, get all nodes with this label
-            let label_nodes = self.nodes_with_label_id(label)?;
-            
-            // Get the property column
-            let column = self.columns.get(&key)?;
-            
-            // Build index only for nodes with this label
-            let key_index_final = Self::build_property_index_for_key_and_label(column, Some(&label_nodes));
-            // Store the index for this (label, key) combination
-            index.insert(index_key, key_index_final);
+
+        // Check if the index already exists (short lock)
+        {
+            let index = self.prop_index.lock().unwrap();
+            if let Some(key_index) = index.get(&index_key) {
+                return key_index.get(&value).cloned();
+            }
         }
-        
-        // Look up the value in the index
-        index.get(&index_key)?.get(&value).cloned()
+        // Release lock, build index outside the lock
+        let label_nodes = self.nodes_with_label_id(label)?;
+        let column = self.columns.get(&key)?;
+        let key_index_final = Self::build_property_index_for_key_and_label(column, Some(label_nodes));
+
+        // Re-acquire lock and insert (another thread may have built it first)
+        let mut index = self.prop_index.lock().unwrap();
+        let entry = index.entry(index_key).or_insert(key_index_final);
+        entry.get(&value).cloned()
     }
 
     /// Get property value for a node
@@ -1539,18 +1328,18 @@ mod tests {
         // Graph: 0 -> 1 -> 2 (via KNOWS and WORKS_FOR)
         
         // Direct neighbors
-        assert!(snapshot.can_reach(0, 1, crate::types::Direction::Outgoing, None, None));
-        assert!(snapshot.can_reach(1, 2, crate::types::Direction::Outgoing, None, None));
+        assert!(snapshot.can_reach(0, 1, Direction::Outgoing, None, None));
+        assert!(snapshot.can_reach(1, 2, Direction::Outgoing, None, None));
         
         // Multi-hop
-        assert!(snapshot.can_reach(0, 2, crate::types::Direction::Outgoing, None, None));
+        assert!(snapshot.can_reach(0, 2, Direction::Outgoing, None, None));
         
         // Reverse direction (should not work for outgoing)
-        assert!(!snapshot.can_reach(2, 0, crate::types::Direction::Outgoing, None, None));
-        assert!(!snapshot.can_reach(1, 0, crate::types::Direction::Outgoing, None, None));
+        assert!(!snapshot.can_reach(2, 0, Direction::Outgoing, None, None));
+        assert!(!snapshot.can_reach(1, 0, Direction::Outgoing, None, None));
         
         // Same node
-        assert!(snapshot.can_reach(0, 0, crate::types::Direction::Outgoing, None, None));
+        assert!(snapshot.can_reach(0, 0, Direction::Outgoing, None, None));
     }
 
     #[test]
@@ -1559,16 +1348,16 @@ mod tests {
         // Graph: 0 -> 1 (KNOWS), 1 -> 2 (WORKS_FOR)
         
         // Can reach via KNOWS
-        assert!(snapshot.can_reach(0, 1, crate::types::Direction::Outgoing, Some(&["KNOWS"]), None));
+        assert!(snapshot.can_reach(0, 1, Direction::Outgoing, Some(&["KNOWS"]), None));
         
         // Cannot reach 2 via KNOWS only (need WORKS_FOR)
-        assert!(!snapshot.can_reach(0, 2, crate::types::Direction::Outgoing, Some(&["KNOWS"]), None));
+        assert!(!snapshot.can_reach(0, 2, Direction::Outgoing, Some(&["KNOWS"]), None));
         
         // Can reach 2 via both types
-        assert!(snapshot.can_reach(0, 2, crate::types::Direction::Outgoing, Some(&["KNOWS", "WORKS_FOR"]), None));
+        assert!(snapshot.can_reach(0, 2, Direction::Outgoing, Some(&["KNOWS", "WORKS_FOR"]), None));
         
         // Can reach 2 via WORKS_FOR only (from node 1)
-        assert!(snapshot.can_reach(1, 2, crate::types::Direction::Outgoing, Some(&["WORKS_FOR"]), None));
+        assert!(snapshot.can_reach(1, 2, Direction::Outgoing, Some(&["WORKS_FOR"]), None));
     }
 
     #[test]
@@ -1577,13 +1366,13 @@ mod tests {
         // Graph: 0 -> 1 -> 2
         
         // Can reach with depth 2
-        assert!(snapshot.can_reach(0, 2, crate::types::Direction::Outgoing, None, Some(2)));
+        assert!(snapshot.can_reach(0, 2, Direction::Outgoing, None, Some(2)));
         
         // Cannot reach with depth 1 (only one hop allowed)
-        assert!(!snapshot.can_reach(0, 2, crate::types::Direction::Outgoing, None, Some(1)));
+        assert!(!snapshot.can_reach(0, 2, Direction::Outgoing, None, Some(1)));
         
         // Can reach direct neighbor with depth 1
-        assert!(snapshot.can_reach(0, 1, crate::types::Direction::Outgoing, None, Some(1)));
+        assert!(snapshot.can_reach(0, 1, Direction::Outgoing, None, Some(1)));
     }
 
     #[test]
@@ -1593,13 +1382,13 @@ mod tests {
         
         // With Direction::Both, can traverse in both directions
         // From 2, can reach 1 via incoming edge
-        assert!(snapshot.can_reach(2, 1, crate::types::Direction::Both, None, None));
+        assert!(snapshot.can_reach(2, 1, Direction::Both, None, None));
         
         // From 2, can reach 0 via incoming edges (2 <- 1 <- 0)
-        assert!(snapshot.can_reach(2, 0, crate::types::Direction::Both, None, None));
+        assert!(snapshot.can_reach(2, 0, Direction::Both, None, None));
         
         // From 0, can still reach 2 via outgoing (0 -> 1 -> 2)
-        assert!(snapshot.can_reach(0, 2, crate::types::Direction::Both, None, None));
+        assert!(snapshot.can_reach(0, 2, Direction::Both, None, None));
     }
 
     #[test]
@@ -1608,8 +1397,8 @@ mod tests {
         // Graph: 0 -> 1 -> 2
         
         // Node 999 doesn't exist, so unreachable
-        assert!(!snapshot.can_reach(0, 999, crate::types::Direction::Outgoing, None, None));
-        assert!(!snapshot.can_reach(999, 0, crate::types::Direction::Outgoing, None, None));
+        assert!(!snapshot.can_reach(0, 999, Direction::Outgoing, None, None));
+        assert!(!snapshot.can_reach(999, 0, Direction::Outgoing, None, None));
     }
 
     #[test]
@@ -2073,7 +1862,7 @@ mod tests {
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, crate::types::Direction::Outgoing, None, None, None, None);
+        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, Direction::Outgoing, None, None, None, None);
         
         // Should find nodes 0, 1, 2, 3, 4 (all on paths from 0 to 3)
         assert!(nodes.contains(0));
@@ -2100,7 +1889,7 @@ mod tests {
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, crate::types::Direction::Outgoing, None, None, None, None);
+        let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, Direction::Outgoing, None, None, None, None);
         
         // Should find intersection (both sets contain their starting nodes)
         // But no actual path, so intersection should be empty or just the endpoints
@@ -2124,7 +1913,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
             &source, &target, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             Some(&["KNOWS"]), 
             None, None, None
         );
@@ -2153,7 +1942,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bidirectional_bfs(
             &source, &target, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             None, 
             Some(&node_filter), 
             None::<RelFilter>, 
@@ -2181,7 +1970,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
             &source, &target, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             None, 
             None, 
             None, 
@@ -2194,7 +1983,7 @@ mod tests {
         // With depth 3, should reach node 3
         let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
             &source, &target, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             None, 
             None, 
             None, 
@@ -2218,7 +2007,7 @@ mod tests {
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, crate::types::Direction::Outgoing, None, None, None, None);
+        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, Direction::Outgoing, None, None, None, None);
         
         // Should find intersection nodes
         assert!(nodes.contains(1));
@@ -2260,7 +2049,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Outgoing, 
+            Direction::Outgoing, 
             None, None, None, None
         );
         
@@ -2288,7 +2077,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             Some(&["KNOWS"]), 
             None, None, None
         );
@@ -2321,7 +2110,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs(
             &start, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             None, 
             Some(&node_filter), 
             None::<RelFilter>, 
@@ -2353,7 +2142,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             None, 
             None, 
             None, 
@@ -2372,7 +2161,7 @@ mod tests {
         // With depth 2, should reach nodes 2
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Outgoing,
+            Direction::Outgoing,
             None, 
             None, 
             None, 
@@ -2398,7 +2187,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Incoming, 
+            Direction::Incoming, 
             None, None, None, None
         );
         
@@ -2424,7 +2213,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Both, 
+            Direction::Both, 
             None, None, None, None
         );
         
@@ -2450,7 +2239,7 @@ mod tests {
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
             &start, 
-            crate::types::Direction::Outgoing, 
+            Direction::Outgoing, 
             None, None, None, None
         );
         

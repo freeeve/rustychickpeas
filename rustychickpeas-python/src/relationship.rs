@@ -1,9 +1,12 @@
 //! Relationship Python wrapper
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
+use pyo3::types::PyDict;
 use rustychickpeas_core::GraphSnapshot as CoreGraphSnapshot;
 use crate::node::Node;
+use crate::utils::value_id_to_pyobject;
 
 /// Python wrapper for a Relationship in a GraphSnapshot
 /// Relationships are identified by their position in the CSR arrays
@@ -93,35 +96,32 @@ impl Relationship {
         self.rel_index
     }
 
+    fn __repr__(&self) -> PyResult<String> {
+        let rel_type = self.reltype()?;
+        let start = self.start_node()?;
+        let end = self.end_node()?;
+        Ok(format!(
+            "Relationship(id={}, type={}, {}->{})",
+            self.rel_index, rel_type, start.id_internal(), end.id_internal()
+        ))
+    }
+
+    fn __eq__(&self, other: &Relationship) -> bool {
+        self.rel_index == other.rel_index
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.rel_index.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Get property value for this relationship
     fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
-        // Find property key ID - return None if key doesn't exist
-        // Get property value using outgoing CSR position (rel_index)
-        // Note: For incoming relationships, we still use rel_index as the CSR position
-        // because relationship properties are indexed by their position in the outgoing CSR
         let value_id = self.snapshot.relationship_property(self.rel_index, &key);
-        
+
         Python::with_gil(|py| {
-            if let Some(vid) = value_id {
-                match vid {
-                    rustychickpeas_core::ValueId::Str(sid) => {
-                        if let Some(s) = self.snapshot.resolve_string(sid) {
-                            Ok(Some(s.to_object(py)))
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                    rustychickpeas_core::ValueId::I64(i) => Ok(Some(i.to_object(py))),
-                    rustychickpeas_core::ValueId::F64(bits) => {
-                        Ok(Some(f64::from_bits(bits).to_object(py)))
-                    }
-                    rustychickpeas_core::ValueId::Bool(b) => {
-                        Ok(Some(PyBool::new(py, b).into_py(py)))
-                    }
-                }
-            } else {
-                Ok(None)
-            }
+            Ok(value_id.and_then(|vid| value_id_to_pyobject(py, vid, &self.snapshot.atoms)))
         })
     }
 

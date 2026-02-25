@@ -31,7 +31,7 @@ fn setup_snapshot(num_nodes: usize, num_rels: usize) -> GraphSnapshot {
         } else {
             &["Company"][..]
         };
-        builder.add_node(Some(i as u32), labels);
+        builder.add_node(Some(i as u32), labels).unwrap();
         builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
         builder.set_prop_i64(i as u32, "id", i as i64);
     }
@@ -59,7 +59,7 @@ fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
         } else {
             &["Company"][..]
         };
-        builder.add_node(Some(i as u32), labels);
+        builder.add_node(Some(i as u32), labels).unwrap();
         builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
         builder.set_prop_i64(i as u32, "id", i as i64);
     }
@@ -535,7 +535,7 @@ fn snapshot_get_neighbors_high_degree_benchmark(c: &mut Criterion) {
     
     // Add all nodes
     for i in 0..num_nodes {
-        builder.add_node(Some(i as u32), &["Person"]);
+        builder.add_node(Some(i as u32), &["Person"]).unwrap();
     }
     
     // Create a hub node (node 0) with many connections
@@ -573,7 +573,7 @@ fn snapshot_get_property_many_nodes_benchmark(c: &mut Criterion) {
     
     // Add all nodes with properties
     for i in 0..num_nodes {
-        builder.add_node(Some(i as u32), &["Person"]);
+        builder.add_node(Some(i as u32), &["Person"]).unwrap();
         builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
         builder.set_prop_i64(i as u32, "id", i as i64);
         builder.set_prop_str(i as u32, "email", &format!("person{}@example.com", i));

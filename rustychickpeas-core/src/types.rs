@@ -119,7 +119,7 @@ impl Label {
     }
 
     /// Resolve the label to a string (requires access to the interner)
-    pub fn as_str<'a>(&self, interner: &'a crate::interner::StringInterner) -> String {
+    pub fn as_str(&self, interner: &crate::interner::StringInterner) -> String {
         interner.resolve(self.0)
     }
 }
@@ -167,7 +167,7 @@ impl RelationshipType {
     }
 
     /// Resolve the relationship type to a string (requires access to the interner)
-    pub fn as_str<'a>(&self, interner: &'a crate::interner::StringInterner) -> String {
+    pub fn as_str(&self, interner: &crate::interner::StringInterner) -> String {
         interner.resolve(self.0)
     }
 }

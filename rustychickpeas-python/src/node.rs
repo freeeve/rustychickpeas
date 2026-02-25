@@ -1,10 +1,13 @@
 //! Node Python wrapper
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
-use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, RelationshipType, ValueId};
+use pyo3::types::PyDict;
+use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, RelationshipType};
 use crate::direction::Direction;
 use crate::relationship::Relationship;
+use crate::utils::value_id_to_pyobject;
 
 /// Python wrapper for a Node in a GraphSnapshot
 #[pyclass(name = "Node")]
@@ -17,38 +20,18 @@ pub struct Node {
 impl Node {
     /// Get property value for this node
     fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
-        // Check if property key exists first (O(1) lookup using reverse index)
         let key_id = self.snapshot.atoms.get_id(&key);
-        
+
         if key_id.is_none() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("Property key '{}' not found", key)
             ));
         }
-        
+
         let value_id = self.snapshot.prop(self.node_id, &key);
-        
+
         Python::with_gil(|py| {
-            if let Some(vid) = value_id {
-                match vid {
-                    ValueId::Str(sid) => {
-                        if let Some(s) = self.snapshot.resolve_string(sid) {
-                            Ok(Some(s.to_object(py)))
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                    ValueId::I64(i) => Ok(Some(i.to_object(py))),
-                    ValueId::F64(bits) => {
-                        Ok(Some(f64::from_bits(bits).to_object(py)))
-                    }
-                    ValueId::Bool(b) => {
-                        Ok(Some(PyBool::new(py, b).into_py(py)))
-                    }
-                }
-            } else {
-                Ok(None)
-            }
+            Ok(value_id.and_then(|vid| value_id_to_pyobject(py, vid, &self.snapshot.atoms)))
         })
     }
 
@@ -59,18 +42,16 @@ impl Node {
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (direction, rel_types=None))]
     fn relationships(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
-        // Convert string types to RelationshipType IDs
+        // Convert string types to RelationshipType IDs using O(1) reverse index
         let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().map(|types| {
             let ids: Vec<RelationshipType> = types.iter()
                 .filter_map(|s| {
-                    self.snapshot.atoms.strings.iter()
-                        .position(|st| st == s)
-                        .map(|idx| RelationshipType::new(idx as u32))
+                    self.snapshot.atoms.get_id(s)
+                        .map(RelationshipType::new)
                 })
                 .collect();
-            // If filter was provided but none found, return None to indicate no matches
             if ids.is_empty() && !types.is_empty() {
-                return None; // Will be handled below
+                return None;
             }
             Some(ids)
         }).flatten();
@@ -202,16 +183,16 @@ impl Node {
         Ok(relationships)
     }
 
-    /// Get relationship IDs (neighbor node IDs) for this node
-    /// 
+    /// Get neighbor node IDs for this node
+    ///
     /// Returns the IDs of nodes connected to this node via relationships.
     /// This is a lighter-weight alternative to relationships() when you only need node IDs.
-    /// 
+    ///
     /// # Arguments
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (direction, rel_types=None))]
-    fn relationship_ids(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
+    fn neighbor_ids(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
         // Convert Vec<String> to Vec<&str> for the Rust API
         let rel_type_strs: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
             types.iter().map(|s| s.as_str()).collect()
@@ -248,6 +229,12 @@ impl Node {
         Ok(neighbor_ids)
     }
 
+    /// Deprecated: use neighbor_ids instead
+    #[pyo3(name = "relationship_ids", signature = (direction, rel_types=None))]
+    fn relationship_ids_deprecated(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
+        self.neighbor_ids(direction, rel_types)
+    }
+
     /// Get labels for this node
     fn labels(&self) -> PyResult<Vec<String>> {
         let mut labels = Vec::new();
@@ -276,6 +263,21 @@ impl Node {
     /// Get the internal node ID
     fn id(&self) -> u32 {
         self.node_id
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        let labels = self.labels()?;
+        Ok(format!("Node(id={}, labels=[{}])", self.node_id, labels.join(", ")))
+    }
+
+    fn __eq__(&self, other: &Node) -> bool {
+        self.node_id == other.node_id
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.node_id.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Convert node to a Python dict (zero-allocation where possible)

@@ -30,7 +30,7 @@ fn builder_add_nodes_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                     for i in 0..size {
-                        builder.add_node(Some(black_box(i as u32)), &["Person"]);
+                        builder.add_node(Some(black_box(i as u32)), &["Person"]).unwrap();
                     }
                     black_box(builder);
                 });
@@ -56,7 +56,7 @@ fn builder_add_nodes_with_labels_benchmark(c: &mut Criterion) {
                         } else {
                             &["Person", "Admin"][..]
                         };
-                        builder.add_node(Some(black_box(i as u32)), labels);
+                        builder.add_node(Some(black_box(i as u32)), labels).unwrap();
                     }
                     black_box(builder);
                 });
@@ -78,7 +78,7 @@ fn builder_add_relationships_benchmark(c: &mut Criterion) {
                     let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                     // First add nodes
                     for i in 0..size {
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                     }
                     // Then add relationships
                     for i in 0..size {
@@ -105,7 +105,7 @@ fn builder_add_properties_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                     for i in 0..size {
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
                         builder.set_prop_i64(i as u32, "age", (20 + i % 50) as i64);
                         builder.set_prop_bool(i as u32, "active", i % 2 == 0);
@@ -129,7 +129,7 @@ fn builder_finalize_benchmark(c: &mut Criterion) {
                 // Setup: create a graph with nodes and relationships
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                 for i in 0..size {
-                    builder.add_node(Some(i as u32), &["Person"]);
+                    builder.add_node(Some(i as u32), &["Person"]).unwrap();
                 }
                 for i in 0..size {
                     let from = i as u32;
@@ -140,7 +140,7 @@ fn builder_finalize_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     let mut builder_clone = GraphBuilder::new(Some(size), Some(size * 2));
                     for i in 0..size {
-                        builder_clone.add_node(Some(i as u32), &["Person"]);
+                        builder_clone.add_node(Some(i as u32), &["Person"]).unwrap();
                     }
                     for i in 0..size {
                         let from = i as u32;
@@ -172,7 +172,7 @@ fn builder_node_deduplication_benchmark(c: &mut Criterion) {
                     // Add nodes with duplicate emails (every 10 nodes share the same email)
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                         builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
                     }
@@ -201,7 +201,7 @@ fn builder_node_deduplication_multi_key_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
                         let username = format!("user{}", i / 10);
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                         builder.set_prop_str(i as u32, "username", &username);
                         builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
@@ -228,7 +228,7 @@ fn builder_relationship_deduplication_benchmark(c: &mut Criterion) {
                     let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                     // Add nodes
                     for i in 0..size {
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                     }
                     // Add relationships - many duplicates (same type between same nodes)
                     for i in 0..size {
@@ -257,7 +257,7 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
                     let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                     for i in 0..size {
                         let email = format!("user{}@example.com", i);
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                     }
                     black_box(builder);
@@ -275,7 +275,7 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
                     builder.enable_node_deduplication(vec!["email"]);
                     for i in 0..size {
                         let email = format!("user{}@example.com", i);
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                     }
                     black_box(builder);
@@ -293,7 +293,7 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
                     builder.enable_node_deduplication(vec!["email"]);
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10); // 10 nodes per email
-                        builder.add_node(Some(i as u32), &["Person"]);
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
                         builder.set_prop_str(i as u32, "email", &email);
                     }
                     black_box(builder);
