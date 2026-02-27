@@ -2432,7 +2432,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustychickpeas-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2459,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "rustychickpeas-python"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pyo3",
  "roaring",

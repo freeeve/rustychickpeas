@@ -32,8 +32,8 @@ fn setup_snapshot(num_nodes: usize, num_rels: usize) -> GraphSnapshot {
             &["Company"][..]
         };
         builder.add_node(Some(i as u32), labels).unwrap();
-        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
-        builder.set_prop_i64(i as u32, "id", i as i64);
+        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i)).unwrap();
+        builder.set_prop_i64(i as u32, "id", i as i64).unwrap();
     }
     
     // Add relationships
@@ -41,7 +41,7 @@ fn setup_snapshot(num_nodes: usize, num_rels: usize) -> GraphSnapshot {
         let from = (i % num_nodes) as u64;
         let to = ((i + 1) % num_nodes) as u64;
         let rel_type = if i % 2 == 0 { "KNOWS" } else { "WORKS_FOR" };
-        builder.add_rel(from as u32, to as u32, rel_type);
+        builder.add_rel(from as u32, to as u32, rel_type).unwrap();
     }
     
     builder.finalize(None)
@@ -60,8 +60,8 @@ fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
             &["Company"][..]
         };
         builder.add_node(Some(i as u32), labels).unwrap();
-        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
-        builder.set_prop_i64(i as u32, "id", i as i64);
+        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i)).unwrap();
+        builder.set_prop_i64(i as u32, "id", i as i64).unwrap();
     }
     
     // Create realistic branching with deterministic but varied patterns
@@ -75,12 +75,12 @@ fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
             for offset in 1..=avg_degree {
                 let target = ((i + offset) % num_nodes) as u32;
                 let rel_type = if offset % 2 == 0 { "KNOWS" } else { "WORKS_FOR" };
-                builder.add_rel(node_id, target, rel_type);
+                builder.add_rel(node_id, target, rel_type).unwrap();
             }
             // Add some long-range connections (every 100th node)
             if i % 100 == 0 {
                 let target = ((i * 7 + 1) % num_nodes) as u32;
-                builder.add_rel(node_id, target, "KNOWS");
+                builder.add_rel(node_id, target, "KNOWS").unwrap();
             }
         }
     } else {
@@ -100,7 +100,7 @@ fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
                 };
                 
                 let rel_type = if rng.gen_bool(0.5) { "KNOWS" } else { "WORKS_FOR" };
-                builder.add_rel(i as u32, target, rel_type);
+                builder.add_rel(i as u32, target, rel_type).unwrap();
             }
         }
     }
@@ -542,14 +542,14 @@ fn snapshot_get_neighbors_high_degree_benchmark(c: &mut Criterion) {
     let hub_node = 0u32;
     for i in 1..=hub_degree {
         let target = (i % num_nodes) as u32;
-        builder.add_rel(hub_node, target, "KNOWS");
+        builder.add_rel(hub_node, target, "KNOWS").unwrap();
     }
     
     // Add some other relationships to make it realistic
     for i in 1..num_nodes {
         let from = i as u32;
         let to = ((i + 1) % num_nodes) as u32;
-        builder.add_rel(from, to, "KNOWS");
+        builder.add_rel(from, to, "KNOWS").unwrap();
     }
     
     let snapshot = builder.finalize(None);
@@ -574,16 +574,16 @@ fn snapshot_get_property_many_nodes_benchmark(c: &mut Criterion) {
     // Add all nodes with properties
     for i in 0..num_nodes {
         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-        builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
-        builder.set_prop_i64(i as u32, "id", i as i64);
-        builder.set_prop_str(i as u32, "email", &format!("person{}@example.com", i));
+        builder.set_prop_str(i as u32, "name", &format!("Person{}", i)).unwrap();
+        builder.set_prop_i64(i as u32, "id", i as i64).unwrap();
+        builder.set_prop_str(i as u32, "email", &format!("person{}@example.com", i)).unwrap();
     }
     
     // Add some relationships
     for i in 0..num_nodes {
         let from = i as u32;
         let to = ((i + 1) % num_nodes) as u32;
-        builder.add_rel(from, to, "KNOWS");
+        builder.add_rel(from, to, "KNOWS").unwrap();
     }
     
     let snapshot = builder.finalize(None);

@@ -473,16 +473,16 @@ impl GraphSnapshot {
     /// 
     /// // Create a graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
-    /// builder.add_node(Some(0), &["Person"]);
-    /// builder.add_node(Some(1), &["Person"]);
-    /// builder.add_node(Some(2), &["Company"]);
-    /// builder.add_rel(0, 1, "KNOWS");
-    /// builder.add_rel(0, 2, "WORKS_FOR");
+    /// builder.add_node(Some(0), &["Person"]).unwrap();
+    /// builder.add_node(Some(1), &["Person"]).unwrap();
+    /// builder.add_node(Some(2), &["Company"]).unwrap();
+    /// builder.add_rel(0, 1, "KNOWS").unwrap();
+    /// builder.add_rel(0, 2, "WORKS_FOR").unwrap();
     /// let snapshot = builder.finalize(None);
-    /// 
+    ///
     /// // Get neighbors connected via "KNOWS" relationships
     /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS"]);
-    /// 
+    ///
     /// // Get neighbors connected via multiple relationship types
     /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
@@ -510,16 +510,16 @@ impl GraphSnapshot {
     /// 
     /// // Create a graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
-    /// builder.add_node(Some(0), &["Person"]);
-    /// builder.add_node(Some(1), &["Person"]);
-    /// builder.add_node(Some(2), &["Company"]);
-    /// builder.add_rel(1, 0, "KNOWS");
-    /// builder.add_rel(2, 0, "WORKS_FOR");
+    /// builder.add_node(Some(0), &["Person"]).unwrap();
+    /// builder.add_node(Some(1), &["Person"]).unwrap();
+    /// builder.add_node(Some(2), &["Company"]).unwrap();
+    /// builder.add_rel(1, 0, "KNOWS").unwrap();
+    /// builder.add_rel(2, 0, "WORKS_FOR").unwrap();
     /// let snapshot = builder.finalize(None);
-    /// 
+    ///
     /// // Get neighbors connected via "KNOWS" relationships
     /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS"]);
-    /// 
+    ///
     /// // Get neighbors connected via multiple relationship types
     /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
@@ -556,9 +556,9 @@ impl GraphSnapshot {
     /// 
     /// // Create a simple graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
-    /// builder.add_node(Some(5), &["Person"]);
-    /// builder.add_node(Some(10), &["Person"]);
-    /// builder.add_rel(5, 10, "KNOWS");
+    /// builder.add_node(Some(5), &["Person"]).unwrap();
+    /// builder.add_node(Some(10), &["Person"]).unwrap();
+    /// builder.add_rel(5, 10, "KNOWS").unwrap();
     /// let snapshot = builder.finalize(None);
     /// 
     /// // Check if node 5 can reach node 10 via outgoing relationships
@@ -649,12 +649,12 @@ impl GraphSnapshot {
     /// 
     /// // Create a simple graph
     /// let mut builder = GraphBuilder::new(Some(20), Some(20));
-    /// builder.add_node(Some(0), &["Person"]);
-    /// builder.add_node(Some(1), &["Person"]);
-    /// builder.add_node(Some(10), &["Person"]);
-    /// builder.add_node(Some(11), &["Person"]);
-    /// builder.add_rel(0, 10, "KNOWS");
-    /// builder.add_rel(1, 11, "WORKS_WITH");
+    /// builder.add_node(Some(0), &["Person"]).unwrap();
+    /// builder.add_node(Some(1), &["Person"]).unwrap();
+    /// builder.add_node(Some(10), &["Person"]).unwrap();
+    /// builder.add_node(Some(11), &["Person"]).unwrap();
+    /// builder.add_rel(0, 10, "KNOWS").unwrap();
+    /// builder.add_rel(1, 11, "WORKS_WITH").unwrap();
     /// let snapshot = builder.finalize(None);
     /// 
     /// // Simple bidirectional search (default: Outgoing for forward, Incoming for backward)
@@ -832,13 +832,13 @@ impl GraphSnapshot {
     /// 
     /// // Create a simple graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
-    /// builder.add_node(Some(0), &["Person"]);
-    /// builder.add_node(Some(1), &["Person"]);
-    /// builder.add_node(Some(2), &["Company"]);
-    /// builder.add_rel(0, 1, "KNOWS");
-    /// builder.add_rel(0, 2, "WORKS_FOR");
+    /// builder.add_node(Some(0), &["Person"]).unwrap();
+    /// builder.add_node(Some(1), &["Person"]).unwrap();
+    /// builder.add_node(Some(2), &["Company"]).unwrap();
+    /// builder.add_rel(0, 1, "KNOWS").unwrap();
+    /// builder.add_rel(0, 2, "WORKS_FOR").unwrap();
     /// let snapshot = builder.finalize(None);
-    /// 
+    ///
     /// // Simple BFS from a single node
     /// let start = NodeSet::new(RoaringBitmap::from_iter([0]));
     /// type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
@@ -967,10 +967,10 @@ impl GraphSnapshot {
     /// 
     /// // Create a graph with properties
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
-    /// builder.add_node(Some(0), &["Person"]);
-    /// builder.set_prop_str(0, "name", "Alice");
-    /// builder.set_prop_i64(0, "age", 30);
-    /// builder.set_prop_bool(0, "active", true);
+    /// builder.add_node(Some(0), &["Person"]).unwrap();
+    /// builder.set_prop_str(0, "name", "Alice").unwrap();
+    /// builder.set_prop_i64(0, "age", 30).unwrap();
+    /// builder.set_prop_bool(0, "active", true).unwrap();
     /// let snapshot = builder.finalize(None);
     /// 
     /// // Find all Person nodes with name "Alice"
@@ -1120,14 +1120,14 @@ mod tests {
     // This works around the into_vec() issue by manually creating atoms
     fn create_test_snapshot() -> GraphSnapshot {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(Some(0), &["Person"]);
-        builder.add_node(Some(1), &["Person"]);
-        builder.add_node(Some(2), &["Company"]);
-        builder.add_rel(0, 1, "KNOWS");
-        builder.add_rel(1, 2, "WORKS_FOR");
-        builder.set_prop_str(0, "name", "Alice");
-        builder.set_prop_i64(0, "age", 30);
-        
+        builder.add_node(Some(0), &["Person"]).unwrap();
+        builder.add_node(Some(1), &["Person"]).unwrap();
+        builder.add_node(Some(2), &["Company"]).unwrap();
+        builder.add_rel(0, 1, "KNOWS").unwrap();
+        builder.add_rel(1, 2, "WORKS_FOR").unwrap();
+        builder.set_prop_str(0, "name", "Alice").unwrap();
+        builder.set_prop_i64(0, "age", 30).unwrap();
+
         // Manually create snapshot to avoid into_vec() issue
         // Calculate n based on max node ID used (nodes are 0, 1, 2, so n should be 3)
         let max_node_id = builder.node_labels.len()
@@ -1643,16 +1643,16 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         
         // Add nodes with different labels but same property key
-        builder.add_node(Some(0), &["Person"]);
-        builder.add_node(Some(1), &["Person"]);
-        builder.add_node(Some(2), &["Company"]);
-        builder.add_node(Some(3), &["Company"]);
-        
+        builder.add_node(Some(0), &["Person"]).unwrap();
+        builder.add_node(Some(1), &["Person"]).unwrap();
+        builder.add_node(Some(2), &["Company"]).unwrap();
+        builder.add_node(Some(3), &["Company"]).unwrap();
+
         // Set same property key "name" on all nodes
-        builder.set_prop_str(0, "name", "Alice");
-        builder.set_prop_str(1, "name", "Bob");
-        builder.set_prop_str(2, "name", "Acme Corp");
-        builder.set_prop_str(3, "name", "Tech Inc");
+        builder.set_prop_str(0, "name", "Alice").unwrap();
+        builder.set_prop_str(1, "name", "Bob").unwrap();
+        builder.set_prop_str(2, "name", "Acme Corp").unwrap();
+        builder.set_prop_str(3, "name", "Tech Inc").unwrap();
         
         let snapshot = builder.finalize(None);
         
@@ -1686,16 +1686,16 @@ mod tests {
         // Test that multiple nodes with the same property value are all returned
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         
-        builder.add_node(Some(0), &["Person"]);
-        builder.add_node(Some(1), &["Person"]);
-        builder.add_node(Some(2), &["Person"]);
-        builder.add_node(Some(3), &["Person"]);
-        
+        builder.add_node(Some(0), &["Person"]).unwrap();
+        builder.add_node(Some(1), &["Person"]).unwrap();
+        builder.add_node(Some(2), &["Person"]).unwrap();
+        builder.add_node(Some(3), &["Person"]).unwrap();
+
         // Set same age for multiple nodes
-        builder.set_prop_i64(0, "age", 30);
-        builder.set_prop_i64(1, "age", 30);
-        builder.set_prop_i64(2, "age", 25);
-        builder.set_prop_i64(3, "age", 30);
+        builder.set_prop_i64(0, "age", 30).unwrap();
+        builder.set_prop_i64(1, "age", 30).unwrap();
+        builder.set_prop_i64(2, "age", 25).unwrap();
+        builder.set_prop_i64(3, "age", 30).unwrap();
         
         let snapshot = builder.finalize(None);
         
@@ -1721,15 +1721,15 @@ mod tests {
         // Test nodes_with_property with all property value types
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         
-        builder.add_node(Some(0), &["Person"]);
-        builder.add_node(Some(1), &["Person"]);
-        builder.add_node(Some(2), &["Person"]);
-        builder.add_node(Some(3), &["Person"]);
-        
-        builder.set_prop_str(0, "name", "Alice");
-        builder.set_prop_i64(1, "age", 30);
-        builder.set_prop_f64(2, "score", 95.5);
-        builder.set_prop_bool(3, "active", true);
+        builder.add_node(Some(0), &["Person"]).unwrap();
+        builder.add_node(Some(1), &["Person"]).unwrap();
+        builder.add_node(Some(2), &["Person"]).unwrap();
+        builder.add_node(Some(3), &["Person"]).unwrap();
+
+        builder.set_prop_str(0, "name", "Alice").unwrap();
+        builder.set_prop_i64(1, "age", 30).unwrap();
+        builder.set_prop_f64(2, "score", 95.5).unwrap();
+        builder.set_prop_bool(3, "active", true).unwrap();
         
         let snapshot = builder.finalize(None);
         
@@ -1772,8 +1772,8 @@ mod tests {
     fn test_snapshot_with_version() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.set_version("v1.0");
-        builder.add_node(Some(0), &["Person"]);
-        
+        builder.add_node(Some(0), &["Person"]).unwrap();
+
         // Manually create snapshot with version
         let max_node_id = builder.node_labels.len()
             .max(builder.deg_out.len())
@@ -1836,16 +1836,16 @@ mod tests {
     // Graph: 0 -> 1 -> 2 -> 3, and also 0 -> 4 -> 3 (two paths from 0 to 3)
     fn create_bidirectional_test_snapshot() -> GraphSnapshot {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(Some(0), &["Person"]);
-        builder.add_node(Some(1), &["Person"]);
-        builder.add_node(Some(2), &["Person"]);
-        builder.add_node(Some(3), &["Person"]);
-        builder.add_node(Some(4), &["Person"]);
-        builder.add_rel(0, 1, "KNOWS");
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(2, 3, "KNOWS");
-        builder.add_rel(0, 4, "KNOWS");
-        builder.add_rel(4, 3, "KNOWS");
+        builder.add_node(Some(0), &["Person"]).unwrap();
+        builder.add_node(Some(1), &["Person"]).unwrap();
+        builder.add_node(Some(2), &["Person"]).unwrap();
+        builder.add_node(Some(3), &["Person"]).unwrap();
+        builder.add_node(Some(4), &["Person"]).unwrap();
+        builder.add_rel(0, 1, "KNOWS").unwrap();
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(2, 3, "KNOWS").unwrap();
+        builder.add_rel(0, 4, "KNOWS").unwrap();
+        builder.add_rel(4, 3, "KNOWS").unwrap();
         builder.finalize(None)
     }
 
@@ -2020,18 +2020,18 @@ mod tests {
     // Graph: 0 -> 1 -> 2 -> 3, and also 0 -> 4 -> 3, and 0 -> 5 (WORKS_FOR)
     fn create_bfs_test_snapshot() -> GraphSnapshot {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        builder.add_node(Some(0), &["Person"]);
-        builder.add_node(Some(1), &["Person"]);
-        builder.add_node(Some(2), &["Person"]);
-        builder.add_node(Some(3), &["Person"]);
-        builder.add_node(Some(4), &["Person"]);
-        builder.add_node(Some(5), &["Company"]);
-        builder.add_rel(0, 1, "KNOWS");
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(2, 3, "KNOWS");
-        builder.add_rel(0, 4, "KNOWS");
-        builder.add_rel(4, 3, "KNOWS");
-        builder.add_rel(0, 5, "WORKS_FOR");
+        builder.add_node(Some(0), &["Person"]).unwrap();
+        builder.add_node(Some(1), &["Person"]).unwrap();
+        builder.add_node(Some(2), &["Person"]).unwrap();
+        builder.add_node(Some(3), &["Person"]).unwrap();
+        builder.add_node(Some(4), &["Person"]).unwrap();
+        builder.add_node(Some(5), &["Company"]).unwrap();
+        builder.add_rel(0, 1, "KNOWS").unwrap();
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(2, 3, "KNOWS").unwrap();
+        builder.add_rel(0, 4, "KNOWS").unwrap();
+        builder.add_rel(4, 3, "KNOWS").unwrap();
+        builder.add_rel(0, 5, "WORKS_FOR").unwrap();
         builder.finalize(None)
     }
 

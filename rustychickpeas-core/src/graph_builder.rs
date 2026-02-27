@@ -214,7 +214,10 @@ impl GraphBuilder {
     /// The node ID that was used (either the provided ID or the auto-generated one)
     pub fn add_node(&mut self, node_id: Option<NodeId>, labels: &[&str]) -> Result<NodeId, GraphError> {
         let actual_id = match node_id {
-            Some(id) => id,
+            Some(id) => {
+                self.next_node_id = self.next_node_id.max(id.saturating_add(1));
+                id
+            }
             None => {
                 let id = self.next_node_id;
                 self.next_node_id = id.checked_add(1).ok_or_else(|| {
@@ -244,10 +247,9 @@ impl GraphBuilder {
     ///
     /// # Returns
     /// The index of the newly added relationship in the internal rels vector
-    pub fn add_rel(&mut self, u: NodeId, v: NodeId, rel_type: &str) -> usize {
-        // Ensure capacity for both nodes (unwrap is safe here - only fails at u32::MAX boundary)
+    pub fn add_rel(&mut self, u: NodeId, v: NodeId, rel_type: &str) -> Result<usize, GraphError> {
         let max_id = u.max(v);
-        let _ = self.ensure_capacity(max_id);
+        self.ensure_capacity(max_id)?;
 
         self.deg_out[u as usize] += 1;
         self.deg_in[v as usize] += 1;
@@ -257,40 +259,44 @@ impl GraphBuilder {
         self.rel_types.push(RelationshipType::new(type_id));
         self.known_nodes.insert(u);
         self.known_nodes.insert(v);
-        self.rels.len() - 1
+        Ok(self.rels.len() - 1)
     }
 
     /// Set string property (interned)
-    pub fn set_prop_str(&mut self, node_id: NodeId, key: &str, val: &str) {
-        let _ = self.ensure_capacity(node_id);
+    pub fn set_prop_str(&mut self, node_id: NodeId, key: &str, val: &str) -> Result<(), GraphError> {
+        self.ensure_capacity(node_id)?;
         let k = self.interner.get_or_intern(key);
         let v = self.interner.get_or_intern(val);
         self.node_col_str.entry(k).or_default().push((node_id, v));
         self.known_nodes.insert(node_id);
+        Ok(())
     }
 
     /// Set i64 property
-    pub fn set_prop_i64(&mut self, node_id: NodeId, key: &str, val: i64) {
-        let _ = self.ensure_capacity(node_id);
+    pub fn set_prop_i64(&mut self, node_id: NodeId, key: &str, val: i64) -> Result<(), GraphError> {
+        self.ensure_capacity(node_id)?;
         let k = self.interner.get_or_intern(key);
         self.node_col_i64.entry(k).or_default().push((node_id, val));
         self.known_nodes.insert(node_id);
+        Ok(())
     }
 
     /// Set f64 property
-    pub fn set_prop_f64(&mut self, node_id: NodeId, key: &str, val: f64) {
-        let _ = self.ensure_capacity(node_id);
+    pub fn set_prop_f64(&mut self, node_id: NodeId, key: &str, val: f64) -> Result<(), GraphError> {
+        self.ensure_capacity(node_id)?;
         let k = self.interner.get_or_intern(key);
         self.node_col_f64.entry(k).or_default().push((node_id, val));
         self.known_nodes.insert(node_id);
+        Ok(())
     }
 
     /// Set boolean property
-    pub fn set_prop_bool(&mut self, node_id: NodeId, key: &str, val: bool) {
-        let _ = self.ensure_capacity(node_id);
+    pub fn set_prop_bool(&mut self, node_id: NodeId, key: &str, val: bool) -> Result<(), GraphError> {
+        self.ensure_capacity(node_id)?;
         let k = self.interner.get_or_intern(key);
         self.node_col_bool.entry(k).or_default().push((node_id, val));
         self.known_nodes.insert(node_id);
+        Ok(())
     }
 
     /// Find relationship index by (u, v, rel_type)
@@ -439,47 +445,47 @@ impl GraphBuilder {
     }
 
     /// Update property value (removes old value, adds new one)
-    pub fn update_prop_str(&mut self, node_id: NodeId, key: &str, new_val: &str) {
+    pub fn update_prop_str(&mut self, node_id: NodeId, key: &str, new_val: &str) -> Result<(), GraphError> {
         let k = self.interner.get_or_intern(key);
         if let Some(pairs) = self.node_col_str.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 pairs.swap_remove(pos);
             }
         }
-        self.set_prop_str(node_id, key, new_val);
+        self.set_prop_str(node_id, key, new_val)
     }
 
     /// Update i64 property
-    pub fn update_prop_i64(&mut self, node_id: NodeId, key: &str, new_val: i64) {
+    pub fn update_prop_i64(&mut self, node_id: NodeId, key: &str, new_val: i64) -> Result<(), GraphError> {
         let k = self.interner.get_or_intern(key);
         if let Some(pairs) = self.node_col_i64.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 pairs.swap_remove(pos);
             }
         }
-        self.set_prop_i64(node_id, key, new_val);
+        self.set_prop_i64(node_id, key, new_val)
     }
 
     /// Update f64 property
-    pub fn update_prop_f64(&mut self, node_id: NodeId, key: &str, new_val: f64) {
+    pub fn update_prop_f64(&mut self, node_id: NodeId, key: &str, new_val: f64) -> Result<(), GraphError> {
         let k = self.interner.get_or_intern(key);
         if let Some(pairs) = self.node_col_f64.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 pairs.swap_remove(pos);
             }
         }
-        self.set_prop_f64(node_id, key, new_val);
+        self.set_prop_f64(node_id, key, new_val)
     }
 
     /// Update bool property
-    pub fn update_prop_bool(&mut self, node_id: NodeId, key: &str, new_val: bool) {
+    pub fn update_prop_bool(&mut self, node_id: NodeId, key: &str, new_val: bool) -> Result<(), GraphError> {
         let k = self.interner.get_or_intern(key);
         if let Some(pairs) = self.node_col_bool.get_mut(&k) {
             if let Some(pos) = pairs.iter().position(|(nid, _)| *nid == node_id) {
                 pairs.swap_remove(pos);
             }
         }
-        self.set_prop_bool(node_id, key, new_val);
+        self.set_prop_bool(node_id, key, new_val)
     }
 
     /// Get the number of nodes added so far (O(1) via RoaringBitmap)
@@ -511,16 +517,16 @@ impl GraphBuilder {
     /// // Create a builder and add nodes with properties
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
-    /// builder.set_prop_str(0, "name", "Alice");
-    /// builder.set_prop_i64(0, "age", 30);
-    /// builder.set_prop_bool(0, "active", true);
+    /// builder.set_prop_str(0, "name", "Alice").unwrap();
+    /// builder.set_prop_i64(0, "age", 30).unwrap();
+    /// builder.set_prop_bool(0, "active", true).unwrap();
     ///
     /// // Find all Person nodes with name "Alice"
     /// let nodes = builder.nodes_with_property("Person", "name", "Alice");
-    /// 
+    ///
     /// // Find all Person nodes with age 30
     /// let nodes = builder.nodes_with_property("Person", "age", 30i64);
-    /// 
+    ///
     /// // Find all Person nodes with active = true
     /// let nodes = builder.nodes_with_property("Person", "active", true);
     /// ```
@@ -634,8 +640,8 @@ impl GraphBuilder {
     /// // Create a builder and add nodes
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
-    /// builder.set_prop_str(0, "name", "Alice");
-    /// builder.set_prop_i64(0, "age", 30);
+    /// builder.set_prop_str(0, "name", "Alice").unwrap();
+    /// builder.set_prop_i64(0, "age", 30).unwrap();
     ///
     /// // Index specific properties upfront
     /// let snapshot = builder.finalize(Some(&["name", "age"]));
@@ -1068,7 +1074,7 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
+        builder.add_rel(1, 2, "KNOWS").unwrap();
         assert_eq!(builder.rel_count(), 1);
     }
 
@@ -1077,11 +1083,11 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
         
-        builder.set_prop_str(1, "name", "Alice");
-        builder.set_prop_i64(1, "age", 30);
-        builder.set_prop_f64(1, "score", 95.5);
-        builder.set_prop_bool(1, "active", true);
-        
+        builder.set_prop_str(1, "name", "Alice").unwrap();
+        builder.set_prop_i64(1, "age", 30).unwrap();
+        builder.set_prop_f64(1, "score", 95.5).unwrap();
+        builder.set_prop_bool(1, "active", true).unwrap();
+
         let alice_id = builder.interner.get_or_intern("Alice");
         assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(alice_id)));
         assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(30)));
@@ -1101,12 +1107,12 @@ mod tests {
     fn test_update_prop_str() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.set_prop_str(1, "name", "Alice");
-        
+        builder.set_prop_str(1, "name", "Alice").unwrap();
+
         let alice_id = builder.interner.get_or_intern("Alice");
         assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(alice_id)));
-        
-        builder.update_prop_str(1, "name", "Bob");
+
+        builder.update_prop_str(1, "name", "Bob").unwrap();
         let bob_id = builder.interner.get_or_intern("Bob");
         assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(bob_id)));
     }
@@ -1115,10 +1121,10 @@ mod tests {
     fn test_update_prop_i64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.set_prop_i64(1, "age", 30);
+        builder.set_prop_i64(1, "age", 30).unwrap();
         assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(30)));
-        
-        builder.update_prop_i64(1, "age", 31);
+
+        builder.update_prop_i64(1, "age", 31).unwrap();
         assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(31)));
     }
 
@@ -1126,10 +1132,10 @@ mod tests {
     fn test_update_prop_f64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.set_prop_f64(1, "score", 95.5);
+        builder.set_prop_f64(1, "score", 95.5).unwrap();
         assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
-        
-        builder.update_prop_f64(1, "score", 98.0);
+
+        builder.update_prop_f64(1, "score", 98.0).unwrap();
         assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(98.0)));
     }
 
@@ -1146,9 +1152,9 @@ mod tests {
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(3, 1, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(3, 1, "KNOWS").unwrap();
+
         let (outgoing, incoming) = builder.neighbor_ids(1);
         assert_eq!(outgoing.len(), 1);
         assert_eq!(outgoing[0], 2); // Node 2
@@ -1189,7 +1195,7 @@ mod tests {
     fn test_get_property_key_id() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         assert_eq!(builder.property_key_id("name"), None);
-        builder.set_prop_str(1, "name", "value");
+        builder.set_prop_str(1, "name", "value").unwrap();
         assert!(builder.property_key_id("name").is_some());
     }
 
@@ -1209,8 +1215,8 @@ mod tests {
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(1, 3, "KNOWS");
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(1, 3, "KNOWS").unwrap();
         assert_eq!(builder.rel_count(), 2);
     }
 
@@ -1224,7 +1230,7 @@ mod tests {
         }
         // Set property on 9 nodes (>80% of 10)
         for i in 1..=9 {
-            builder.set_prop_i64(i, "age", 30);
+            builder.set_prop_i64(i, "age", 30).unwrap();
         }
         // This should create a dense column
         // We can't test finalize() directly due to into_vec() issue, but we can verify the data is there
@@ -1235,7 +1241,7 @@ mod tests {
     fn test_f64_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.set_prop_f64(1, "score", 95.5);
+        builder.set_prop_f64(1, "score", 95.5).unwrap();
         assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
     }
 
@@ -1243,7 +1249,7 @@ mod tests {
     fn test_bool_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.set_prop_bool(1, "active", true);
+        builder.set_prop_bool(1, "active", true).unwrap();
         assert_eq!(builder.prop(1, "active"), Some(ValueId::Bool(true)));
     }
 
@@ -1253,10 +1259,10 @@ mod tests {
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.set_prop_i64(0, "age", 30);
-        builder.set_prop_i64(1, "age", 30);
-        builder.set_prop_i64(2, "age", 25);
-        
+        builder.set_prop_i64(0, "age", 30).unwrap();
+        builder.set_prop_i64(1, "age", 30).unwrap();
+        builder.set_prop_i64(2, "age", 25).unwrap();
+
         let nodes = builder.nodes_with_property("Person", "age", 30i64);
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&0));
@@ -1275,8 +1281,8 @@ mod tests {
     fn test_get_nodes_with_property_f64() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(0), &["Person"]).unwrap();
-        builder.set_prop_f64(0, "score", 95.5);
-        
+        builder.set_prop_f64(0, "score", 95.5).unwrap();
+
         let nodes = builder.nodes_with_property("Person", "score", 95.5);
         assert_eq!(nodes.len(), 1);
         assert!(nodes.contains(&0));
@@ -1286,8 +1292,8 @@ mod tests {
     fn test_get_nodes_with_property_bool() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(0), &["Person"]).unwrap();
-        builder.set_prop_bool(0, "active", true);
-        
+        builder.set_prop_bool(0, "active", true).unwrap();
+
         let nodes = builder.nodes_with_property("Person", "active", true);
         assert_eq!(nodes.len(), 1);
         assert!(nodes.contains(&0));
@@ -1298,8 +1304,8 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.add_rel(0, 1, "KNOWS");
-        
+        builder.add_rel(0, 1, "KNOWS").unwrap();
+
         let snapshot = builder.finalize(None);
         assert_eq!(snapshot.n_nodes, 2);
         assert_eq!(snapshot.n_rels, 1);
@@ -1309,8 +1315,8 @@ mod tests {
     fn test_finalize_with_properties() {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(0), &["Person"]).unwrap();
-        builder.set_prop_str(0, "name", "Alice");
-        
+        builder.set_prop_str(0, "name", "Alice").unwrap();
+
         // Get the key before finalize consumes the builder
         let name_key = builder.property_key_id("name").unwrap();
         
@@ -1336,8 +1342,8 @@ mod tests {
         
         // Add first node with email
         let node1 = builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.set_prop_str(node1, "email", "alice@example.com");
-        
+        builder.set_prop_str(node1, "email", "alice@example.com").unwrap();
+
         // Manually build dedup key and add to map (simulating Parquet loading behavior)
         let _email_key = builder.interner.get_or_intern("email");
         let email_val = builder.interner.get_or_intern("alice@example.com");
@@ -1348,8 +1354,8 @@ mod tests {
         
         // Add second node with same email - check dedup_map
         let node2 = builder.add_node(Some(2), &["User"]).unwrap();
-        builder.set_prop_str(node2, "email", "alice@example.com");
-        
+        builder.set_prop_str(node2, "email", "alice@example.com").unwrap();
+
         // Check that dedup_map would find the existing node
         let email_val2 = builder.interner.get_or_intern("alice@example.com");
         let dedup_key2 = DedupKey::Single(ValueId::Str(email_val2));
@@ -1370,7 +1376,7 @@ mod tests {
         
         // Add third node with different email - should create new entry
         let node3 = builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.set_prop_str(node3, "email", "bob@example.com");
+        builder.set_prop_str(node3, "email", "bob@example.com").unwrap();
         let bob_val = builder.interner.get_or_intern("bob@example.com");
         let dedup_key3 = DedupKey::Single(ValueId::Str(bob_val));
         builder.dedup_map.insert(dedup_key3, node3);
@@ -1706,8 +1712,8 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+
         builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
         
         // Verify property was set by checking the internal storage
@@ -1724,8 +1730,8 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+
         builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
         
         // Verify property was set
@@ -1740,8 +1746,8 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+
         builder.set_rel_prop_f64(1, 2, "KNOWS", "score", 0.85);
         
         // Verify property was set
@@ -1756,8 +1762,8 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+
         builder.set_rel_prop_bool(1, 2, "KNOWS", "verified", true);
         
         // Verify property was set
@@ -1772,8 +1778,8 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+
         builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
         builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
         builder.set_rel_prop_f64(1, 2, "KNOWS", "score", 0.85);
@@ -1817,9 +1823,9 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(1, 2, "LIKES"); // Different type
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(1, 2, "LIKES").unwrap(); // Different type
+
         // Set property on KNOWS relationship
         builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
         
@@ -1838,8 +1844,8 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+
         builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
         builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
         
@@ -1872,9 +1878,9 @@ mod tests {
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
-        builder.add_rel(2, 3, "FOLLOWS");
-        builder.add_rel(1, 3, "KNOWS");
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(2, 3, "FOLLOWS").unwrap();
+        builder.add_rel(1, 3, "KNOWS").unwrap();
 
         // Bulk set properties
         let count = builder.set_rel_props(&[
@@ -1929,7 +1935,7 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS");
+        builder.add_rel(1, 2, "KNOWS").unwrap();
 
         let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
 

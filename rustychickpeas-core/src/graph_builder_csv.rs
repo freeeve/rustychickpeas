@@ -113,12 +113,9 @@ fn require_column_index(headers: &[String], column: &str, context: &str) -> Resu
 /// Generate the next auto-incremented node ID, returning `CapacityError` on overflow.
 fn next_auto_node_id(builder: &mut GraphBuilder) -> Result<u32> {
     let id = builder.next_node_id;
-    builder.next_node_id = id.wrapping_add(1);
-    if builder.next_node_id == 0 {
-        return Err(GraphError::CapacityError(
-            "Node ID counter wrapped around (exceeded u32::MAX)".to_string()
-        ));
-    }
+    builder.next_node_id = id.checked_add(1).ok_or_else(|| {
+        GraphError::CapacityError("Node ID counter exceeded u32::MAX".to_string())
+    })?;
     Ok(id)
 }
 
@@ -129,7 +126,7 @@ fn set_node_properties(
     record: &csv::StringRecord,
     prop_indices: &[(usize, String)],
     column_types: &Option<HashMap<&str, CsvColumnType>>,
-) {
+) -> Result<()> {
     for (idx, prop_name) in prop_indices {
         if let Some(val_str) = record.get(*idx) {
             if !val_str.is_empty() {
@@ -139,21 +136,22 @@ fn set_node_properties(
                     .unwrap_or(CsvColumnType::Auto);
                 let val = parse_csv_value(val_str, builder, col_type);
                 match val {
-                    ValueId::I64(v) => builder.set_prop_i64(node_id, prop_name, v),
+                    ValueId::I64(v) => { builder.set_prop_i64(node_id, prop_name, v)?; }
                     ValueId::F64(bits) => {
                         if let Some(f) = ValueId::F64(bits).to_f64() {
-                            builder.set_prop_f64(node_id, prop_name, f);
+                            builder.set_prop_f64(node_id, prop_name, f)?;
                         }
                     }
-                    ValueId::Bool(v) => builder.set_prop_bool(node_id, prop_name, v),
+                    ValueId::Bool(v) => { builder.set_prop_bool(node_id, prop_name, v)?; }
                     ValueId::Str(v) => {
                         let s = builder.interner.resolve(v);
-                        builder.set_prop_str(node_id, prop_name, s.as_str());
+                        builder.set_prop_str(node_id, prop_name, s.as_str())?;
                     }
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// Resolve interned label IDs back to string refs and call add_node.
@@ -217,7 +215,7 @@ fn process_node_row(
 
         builder.dedup_map.insert(dk.clone(), new_id);
         add_node_with_interned_labels(builder, new_id, &labels)?;
-        set_node_properties(builder, new_id, record, ctx.prop_indices, ctx.column_types);
+        set_node_properties(builder, new_id, record, ctx.prop_indices, ctx.column_types)?;
         seen_node_ids.insert(new_id);
         return Ok(NodeRowResult::Node { id: new_id, is_new: true });
     }
@@ -237,7 +235,7 @@ fn process_node_row(
 
     seen_node_ids.insert(new_id);
     add_node_with_interned_labels(builder, new_id, &labels)?;
-    set_node_properties(builder, new_id, record, ctx.prop_indices, ctx.column_types);
+    set_node_properties(builder, new_id, record, ctx.prop_indices, ctx.column_types)?;
     Ok(NodeRowResult::Node { id: new_id, is_new: true })
 }
 
@@ -622,7 +620,9 @@ fn process_rel_row(
             }
         }
         Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties) => {
-            let key_props: Vec<ValueId> = props.values().cloned().collect();
+            let mut sorted_keys: Vec<u32> = props.keys().copied().collect();
+            sorted_keys.sort();
+            let key_props: Vec<ValueId> = sorted_keys.iter().map(|k| props[k]).collect();
             let full_key = (start_id, end_id, rel_type_id, key_props);
             if seen_by_type_and_props.contains_key(&full_key) {
                 false
@@ -638,10 +638,8 @@ fn process_rel_row(
         return Ok(None);
     }
 
-    // Add relationship
-    let rel_idx = builder.rels.len();
-    builder.rels.push((start_id, end_id));
-    builder.rel_types.push(crate::types::RelationshipType::new(rel_type_id));
+    // Add relationship via add_rel() to ensure deg_out/deg_in and known_nodes are updated
+    let rel_idx = builder.add_rel(start_id, end_id, &rel_type)?;
 
     // Add properties
     for (prop_key, prop_val) in props {

@@ -173,7 +173,7 @@ fn load_relationships_with_mapping(
                     
                     if let (Some(&start_internal), Some(&end_internal)) = 
                         (mapping.get(&start_ldbc_id), mapping.get(&end_ldbc_id)) {
-                        builder.add_rel(start_internal, end_internal, rel_type);
+                        builder.add_rel(start_internal, end_internal, rel_type).unwrap();
                         count += 1;
                     }
                 }
@@ -189,7 +189,7 @@ fn load_relationships_with_mapping(
                     
                     if let (Some(&start_internal), Some(&end_internal)) = 
                         (mapping.get(&start_ldbc_id), mapping.get(&end_ldbc_id)) {
-                        builder.add_rel(start_internal, end_internal, rel_type);
+                        builder.add_rel(start_internal, end_internal, rel_type).unwrap();
                         count += 1;
                     }
                 }

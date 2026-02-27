@@ -329,8 +329,8 @@ fn parquet_vs_regular_builder_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let labels = if i % 2 == 0 { vec!["Person"] } else { vec!["Company"] };
                         builder.add_node(Some(i as u32), &labels).unwrap();
-                        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
-                        builder.set_prop_bool(i as u32, "active", i % 2 == 0);
+                        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i)).unwrap();
+                        builder.set_prop_bool(i as u32, "active", i % 2 == 0).unwrap();
                     }
                     black_box(builder);
                 });
@@ -414,8 +414,8 @@ fn parquet_vs_regular_with_dedup_benchmark(c: &mut Criterion) {
                         let labels = if i % 2 == 0 { vec!["Person"] } else { vec!["Company"] };
                         let email = format!("user{}@example.com", i / 10);
                         builder.add_node(Some(i as u32), &labels).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
-                        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i));
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
+                        builder.set_prop_str(i as u32, "name", &format!("Entity{}", i)).unwrap();
                     }
                     black_box(builder);
                 });
@@ -427,7 +427,7 @@ fn parquet_vs_regular_with_dedup_benchmark(c: &mut Criterion) {
 
 fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("finalize_with_deduplication");
-    
+
     for size in [10000, 100000].iter() {
         // Setup: build graph with duplicates
         let mut setup_builder = GraphBuilder::new(Some(*size), Some(*size));
@@ -435,14 +435,14 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
         for i in 0..*size {
             let email = format!("user{}@example.com", i / 10);
             setup_builder.add_node(Some(i as u32), &["Person"]).unwrap();
-            setup_builder.set_prop_str(i as u32, "email", &email);
+            setup_builder.set_prop_str(i as u32, "email", &email).unwrap();
         }
         for i in 0..*size {
             let from = (i % (*size / 10).max(1)) as u32;
             let to = ((i + 1) % (*size / 10).max(1)) as u32;
-            setup_builder.add_rel(from, to, "KNOWS");
+            setup_builder.add_rel(from, to, "KNOWS").unwrap();
         }
-        
+
         // Benchmark: Finalize with deduplication
         group.bench_with_input(
             BenchmarkId::new("with_dedup", *size),
@@ -454,19 +454,19 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
                     }
                     for i in 0..size {
                         let from = (i % (size / 10).max(1)) as u32;
                         let to = ((i + 1) % (size / 10).max(1)) as u32;
-                        builder.add_rel(from, to, "KNOWS");
+                        builder.add_rel(from, to, "KNOWS").unwrap();
                     }
                     let snapshot = builder.finalize(None);
                     black_box(snapshot);
                 });
             },
         );
-        
+
         // Benchmark: Finalize without deduplication
         group.bench_with_input(
             BenchmarkId::new("no_dedup", *size),
@@ -477,12 +477,12 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
                     }
                     for i in 0..size {
                         let from = (i % (size / 10).max(1)) as u32;
                         let to = ((i + 1) % (size / 10).max(1)) as u32;
-                        builder.add_rel(from, to, "KNOWS");
+                        builder.add_rel(from, to, "KNOWS").unwrap();
                     }
                     let snapshot = builder.finalize(None);
                     black_box(snapshot);

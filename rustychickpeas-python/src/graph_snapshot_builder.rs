@@ -137,7 +137,8 @@ impl GraphSnapshotBuilder {
     /// * `rel_type` - Relationship type string
     fn add_rel(&mut self, u: u32, v: u32, rel_type: String) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.add_rel(u, v, &rel_type);
+        self.builder.add_rel(u, v, &rel_type)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         Ok(())
     }
 
@@ -150,15 +151,16 @@ impl GraphSnapshotBuilder {
     /// * `value` - Property value (str, int, float, or bool)
     fn set_prop(&mut self, node_id: u32, key: String, value: &PyAny) -> PyResult<()> {
         self.check_not_finalized()?;
+        let map_err = |e: rustychickpeas_core::GraphError| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string());
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
-            self.builder.set_prop_bool(node_id, &key, b);
+            self.builder.set_prop_bool(node_id, &key, b).map_err(map_err)?;
         } else if let Ok(s) = value.extract::<String>() {
-            self.builder.set_prop_str(node_id, &key, &s);
+            self.builder.set_prop_str(node_id, &key, &s).map_err(map_err)?;
         } else if let Ok(i) = value.extract::<i64>() {
-            self.builder.set_prop_i64(node_id, &key, i);
+            self.builder.set_prop_i64(node_id, &key, i).map_err(map_err)?;
         } else if let Ok(f) = value.extract::<f64>() {
-            self.builder.set_prop_f64(node_id, &key, f);
+            self.builder.set_prop_f64(node_id, &key, f).map_err(map_err)?;
         } else {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Property value must be str, int, float, or bool"
@@ -182,19 +184,20 @@ impl GraphSnapshotBuilder {
     /// ```
     fn set_node_props(&mut self, node_id: u32, properties: &PyDict) -> PyResult<()> {
         self.check_not_finalized()?;
+        let map_err = |e: rustychickpeas_core::GraphError| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string());
         for (key_obj, value_obj) in properties {
             let key: String = key_obj.extract()?;
             let value: &PyAny = value_obj;
 
             // Check bool first, as True/False can be extracted as int
             if let Ok(b) = value.extract::<bool>() {
-                self.builder.set_prop_bool(node_id, &key, b);
+                self.builder.set_prop_bool(node_id, &key, b).map_err(map_err)?;
             } else if let Ok(s) = value.extract::<String>() {
-                self.builder.set_prop_str(node_id, &key, &s);
+                self.builder.set_prop_str(node_id, &key, &s).map_err(map_err)?;
             } else if let Ok(i) = value.extract::<i64>() {
-                self.builder.set_prop_i64(node_id, &key, i);
+                self.builder.set_prop_i64(node_id, &key, i).map_err(map_err)?;
             } else if let Ok(f) = value.extract::<f64>() {
-                self.builder.set_prop_f64(node_id, &key, f);
+                self.builder.set_prop_f64(node_id, &key, f).map_err(map_err)?;
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                     format!("Property value for key '{}' must be str, int, float, or bool", key)
@@ -207,29 +210,29 @@ impl GraphSnapshotBuilder {
     /// Set string property
     fn set_prop_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_prop_str(node_id, &key, &value);
-        Ok(())
+        self.builder.set_prop_str(node_id, &key, &value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Set i64 property
     fn set_prop_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_prop_i64(node_id, &key, value);
-        Ok(())
+        self.builder.set_prop_i64(node_id, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Set f64 property
     fn set_prop_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_prop_f64(node_id, &key, value);
-        Ok(())
+        self.builder.set_prop_f64(node_id, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Set boolean property
     fn set_prop_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_prop_bool(node_id, &key, value);
-        Ok(())
+        self.builder.set_prop_bool(node_id, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Set string property on a relationship
@@ -433,12 +436,17 @@ impl GraphSnapshotBuilder {
         self.check_not_finalized()?;
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let key_cols = key_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        let dedup = deduplication.as_ref().and_then(|s| match s.as_str() {
-            "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
-            "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
-            "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
-            _ => None,
-        });
+        let dedup = match deduplication.as_ref() {
+            Some(s) => {
+                match s.as_str() {
+                    "create_all" | "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
+                    "unique_by_type" | "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
+                    "unique_by_type_and_key_properties" | "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+                    other => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown deduplication strategy: '{}'. Valid options: 'create_all', 'unique_by_type', 'unique_by_type_and_key_properties'", other))),
+                }
+            }
+            None => None,
+        };
 
         self.builder
             .load_relationships_from_parquet(
@@ -489,12 +497,17 @@ impl GraphSnapshotBuilder {
 
         let prop_cols = property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
         let key_cols = key_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        let dedup = deduplication.as_ref().and_then(|s| match s.as_str() {
-            "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
-            "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
-            "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
-            _ => None,
-        });
+        let dedup = match deduplication.as_ref() {
+            Some(s) => {
+                match s.as_str() {
+                    "create_all" | "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
+                    "unique_by_type" | "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
+                    "unique_by_type_and_key_properties" | "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
+                    other => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown deduplication strategy: '{}'. Valid options: 'create_all', 'unique_by_type', 'unique_by_type_and_key_properties'", other))),
+                }
+            }
+            None => None,
+        };
 
         self.builder
             .load_relationships_from_parquet_v2(
@@ -513,6 +526,7 @@ impl GraphSnapshotBuilder {
     /// Get property value for a node (before finalization)
     /// Note: Uses get_property to avoid conflict with Python's property builtin
     fn get_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
+        self.check_not_finalized()?;
         let value_id = self.builder.prop(node_id, &key);
         
         Python::with_gil(|py| {
@@ -543,16 +557,17 @@ impl GraphSnapshotBuilder {
                 format!("Property key '{}' not found", key)
             ));
         }
-        
+
+        let map_err = |e: rustychickpeas_core::GraphError| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string());
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
-            self.builder.update_prop_bool(node_id, &key, b);
+            self.builder.update_prop_bool(node_id, &key, b).map_err(map_err)?;
         } else if let Ok(s) = value.extract::<String>() {
-            self.builder.update_prop_str(node_id, &key, &s);
+            self.builder.update_prop_str(node_id, &key, &s).map_err(map_err)?;
         } else if let Ok(i) = value.extract::<i64>() {
-            self.builder.update_prop_i64(node_id, &key, i);
+            self.builder.update_prop_i64(node_id, &key, i).map_err(map_err)?;
         } else if let Ok(f) = value.extract::<f64>() {
-            self.builder.update_prop_f64(node_id, &key, f);
+            self.builder.update_prop_f64(node_id, &key, f).map_err(map_err)?;
         } else {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Property value must be str, int, float, or bool"
@@ -564,29 +579,29 @@ impl GraphSnapshotBuilder {
     /// Update string property (removes old, sets new)
     fn update_prop_str(&mut self, node_id: u32, key: String, value: String) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.update_prop_str(node_id, &key, &value);
-        Ok(())
+        self.builder.update_prop_str(node_id, &key, &value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Update i64 property
     fn update_prop_i64(&mut self, node_id: u32, key: String, value: i64) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.update_prop_i64(node_id, &key, value);
-        Ok(())
+        self.builder.update_prop_i64(node_id, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Update f64 property
     fn update_prop_f64(&mut self, node_id: u32, key: String, value: f64) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.update_prop_f64(node_id, &key, value);
-        Ok(())
+        self.builder.update_prop_f64(node_id, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Update boolean property
     fn update_prop_bool(&mut self, node_id: u32, key: String, value: bool) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.update_prop_bool(node_id, &key, value);
-        Ok(())
+        self.builder.update_prop_bool(node_id, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     /// Get nodes with a specific property value, scoped by label (before finalization)
@@ -597,6 +612,7 @@ impl GraphSnapshotBuilder {
     /// * `value` - The property value to search for
     #[pyo3(signature = (label, key, value))]
     fn nodes_with_property(&self, label: String, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
+        self.check_not_finalized()?;
         let prop_value = py_to_property_value(value)?;
         let value_id = match prop_value {
             rustychickpeas_core::PropertyValue::String(_s) => {
@@ -623,12 +639,14 @@ impl GraphSnapshotBuilder {
 
     /// Get node labels (before finalization)
     fn node_labels(&self, node_id: u32) -> PyResult<Vec<String>> {
+        self.check_not_finalized()?;
         Ok(self.builder.node_labels(node_id))
     }
 
     /// Get neighbors of a node (before finalization)
     /// Returns (outgoing, incoming) as tuple of lists of node IDs
     fn neighbor_ids(&self, node_id: u32) -> PyResult<(Vec<u32>, Vec<u32>)> {
+        self.check_not_finalized()?;
         let (out, inc) = self.builder.neighbor_ids(node_id);
         Ok((out, inc))
     }

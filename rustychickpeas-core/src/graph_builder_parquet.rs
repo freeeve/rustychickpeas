@@ -88,41 +88,56 @@ fn set_node_property_from_arrow(
     column: &ArrayRef,
     data_type: &DataType,
     i: usize,
-) {
+) -> Result<()> {
     match data_type {
         DataType::Utf8 | DataType::LargeUtf8 => {
             if let Some(val) = extract_string_value(column, i) {
-                builder.set_prop_str(node_id, key, val);
+                builder.set_prop_str(node_id, key, val)?;
             }
         }
         DataType::Int64 => {
             if let Some(arr) = column.as_any().downcast_ref::<Int64Array>() {
                 if !arr.is_null(i) {
-                    builder.set_prop_i64(node_id, key, arr.value(i));
+                    builder.set_prop_i64(node_id, key, arr.value(i))?;
+                }
+            }
+        }
+        DataType::Int32 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Int32Array>() {
+                if !arr.is_null(i) {
+                    builder.set_prop_i64(node_id, key, arr.value(i) as i64)?;
                 }
             }
         }
         DataType::Float64 => {
             if let Some(arr) = column.as_any().downcast_ref::<Float64Array>() {
                 if !arr.is_null(i) {
-                    builder.set_prop_f64(node_id, key, arr.value(i));
+                    builder.set_prop_f64(node_id, key, arr.value(i))?;
+                }
+            }
+        }
+        DataType::Float32 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Float32Array>() {
+                if !arr.is_null(i) {
+                    builder.set_prop_f64(node_id, key, arr.value(i) as f64)?;
                 }
             }
         }
         DataType::Boolean => {
             if let Some(arr) = column.as_any().downcast_ref::<BooleanArray>() {
                 if !arr.is_null(i) {
-                    builder.set_prop_bool(node_id, key, arr.value(i));
+                    builder.set_prop_bool(node_id, key, arr.value(i))?;
                 }
             }
         }
         _ => {
             // Fallback: try string conversion
             if let Some(val) = extract_string_value(column, i) {
-                builder.set_prop_str(node_id, key, val);
+                builder.set_prop_str(node_id, key, val)?;
             }
         }
     }
+    Ok(())
 }
 
 /// Set a relationship property on the builder from an Arrow column value.
@@ -150,10 +165,24 @@ fn set_rel_property_from_arrow(
                 }
             }
         }
+        DataType::Int32 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Int32Array>() {
+                if !arr.is_null(i) {
+                    builder.rel_col_i64.entry(k).or_default().push((rel_idx, arr.value(i) as i64));
+                }
+            }
+        }
         DataType::Float64 => {
             if let Some(arr) = column.as_any().downcast_ref::<Float64Array>() {
                 if !arr.is_null(i) {
                     builder.rel_col_f64.entry(k).or_default().push((rel_idx, arr.value(i)));
+                }
+            }
+        }
+        DataType::Float32 => {
+            if let Some(arr) = column.as_any().downcast_ref::<Float32Array>() {
+                if !arr.is_null(i) {
+                    builder.rel_col_f64.entry(k).or_default().push((rel_idx, arr.value(i) as f64));
                 }
             }
         }
@@ -559,8 +588,16 @@ impl GraphBuilder {
             
             // Second pass: apply deduplication updates (now we can call self methods)
             for (_i, existing_node_id, merged_labels) in dedup_updates {
-                let labels_refs: Vec<&str> = merged_labels.iter().map(|s| s.as_str()).collect();
-                self.add_node(Some(existing_node_id), &labels_refs)?;
+                // Deduplicate labels before adding — only add labels not already on the node
+                let existing_labels: Vec<String> = self.node_labels(existing_node_id);
+                let new_labels: Vec<&str> = merged_labels.iter()
+                    .filter(|l| !existing_labels.contains(l))
+                    .map(|s| s.as_str())
+                    .collect();
+                if new_labels.is_empty() {
+                    continue;
+                }
+                self.add_node(Some(existing_node_id), &new_labels)?;
             }
 
             // Extract properties (after deduplication, so properties go to correct node_id)
@@ -579,7 +616,7 @@ impl GraphBuilder {
                                 id
                             }
                         };
-                        set_node_property_from_arrow(self, node_id, prop_col, column, field.data_type(), i);
+                        set_node_property_from_arrow(self, node_id, prop_col, column, field.data_type(), i)?;
                     }
                 }
             }
@@ -798,11 +835,12 @@ impl GraphBuilder {
         // Stream batches and process them immediately (no accumulation in memory)
         let mut rel_ids = Vec::new();
         let mut first_batch = true;
+        let mut skipped_missing_nodes = 0u64;
 
         while let Some(batch_result) = reader.next() {
             let batch = batch_result
                 .map_err(|e| GraphError::BulkLoadError(format!("Failed to read batch: {}", e)))?;
-            
+
             if batch.num_rows() == 0 {
                 continue;
             }
@@ -877,6 +915,7 @@ impl GraphBuilder {
                 if let (Some(start_id), Some(end_id), Some(rel_type)) = (start_nodes[i], end_nodes[i], rel_types[i]) {
                     // Skip relationships where start or end node doesn't exist in the builder
                     if !self.known_nodes.contains(start_id) || !self.known_nodes.contains(end_id) {
+                        skipped_missing_nodes += 1;
                         continue;
                     }
 
@@ -910,7 +949,7 @@ impl GraphBuilder {
                     
                     if should_add {
                         let rel_idx = self.rels.len(); // Index of the relationship we're about to add
-                        self.add_rel(start_id, end_id, rel_type);
+                        self.add_rel(start_id, end_id, rel_type)?;
                         rel_ids.push((start_id, end_id));
                         row_to_rel_idx[i] = Some(rel_idx);
                     }
@@ -930,6 +969,10 @@ impl GraphBuilder {
                     }
                 }
             }
+        }
+
+        if skipped_missing_nodes > 0 {
+            eprintln!("Warning: skipped {} relationships referencing non-existent nodes", skipped_missing_nodes);
         }
 
         Ok(rel_ids)
@@ -1058,6 +1101,7 @@ impl GraphBuilder {
         };
 
         let mut rel_ids: Vec<(u32, u32)> = Vec::new();
+        let mut skipped_missing_nodes = 0u64;
 
         // Process batches
         while let Some(batch_result) = reader.next() {
@@ -1075,11 +1119,23 @@ impl GraphBuilder {
                     for i in 0..batch.num_rows() {
                         if let Some(id_array) = column.as_any().downcast_ref::<Int64Array>() {
                             if !id_array.is_null(i) {
-                                start_nodes[i] = Some(id_array.value(i) as NodeId);
+                                let val = id_array.value(i);
+                                if val < 0 || val > u32::MAX as i64 {
+                                    return Err(GraphError::BulkLoadError(format!(
+                                        "Node ID {} is out of u32 range", val
+                                    )));
+                                }
+                                start_nodes[i] = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<Int32Array>() {
                             if !id_array.is_null(i) {
-                                start_nodes[i] = Some(id_array.value(i) as NodeId);
+                                let val = id_array.value(i);
+                                if val < 0 {
+                                    return Err(GraphError::BulkLoadError(format!(
+                                        "Node ID {} cannot be negative", val
+                                    )));
+                                }
+                                start_nodes[i] = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<UInt32Array>() {
                             if !id_array.is_null(i) {
@@ -1133,11 +1189,23 @@ impl GraphBuilder {
                     for i in 0..batch.num_rows() {
                         if let Some(id_array) = column.as_any().downcast_ref::<Int64Array>() {
                             if !id_array.is_null(i) {
-                                end_nodes[i] = Some(id_array.value(i) as NodeId);
+                                let val = id_array.value(i);
+                                if val < 0 || val > u32::MAX as i64 {
+                                    return Err(GraphError::BulkLoadError(format!(
+                                        "Node ID {} is out of u32 range", val
+                                    )));
+                                }
+                                end_nodes[i] = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<Int32Array>() {
                             if !id_array.is_null(i) {
-                                end_nodes[i] = Some(id_array.value(i) as NodeId);
+                                let val = id_array.value(i);
+                                if val < 0 {
+                                    return Err(GraphError::BulkLoadError(format!(
+                                        "Node ID {} cannot be negative", val
+                                    )));
+                                }
+                                end_nodes[i] = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<UInt32Array>() {
                             if !id_array.is_null(i) {
@@ -1188,6 +1256,10 @@ impl GraphBuilder {
                     (0..batch.num_rows())
                         .map(|i| if string_array.is_null(i) { None } else { Some(string_array.value(i)) })
                         .collect()
+                } else if let Some(large_string_array) = column.as_any().downcast_ref::<LargeStringArray>() {
+                    (0..batch.num_rows())
+                        .map(|i| if large_string_array.is_null(i) { None } else { Some(large_string_array.value(i)) })
+                        .collect()
                 } else {
                     vec![None; batch.num_rows()]
                 }
@@ -1223,6 +1295,7 @@ impl GraphBuilder {
                 if let (Some(start_id), Some(end_id), Some(rel_type)) = (start_nodes[i], end_nodes[i], rel_types[i]) {
                     // Skip relationships where start or end node doesn't exist
                     if !self.known_nodes.contains(start_id) || !self.known_nodes.contains(end_id) {
+                        skipped_missing_nodes += 1;
                         continue;
                     }
 
@@ -1256,7 +1329,7 @@ impl GraphBuilder {
 
                     if should_add {
                         let rel_idx = self.rels.len();
-                        self.add_rel(start_id, end_id, rel_type);
+                        self.add_rel(start_id, end_id, rel_type)?;
                         rel_ids.push((start_id, end_id));
                         row_to_rel_idx[i] = Some(rel_idx);
                     }
@@ -1276,6 +1349,10 @@ impl GraphBuilder {
                     }
                 }
             }
+        }
+
+        if skipped_missing_nodes > 0 {
+            eprintln!("Warning: skipped {} relationships referencing non-existent nodes", skipped_missing_nodes);
         }
 
         Ok(rel_ids)
@@ -4844,11 +4921,11 @@ mod tests {
         // Create nodes with uuid properties
         let mut builder = GraphBuilder::new(None, None);
         let alice = builder.add_node(None, &["Person"]).unwrap();
-        builder.set_prop_str(alice, "uuid", "uuid-alice");
+        builder.set_prop_str(alice, "uuid", "uuid-alice").unwrap();
         let bob = builder.add_node(None, &["Person"]).unwrap();
-        builder.set_prop_str(bob, "uuid", "uuid-bob");
+        builder.set_prop_str(bob, "uuid", "uuid-bob").unwrap();
         let charlie = builder.add_node(None, &["Person"]).unwrap();
-        builder.set_prop_str(charlie, "uuid", "uuid-charlie");
+        builder.set_prop_str(charlie, "uuid", "uuid-charlie").unwrap();
 
         // Load relationships using property lookup
         let rel_ids = builder.load_relationships_from_parquet_v2(
@@ -4916,11 +4993,11 @@ mod tests {
         // Create nodes with name + city properties
         let mut builder = GraphBuilder::new(None, None);
         let alice = builder.add_node(None, &["Person"]).unwrap();
-        builder.set_prop_str(alice, "name", "Alice");
-        builder.set_prop_str(alice, "city", "NYC");
+        builder.set_prop_str(alice, "name", "Alice").unwrap();
+        builder.set_prop_str(alice, "city", "NYC").unwrap();
         let bob = builder.add_node(None, &["Person"]).unwrap();
-        builder.set_prop_str(bob, "name", "Bob");
-        builder.set_prop_str(bob, "city", "LA");
+        builder.set_prop_str(bob, "name", "Bob").unwrap();
+        builder.set_prop_str(bob, "city", "LA").unwrap();
 
         // Load relationships using composite property lookup
         let rel_ids = builder.load_relationships_from_parquet_v2(

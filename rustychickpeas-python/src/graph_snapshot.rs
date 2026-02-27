@@ -122,7 +122,7 @@ impl GraphSnapshot {
     fn node(&self, node_id: u32) -> PyResult<Node> {
         if node_id >= self.snapshot.n_nodes {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes - 1)
+                format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes.saturating_sub(1))
             ));
         }
         Ok(Node {
@@ -143,7 +143,7 @@ impl GraphSnapshot {
         
         if node_id >= self.snapshot.n_nodes {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes - 1)
+                format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes.saturating_sub(1))
             ));
         }
 
@@ -413,7 +413,7 @@ impl GraphSnapshot {
         
         if rel_index >= max_index {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Relationship index {} out of range (max: {})", rel_index, max_index - 1)
+                format!("Relationship index {} out of range (max: {})", rel_index, max_index.saturating_sub(1))
             ));
         }
         
@@ -935,6 +935,17 @@ impl GraphSnapshot {
         rel_types: Option<Vec<String>>,
         max_depth: Option<usize>,
     ) -> PyResult<bool> {
+        if from_node >= self.snapshot.n_nodes {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("from_node {} out of range (max: {})", from_node, self.snapshot.n_nodes.saturating_sub(1))
+            ));
+        }
+        if to_node >= self.snapshot.n_nodes {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("to_node {} out of range (max: {})", to_node, self.snapshot.n_nodes.saturating_sub(1))
+            ));
+        }
+
         use rustychickpeas_core::types::Direction as CoreDirection;
         let rust_direction = match direction {
             Direction::Outgoing => CoreDirection::Outgoing,

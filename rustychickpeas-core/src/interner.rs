@@ -48,7 +48,10 @@ impl StringInterner {
     /// This uses a read lock, allowing concurrent reads
     pub fn resolve(&self, id: u32) -> String {
         let interner = self.inner.read().unwrap();
-        let spur = Spur::try_from_usize(id as usize - 1).expect("invalid intern id");
+        let spur = Spur::try_from_usize(
+            (id as usize).checked_sub(1).expect("intern ID 0 is reserved"),
+        )
+        .expect("invalid intern id");
         interner.resolve(&spur).to_string()
     }
 
@@ -73,6 +76,11 @@ impl StringInterner {
     pub fn len(&self) -> usize {
         let interner = self.inner.read().unwrap();
         interner.len()
+    }
+
+    /// Returns true if no strings have been interned
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Extract all interned strings as a Vec (for snapshot creation).
@@ -183,5 +191,29 @@ mod tests {
         let id = interner.get_or_intern("test");
         let interner2 = interner.clone();
         assert_eq!(interner2.resolve(id), "test");
+    }
+
+    #[test]
+    fn test_into_vec() {
+        let interner = StringInterner::new();
+        let id1 = interner.get_or_intern("hello");
+        let id2 = interner.get_or_intern("world");
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        let vec = interner.into_vec();
+        assert_eq!(vec, vec!["", "hello", "world"]);
+    }
+
+    #[test]
+    fn test_resolve_zero_panics() {
+        let interner = StringInterner::new();
+        let result = std::panic::catch_unwind(|| interner.resolve(0));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_resolve_zero_returns_none() {
+        let interner = StringInterner::new();
+        assert_eq!(interner.try_resolve(0), None);
     }
 }

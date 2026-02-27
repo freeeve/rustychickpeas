@@ -3,7 +3,7 @@
 High-performance in-memory graph database written in Rust with Python bindings via PyO3. Uses RoaringBitmaps and CSR (Compressed Sparse Row) adjacency for efficient graph operations.
 
 - **License:** MIT
-- **Version:** 0.6.0
+- **Version:** 0.6.1
 - **Repository:** https://github.com/freeeve/rustychickpeas
 - **PyPI:** `pip install rustychickpeas`
 

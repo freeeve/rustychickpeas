@@ -84,7 +84,7 @@ fn builder_add_relationships_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let from = i as u64;
                         let to = ((i + 1) % size) as u64;
-                        builder.add_rel(from as u32, to as u32, "KNOWS");
+                        builder.add_rel(from as u32, to as u32, "KNOWS").unwrap();
                     }
                     black_box(builder);
                 });
@@ -106,9 +106,9 @@ fn builder_add_properties_benchmark(c: &mut Criterion) {
                     let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
                     for i in 0..size {
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
-                        builder.set_prop_i64(i as u32, "age", (20 + i % 50) as i64);
-                        builder.set_prop_bool(i as u32, "active", i % 2 == 0);
+                        builder.set_prop_str(i as u32, "name", &format!("Person{}", i)).unwrap();
+                        builder.set_prop_i64(i as u32, "age", (20 + i % 50) as i64).unwrap();
+                        builder.set_prop_bool(i as u32, "active", i % 2 == 0).unwrap();
                     }
                     black_box(builder);
                 });
@@ -134,7 +134,7 @@ fn builder_finalize_benchmark(c: &mut Criterion) {
                 for i in 0..size {
                     let from = i as u32;
                     let to = ((i + 1) % size) as u32;
-                    builder.add_rel(from, to, "KNOWS");
+                    builder.add_rel(from, to, "KNOWS").unwrap();
                 }
                 
                 b.iter(|| {
@@ -145,7 +145,7 @@ fn builder_finalize_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let from = i as u32;
                         let to = ((i + 1) % size) as u32;
-                        builder_clone.add_rel(from, to, "KNOWS");
+                        builder_clone.add_rel(from, to, "KNOWS").unwrap();
                     }
                     let snapshot = builder_clone.finalize(None);
                     black_box(snapshot);
@@ -173,8 +173,8 @@ fn builder_node_deduplication_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10);
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
-                        builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
+                        builder.set_prop_str(i as u32, "name", &format!("Person{}", i)).unwrap();
                     }
                     black_box(builder);
                 });
@@ -202,9 +202,9 @@ fn builder_node_deduplication_multi_key_benchmark(c: &mut Criterion) {
                         let email = format!("user{}@example.com", i / 10);
                         let username = format!("user{}", i / 10);
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
-                        builder.set_prop_str(i as u32, "username", &username);
-                        builder.set_prop_str(i as u32, "name", &format!("Person{}", i));
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
+                        builder.set_prop_str(i as u32, "username", &username).unwrap();
+                        builder.set_prop_str(i as u32, "name", &format!("Person{}", i)).unwrap();
                     }
                     black_box(builder);
                 });
@@ -234,7 +234,7 @@ fn builder_relationship_deduplication_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let from = (i % (size / 10).max(1)) as u32;
                         let to = ((i + 1) % (size / 10).max(1)) as u32;
-                        builder.add_rel(from, to, "KNOWS");
+                        builder.add_rel(from, to, "KNOWS").unwrap();
                     }
                     black_box(builder);
                 });
@@ -258,13 +258,13 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i);
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
                     }
                     black_box(builder);
                 });
             },
         );
-        
+
         // With deduplication (but no actual duplicates)
         group.bench_with_input(
             BenchmarkId::new("dedup_no_duplicates", *size),
@@ -276,13 +276,13 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i);
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
                     }
                     black_box(builder);
                 });
             },
         );
-        
+
         // With deduplication (with duplicates)
         group.bench_with_input(
             BenchmarkId::new("dedup_with_duplicates", *size),
@@ -294,7 +294,7 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let email = format!("user{}@example.com", i / 10); // 10 nodes per email
                         builder.add_node(Some(i as u32), &["Person"]).unwrap();
-                        builder.set_prop_str(i as u32, "email", &email);
+                        builder.set_prop_str(i as u32, "email", &email).unwrap();
                     }
                     black_box(builder);
                 });
