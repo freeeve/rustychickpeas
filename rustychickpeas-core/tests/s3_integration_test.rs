@@ -1,13 +1,14 @@
 //! Integration tests for S3 Parquet loading
 //!
-//! These tests require LocalStack to be running. To set up LocalStack:
+//! These tests require LocalStack to be running. To set up LocalStack
+//! (use a 4.x community image; 2026.x images require a license token):
 //!
 //! ```bash
 //! docker run --rm -d \
 //!   --name localstack \
 //!   -p 4566:4566 \
 //!   -e SERVICES=s3 \
-//!   localstack/localstack
+//!   localstack/localstack:4.9
 //! ```
 //!
 //! To run these tests:
@@ -144,43 +145,19 @@ fn create_test_relationships_parquet(temp_dir: &TempDir, filename: &str) -> std:
     file_path
 }
 
-/// Check if bucket exists and create it if it doesn't, using object_store API
-/// LocalStack auto-creates buckets on first PUT, so we use that mechanism
+/// Create the bucket if it doesn't exist via the S3 CreateBucket call.
+/// LocalStack accepts unsigned requests; 200 means created and 409 means
+/// the bucket already exists, both of which are fine for tests.
 async fn ensure_bucket_exists(bucket: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Configure S3 client for LocalStack
-    let s3 = AmazonS3Builder::new()
-        .with_bucket_name(bucket)
-        .with_endpoint("http://localhost:4566")
-        .with_region("us-east-1")
-        .with_access_key_id("test")
-        .with_secret_access_key("test")
-        .with_allow_http(true)
-        .build()?;
-
-    let store: Arc<dyn ObjectStore> = Arc::new(s3);
-
-    // Try to check if bucket exists by listing (empty list is fine)
-    use futures::StreamExt;
-    let mut stream = store.list(None);
-
-    // Check first item to see if bucket exists
-    match stream.next().await {
-        Some(Ok(_)) | None => {
-            // Bucket exists (got items or empty list)
-            Ok(())
-        }
-        Some(Err(object_store::Error::NotFound { .. })) => {
-            // Bucket doesn't exist - create it by putting a dummy object
-            // LocalStack will auto-create the bucket on first PUT
-            let dummy_path = ObjectPath::from("__bucket_check__");
-            let dummy_data = bytes::Bytes::from("dummy");
-
-            store.put(&dummy_path, dummy_data.into()).await?;
-            // Clean up the dummy object
-            let _ = store.delete(&dummy_path).await;
-            Ok(())
-        }
-        Some(Err(e)) => Err(Box::new(e)),
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(format!("http://localhost:4566/{}", bucket))
+        .send()
+        .await?;
+    if resp.status().is_success() || resp.status().as_u16() == 409 {
+        Ok(())
+    } else {
+        Err(format!("Failed to create bucket '{}': {}", bucket, resp.status()).into())
     }
 }
 

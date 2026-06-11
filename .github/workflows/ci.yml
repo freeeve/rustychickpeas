@@ -126,16 +126,43 @@ jobs:
   rust-tests:
     name: Test Rust core
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Run Rust tests
         run: |
           cargo test --workspace --release
+
+  s3-integration:
+    name: S3 integration tests (LocalStack)
+    runs-on: ubuntu-latest
+
+    services:
+      localstack:
+        # 2026.x images require a license token; 4.x is the community line
+        image: localstack/localstack:4.9
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run S3 integration tests
+        run: cargo test --package rustychickpeas-core --test s3_integration_test -- --ignored
 
   coverage:
     name: Coverage
