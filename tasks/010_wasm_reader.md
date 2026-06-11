@@ -18,10 +18,10 @@ Implementation notes:
   wasm32-unknown-unknown. Reader deps: roaring, byte parsing, a fetch
   abstraction (trait over HTTP Range; wasm impl via fetch/JS binding,
   native impl for tests).
-- Decide whether the RecordStore reader is vendored, depended on (if
-  roaringrange's rust crate exposes it as a library), or reimplemented to
-  the frozen RRSR spec. Conformance test against roaringrange-written
-  record stores either way.
+- DECIDED (2026-06-11): depend on roaringrange's rust crate for the
+  RecordStore reader (vendoring as fallback if publishing/feature flags
+  get in the way). Still add a conformance test against
+  roaringrange-written record stores.
 - Memory budget: resident adjacency is ~8 bytes/edge (u32 neighbor x2
   directions) + offsets; fine up to tens of millions of edges in a browser
   tab. Document the practical ceiling; huge graphs (OpenAlex-scale
