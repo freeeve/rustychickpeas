@@ -1,7 +1,7 @@
 //! Utility functions for Python bindings
 
 use pyo3::prelude::*;
-use pyo3::types::PyBool;
+use pyo3::types::{PyBool, PyLong};
 use rustychickpeas_core::graph_snapshot::Atoms;
 use rustychickpeas_core::ValueId;
 
@@ -14,8 +14,13 @@ pub fn py_to_property_value(value: &PyAny) -> PyResult<rustychickpeas_core::Prop
         Ok(PropertyValue::Boolean(b))
     } else if let Ok(s) = value.extract::<String>() {
         Ok(PropertyValue::String(s))
-    } else if let Ok(i) = value.extract::<i64>() {
-        Ok(PropertyValue::Integer(i))
+    } else if value.is_instance_of::<PyLong>() {
+        match value.extract::<i64>() {
+            Ok(i) => Ok(PropertyValue::Integer(i)),
+            Err(_) => Err(PyErr::new::<pyo3::exceptions::PyOverflowError, _>(
+                "Integer property value out of range for i64",
+            )),
+        }
     } else if let Ok(f) = value.extract::<f64>() {
         Ok(PropertyValue::Float(f))
     } else {
@@ -23,6 +28,17 @@ pub fn py_to_property_value(value: &PyAny) -> PyResult<rustychickpeas_core::Prop
             "Property value must be str, int, float, or bool",
         ))
     }
+}
+
+/// Deterministic 64-bit hash (splitmix64 finalizer) for stable `__hash__` values
+///
+/// Used instead of `std::collections::hash_map::DefaultHasher`, whose output is
+/// not guaranteed to be stable across Rust releases.
+pub fn stable_hash_u64(x: u64) -> u64 {
+    let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// Convert a ValueId to a Python object, resolving strings through the Atoms table

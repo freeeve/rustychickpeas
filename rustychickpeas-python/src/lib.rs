@@ -30,6 +30,7 @@ fn rustychickpeas(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Node>()?;
     m.add_class::<Relationship>()?;
     m.add_class::<GraphSnapshot>()?;
+    m.add_class::<graph_snapshot::NodeIdIter>()?;
     m.add_class::<GraphSnapshotBuilder>()?;
     m.add_class::<RustyChickpeas>()?;
     Ok(())

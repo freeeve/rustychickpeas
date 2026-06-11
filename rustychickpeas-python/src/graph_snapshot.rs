@@ -17,6 +17,33 @@ pub struct GraphSnapshot {
     pub(crate) snapshot: std::sync::Arc<CoreGraphSnapshot>,
 }
 
+/// Iterator over the node IDs of a GraphSnapshot
+///
+/// Node IDs in a finalized snapshot are dense in `0..n_nodes` (the same range
+/// accepted by `GraphSnapshot.node()`), so iteration only needs the bounds.
+#[pyclass(name = "NodeIdIter")]
+pub struct NodeIdIter {
+    current: u32,
+    end: u32,
+}
+
+#[pymethods]
+impl NodeIdIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<u32> {
+        if slf.current < slf.end {
+            let id = slf.current;
+            slf.current += 1;
+            Some(id)
+        } else {
+            None
+        }
+    }
+}
+
 impl GraphSnapshot {
     /// Get string ID from string
     /// Uses the reverse index in Atoms for O(1) lookup
@@ -71,6 +98,16 @@ impl GraphSnapshot {
 
     fn __len__(&self) -> usize {
         self.snapshot.n_nodes as usize
+    }
+
+    /// Iterate over all node IDs in the snapshot (0..n_nodes)
+    ///
+    /// Yields exactly the node IDs accepted by `node()`.
+    fn __iter__(&self) -> NodeIdIter {
+        NodeIdIter {
+            current: 0,
+            end: self.snapshot.n_nodes,
+        }
     }
 
     /// Get number of nodes
@@ -648,6 +685,7 @@ impl GraphSnapshot {
     #[allow(clippy::too_many_arguments)]
     fn bidirectional_bfs(
         &self,
+        py: Python<'_>,
         source_nodes: Vec<u32>,
         target_nodes: Vec<u32>,
         direction: Direction,
@@ -673,167 +711,171 @@ impl GraphSnapshot {
         // Error cell to capture Python exceptions from filter callbacks
         let error_cell: Arc<Mutex<Option<PyErr>>> = Arc::new(Mutex::new(None));
 
-        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) =
-            (node_filter.as_ref(), rel_filter.as_ref())
-        {
-            let nf_obj = nf_obj.clone();
-            let rf_obj = rf_obj.clone();
-            let nf_err = error_cell.clone();
-            let rf_err = error_cell.clone();
-            self.snapshot.bidirectional_bfs(
-                &source_set,
-                &target_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .is_some()
-                    {
-                        return false;
-                    }
-                    Python::with_gil(|py| {
-                        match nf_obj
-                            .call1(py, (node_id,))
-                            .and_then(|r| r.extract::<bool>(py))
-                        {
-                            Ok(v) => v,
-                            Err(e) => {
-                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
-                                false
-                            }
-                        }
-                    })
-                }),
-                Some(
-                    move |from: u32,
-                          to: u32,
-                          rel_type: RelationshipType,
-                          csr_pos: u32,
-                          snapshot: &CoreGraphSnapshot|
-                          -> bool {
-                        if rf_err
+        // Release the GIL for the traversal; filter callbacks re-acquire it
+        // per invocation via Python::with_gil.
+        let (node_bitmap, rel_bitmap) = py.allow_threads(|| {
+            if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
+                let nf_obj = nf_obj.clone();
+                let rf_obj = rf_obj.clone();
+                let nf_err = error_cell.clone();
+                let rf_err = error_cell.clone();
+                self.snapshot.bidirectional_bfs(
+                    &source_set,
+                    &target_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                        if nf_err
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
                             .is_some()
                         {
                             return false;
                         }
-                        let rf_obj = rf_obj.clone();
                         Python::with_gil(|py| {
-                            let rel_type_str = snapshot
-                                .resolve_string(rel_type.id())
-                                .unwrap_or("")
-                                .to_string();
-                            match rf_obj
-                                .call1(py, (from, to, rel_type_str, csr_pos))
+                            match nf_obj
+                                .call1(py, (node_id,))
                                 .and_then(|r| r.extract::<bool>(py))
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                    *nf_err.lock().unwrap_or_else(PoisonError::into_inner) =
                                         Some(e);
                                     false
                                 }
                             }
                         })
-                    },
-                ),
-                max_depth,
-            )
-        } else if let Some(nf_obj) = node_filter.as_ref() {
-            let nf_obj = nf_obj.clone();
-            let nf_err = error_cell.clone();
-            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
-            self.snapshot.bidirectional_bfs::<_, RelFilter>(
-                &source_set,
-                &target_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .is_some()
-                    {
-                        return false;
-                    }
-                    Python::with_gil(|py| {
-                        match nf_obj
-                            .call1(py, (node_id,))
-                            .and_then(|r| r.extract::<bool>(py))
-                        {
-                            Ok(v) => v,
-                            Err(e) => {
-                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
-                                false
+                    }),
+                    Some(
+                        move |from: u32,
+                              to: u32,
+                              rel_type: RelationshipType,
+                              csr_pos: u32,
+                              snapshot: &CoreGraphSnapshot|
+                              -> bool {
+                            if rf_err
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .is_some()
+                            {
+                                return false;
                             }
-                        }
-                    })
-                }),
-                None,
-                max_depth,
-            )
-        } else if let Some(rf_obj) = rel_filter.as_ref() {
-            let rf_obj = rf_obj.clone();
-            let rf_err = error_cell.clone();
-            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
-            self.snapshot.bidirectional_bfs::<NodeFilter, _>(
-                &source_set,
-                &target_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                None,
-                Some(
-                    move |from: u32,
-                          to: u32,
-                          rel_type: RelationshipType,
-                          csr_pos: u32,
-                          snapshot: &CoreGraphSnapshot|
-                          -> bool {
-                        if rf_err
+                            let rf_obj = rf_obj.clone();
+                            Python::with_gil(|py| {
+                                let rel_type_str = snapshot
+                                    .resolve_string(rel_type.id())
+                                    .unwrap_or("")
+                                    .to_string();
+                                match rf_obj
+                                    .call1(py, (from, to, rel_type_str, csr_pos))
+                                    .and_then(|r| r.extract::<bool>(py))
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                            Some(e);
+                                        false
+                                    }
+                                }
+                            })
+                        },
+                    ),
+                    max_depth,
+                )
+            } else if let Some(nf_obj) = node_filter.as_ref() {
+                let nf_obj = nf_obj.clone();
+                let nf_err = error_cell.clone();
+                type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+                self.snapshot.bidirectional_bfs::<_, RelFilter>(
+                    &source_set,
+                    &target_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                        if nf_err
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
                             .is_some()
                         {
                             return false;
                         }
-                        let rf_obj = rf_obj.clone();
                         Python::with_gil(|py| {
-                            let rel_type_str = snapshot
-                                .resolve_string(rel_type.id())
-                                .unwrap_or("")
-                                .to_string();
-                            match rf_obj
-                                .call1(py, (from, to, rel_type_str, csr_pos))
+                            match nf_obj
+                                .call1(py, (node_id,))
                                 .and_then(|r| r.extract::<bool>(py))
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                    *nf_err.lock().unwrap_or_else(PoisonError::into_inner) =
                                         Some(e);
                                     false
                                 }
                             }
                         })
-                    },
-                ),
-                max_depth,
-            )
-        } else {
-            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
-            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
-            self.snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
-                &source_set,
-                &target_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                None,
-                None,
-                max_depth,
-            )
-        };
+                    }),
+                    None,
+                    max_depth,
+                )
+            } else if let Some(rf_obj) = rel_filter.as_ref() {
+                let rf_obj = rf_obj.clone();
+                let rf_err = error_cell.clone();
+                type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+                self.snapshot.bidirectional_bfs::<NodeFilter, _>(
+                    &source_set,
+                    &target_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    None,
+                    Some(
+                        move |from: u32,
+                              to: u32,
+                              rel_type: RelationshipType,
+                              csr_pos: u32,
+                              snapshot: &CoreGraphSnapshot|
+                              -> bool {
+                            if rf_err
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .is_some()
+                            {
+                                return false;
+                            }
+                            let rf_obj = rf_obj.clone();
+                            Python::with_gil(|py| {
+                                let rel_type_str = snapshot
+                                    .resolve_string(rel_type.id())
+                                    .unwrap_or("")
+                                    .to_string();
+                                match rf_obj
+                                    .call1(py, (from, to, rel_type_str, csr_pos))
+                                    .and_then(|r| r.extract::<bool>(py))
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                            Some(e);
+                                        false
+                                    }
+                                }
+                            })
+                        },
+                    ),
+                    max_depth,
+                )
+            } else {
+                type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+                type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+                self.snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
+                    &source_set,
+                    &target_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    None,
+                    None,
+                    max_depth,
+                )
+            }
+        });
 
         // Propagate any Python exception captured during BFS
         if let Some(err) = error_cell
@@ -899,8 +941,10 @@ impl GraphSnapshot {
     /// )
     /// ```
     #[pyo3(signature = (start_nodes, direction, *, rel_types=None, node_filter=None, rel_filter=None, max_depth=None))]
+    #[allow(clippy::too_many_arguments)]
     fn bfs(
         &self,
+        py: Python<'_>,
         start_nodes: Vec<u32>,
         direction: Direction,
         rel_types: Option<Vec<String>>,
@@ -924,163 +968,167 @@ impl GraphSnapshot {
         // Error cell to capture Python exceptions from filter callbacks
         let error_cell: Arc<Mutex<Option<PyErr>>> = Arc::new(Mutex::new(None));
 
-        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) =
-            (node_filter.as_ref(), rel_filter.as_ref())
-        {
-            let nf_obj = nf_obj.clone();
-            let rf_obj = rf_obj.clone();
-            let nf_err = error_cell.clone();
-            let rf_err = error_cell.clone();
-            self.snapshot.bfs(
-                &start_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .is_some()
-                    {
-                        return false;
-                    }
-                    Python::with_gil(|py| {
-                        match nf_obj
-                            .call1(py, (node_id,))
-                            .and_then(|r| r.extract::<bool>(py))
-                        {
-                            Ok(v) => v,
-                            Err(e) => {
-                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
-                                false
-                            }
-                        }
-                    })
-                }),
-                Some(
-                    move |from: u32,
-                          to: u32,
-                          rel_type: RelationshipType,
-                          csr_pos: u32,
-                          snapshot: &CoreGraphSnapshot|
-                          -> bool {
-                        if rf_err
+        // Release the GIL for the traversal; filter callbacks re-acquire it
+        // per invocation via Python::with_gil.
+        let (node_bitmap, rel_bitmap) = py.allow_threads(|| {
+            if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
+                let nf_obj = nf_obj.clone();
+                let rf_obj = rf_obj.clone();
+                let nf_err = error_cell.clone();
+                let rf_err = error_cell.clone();
+                self.snapshot.bfs(
+                    &start_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                        if nf_err
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
                             .is_some()
                         {
                             return false;
                         }
-                        let rf_obj = rf_obj.clone();
                         Python::with_gil(|py| {
-                            let rel_type_str = snapshot
-                                .resolve_string(rel_type.id())
-                                .unwrap_or("")
-                                .to_string();
-                            match rf_obj
-                                .call1(py, (from, to, rel_type_str, csr_pos))
+                            match nf_obj
+                                .call1(py, (node_id,))
                                 .and_then(|r| r.extract::<bool>(py))
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                    *nf_err.lock().unwrap_or_else(PoisonError::into_inner) =
                                         Some(e);
                                     false
                                 }
                             }
                         })
-                    },
-                ),
-                max_depth,
-            )
-        } else if let Some(nf_obj) = node_filter.as_ref() {
-            let nf_obj = nf_obj.clone();
-            let nf_err = error_cell.clone();
-            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
-            self.snapshot.bfs::<_, RelFilter>(
-                &start_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .is_some()
-                    {
-                        return false;
-                    }
-                    Python::with_gil(|py| {
-                        match nf_obj
-                            .call1(py, (node_id,))
-                            .and_then(|r| r.extract::<bool>(py))
-                        {
-                            Ok(v) => v,
-                            Err(e) => {
-                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
-                                false
+                    }),
+                    Some(
+                        move |from: u32,
+                              to: u32,
+                              rel_type: RelationshipType,
+                              csr_pos: u32,
+                              snapshot: &CoreGraphSnapshot|
+                              -> bool {
+                            if rf_err
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .is_some()
+                            {
+                                return false;
                             }
-                        }
-                    })
-                }),
-                None,
-                max_depth,
-            )
-        } else if let Some(rf_obj) = rel_filter.as_ref() {
-            let rf_obj = rf_obj.clone();
-            let rf_err = error_cell.clone();
-            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
-            self.snapshot.bfs::<NodeFilter, _>(
-                &start_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                None,
-                Some(
-                    move |from: u32,
-                          to: u32,
-                          rel_type: RelationshipType,
-                          csr_pos: u32,
-                          snapshot: &CoreGraphSnapshot|
-                          -> bool {
-                        if rf_err
+                            let rf_obj = rf_obj.clone();
+                            Python::with_gil(|py| {
+                                let rel_type_str = snapshot
+                                    .resolve_string(rel_type.id())
+                                    .unwrap_or("")
+                                    .to_string();
+                                match rf_obj
+                                    .call1(py, (from, to, rel_type_str, csr_pos))
+                                    .and_then(|r| r.extract::<bool>(py))
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                            Some(e);
+                                        false
+                                    }
+                                }
+                            })
+                        },
+                    ),
+                    max_depth,
+                )
+            } else if let Some(nf_obj) = node_filter.as_ref() {
+                let nf_obj = nf_obj.clone();
+                let nf_err = error_cell.clone();
+                type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+                self.snapshot.bfs::<_, RelFilter>(
+                    &start_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
+                        if nf_err
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
                             .is_some()
                         {
                             return false;
                         }
-                        let rf_obj = rf_obj.clone();
                         Python::with_gil(|py| {
-                            let rel_type_str = snapshot
-                                .resolve_string(rel_type.id())
-                                .unwrap_or("")
-                                .to_string();
-                            match rf_obj
-                                .call1(py, (from, to, rel_type_str, csr_pos))
+                            match nf_obj
+                                .call1(py, (node_id,))
                                 .and_then(|r| r.extract::<bool>(py))
                             {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                    *nf_err.lock().unwrap_or_else(PoisonError::into_inner) =
                                         Some(e);
                                     false
                                 }
                             }
                         })
-                    },
-                ),
-                max_depth,
-            )
-        } else {
-            type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
-            type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
-            self.snapshot.bfs::<NodeFilter, RelFilter>(
-                &start_set,
-                rust_direction,
-                rel_types_str.as_deref(),
-                None,
-                None,
-                max_depth,
-            )
-        };
+                    }),
+                    None,
+                    max_depth,
+                )
+            } else if let Some(rf_obj) = rel_filter.as_ref() {
+                let rf_obj = rf_obj.clone();
+                let rf_err = error_cell.clone();
+                type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+                self.snapshot.bfs::<NodeFilter, _>(
+                    &start_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    None,
+                    Some(
+                        move |from: u32,
+                              to: u32,
+                              rel_type: RelationshipType,
+                              csr_pos: u32,
+                              snapshot: &CoreGraphSnapshot|
+                              -> bool {
+                            if rf_err
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .is_some()
+                            {
+                                return false;
+                            }
+                            let rf_obj = rf_obj.clone();
+                            Python::with_gil(|py| {
+                                let rel_type_str = snapshot
+                                    .resolve_string(rel_type.id())
+                                    .unwrap_or("")
+                                    .to_string();
+                                match rf_obj
+                                    .call1(py, (from, to, rel_type_str, csr_pos))
+                                    .and_then(|r| r.extract::<bool>(py))
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                            Some(e);
+                                        false
+                                    }
+                                }
+                            })
+                        },
+                    ),
+                    max_depth,
+                )
+            } else {
+                type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
+                type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
+                self.snapshot.bfs::<NodeFilter, RelFilter>(
+                    &start_set,
+                    rust_direction,
+                    rel_types_str.as_deref(),
+                    None,
+                    None,
+                    max_depth,
+                )
+            }
+        });
 
         // Propagate any Python exception captured during BFS
         if let Some(err) = error_cell

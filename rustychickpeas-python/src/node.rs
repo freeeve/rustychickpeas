@@ -2,12 +2,10 @@
 
 use crate::direction::Direction;
 use crate::relationship::Relationship;
-use crate::utils::value_id_to_pyobject;
+use crate::utils::{stable_hash_u64, value_id_to_pyobject};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, RelationshipType};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 /// Python wrapper for a Node in a GraphSnapshot
 #[pyclass(name = "Node")]
@@ -289,10 +287,10 @@ impl Node {
         self.node_id == other.node_id
     }
 
+    /// Stable, deterministic hash of the node ID
+    /// Consistent with `__eq__`: equal nodes always have equal hashes.
     fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.node_id.hash(&mut hasher);
-        hasher.finish()
+        stable_hash_u64(self.node_id as u64)
     }
 
     /// Convert node to a Python dict (zero-allocation where possible)

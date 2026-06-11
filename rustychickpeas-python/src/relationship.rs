@@ -1,12 +1,10 @@
 //! Relationship Python wrapper
 
 use crate::node::Node;
-use crate::utils::value_id_to_pyobject;
+use crate::utils::{stable_hash_u64, value_id_to_pyobject};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rustychickpeas_core::GraphSnapshot as CoreGraphSnapshot;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 /// Python wrapper for a Relationship in a GraphSnapshot
 /// Relationships are identified by their position in the CSR arrays
@@ -113,10 +111,10 @@ impl Relationship {
         self.rel_index == other.rel_index
     }
 
+    /// Stable, deterministic hash of the relationship index
+    /// Consistent with `__eq__`: equal relationships always have equal hashes.
     fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.rel_index.hash(&mut hasher);
-        hasher.finish()
+        stable_hash_u64(self.rel_index as u64)
     }
 
     /// Get property value for this relationship
