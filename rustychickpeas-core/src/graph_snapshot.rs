@@ -7,7 +7,7 @@ use crate::bitmap::NodeSet;
 use crate::types::{Direction, Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 /// Interned value ID for property indexes
 /// All strings are interned for fast equality/hash operations
@@ -996,7 +996,7 @@ impl GraphSnapshot {
 
         // Check if the index already exists (short lock)
         {
-            let index = self.prop_index.lock().unwrap();
+            let index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(key_index) = index.get(&index_key) {
                 return key_index.get(&value).cloned();
             }
@@ -1007,7 +1007,7 @@ impl GraphSnapshot {
         let key_index_final = Self::build_property_index_for_key_and_label(column, Some(label_nodes));
 
         // Re-acquire lock and insert (another thread may have built it first)
-        let mut index = self.prop_index.lock().unwrap();
+        let mut index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
         let entry = index.entry(index_key).or_insert(key_index_final);
         entry.get(&value).cloned()
     }

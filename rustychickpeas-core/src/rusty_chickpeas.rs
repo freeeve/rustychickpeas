@@ -3,7 +3,7 @@
 use crate::graph_builder::GraphBuilder;
 use crate::graph_snapshot::GraphSnapshot;
 use hashbrown::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 /// High-level graph API for storing and retrieving multiple graph snapshots by version
 /// 
@@ -56,7 +56,7 @@ impl RustyChickpeas {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "latest".to_string());
         
-        let mut snapshots = self.snapshots.write().unwrap();
+        let mut snapshots = self.snapshots.write().unwrap_or_else(PoisonError::into_inner);
         snapshots.insert(version, Arc::new(snapshot));
     }
 
@@ -65,7 +65,7 @@ impl RustyChickpeas {
     /// This allows you to override the snapshot's internal version or assign
     /// a version to a snapshot that doesn't have one.
     pub fn add_snapshot_with_version(&self, version: &str, snapshot: GraphSnapshot) {
-        let mut snapshots = self.snapshots.write().unwrap();
+        let mut snapshots = self.snapshots.write().unwrap_or_else(PoisonError::into_inner);
         snapshots.insert(version.to_string(), Arc::new(snapshot));
     }
 
@@ -73,37 +73,37 @@ impl RustyChickpeas {
     /// 
     /// Returns `None` if no snapshot with that version exists.
     pub fn graph_snapshot(&self, version: &str) -> Option<Arc<GraphSnapshot>> {
-        let snapshots = self.snapshots.read().unwrap();
+        let snapshots = self.snapshots.read().unwrap_or_else(PoisonError::into_inner);
         snapshots.get(version).cloned()
     }
 
     /// Get all available versions
     pub fn versions(&self) -> Vec<String> {
-        let snapshots = self.snapshots.read().unwrap();
+        let snapshots = self.snapshots.read().unwrap_or_else(PoisonError::into_inner);
         snapshots.keys().cloned().collect()
     }
 
     /// Remove a snapshot by version
     pub fn remove_snapshot(&self, version: &str) -> bool {
-        let mut snapshots = self.snapshots.write().unwrap();
+        let mut snapshots = self.snapshots.write().unwrap_or_else(PoisonError::into_inner);
         snapshots.remove(version).is_some()
     }
 
     /// Get the number of snapshots stored
     pub fn len(&self) -> usize {
-        let snapshots = self.snapshots.read().unwrap();
+        let snapshots = self.snapshots.read().unwrap_or_else(PoisonError::into_inner);
         snapshots.len()
     }
 
     /// Check if the manager is empty
     pub fn is_empty(&self) -> bool {
-        let snapshots = self.snapshots.read().unwrap();
+        let snapshots = self.snapshots.read().unwrap_or_else(PoisonError::into_inner);
         snapshots.is_empty()
     }
 
     /// Clear all snapshots
     pub fn clear(&self) {
-        let mut snapshots = self.snapshots.write().unwrap();
+        let mut snapshots = self.snapshots.write().unwrap_or_else(PoisonError::into_inner);
         snapshots.clear();
     }
 }

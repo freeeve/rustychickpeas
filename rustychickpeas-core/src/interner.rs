@@ -7,7 +7,7 @@
 //! (interning new strings) require exclusive access.
 
 use lasso::{Key, Rodeo, Spur};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 /// Thread-safe string interner
 /// Uses Arc<RwLock<>> to allow concurrent reads and exclusive writes
@@ -26,7 +26,7 @@ impl StringInterner {
     /// Intern a string and return its ID
     /// This requires a write lock, so it's exclusive
     pub fn get_or_intern(&self, s: &str) -> u32 {
-        let mut interner = self.inner.write().unwrap();
+        let mut interner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         let spur = interner.get_or_intern(s);
         spur.into_usize() as u32 + 1
     }
@@ -34,7 +34,7 @@ impl StringInterner {
     /// Batch intern multiple strings in a single lock
     /// This is more efficient than calling get_or_intern multiple times
     pub fn batch_intern(&self, strings: &[&str]) -> Vec<u32> {
-        let mut interner = self.inner.write().unwrap();
+        let mut interner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         strings
             .iter()
             .map(|s| {
@@ -46,8 +46,12 @@ impl StringInterner {
 
     /// Resolve an interned ID back to the string
     /// This uses a read lock, allowing concurrent reads
+    ///
+    /// # Panics
+    /// Panics if `id` is 0 (reserved) or was not produced by this interner.
+    /// Use [`StringInterner::try_resolve`] for a non-panicking variant.
     pub fn resolve(&self, id: u32) -> String {
-        let interner = self.inner.read().unwrap();
+        let interner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         let spur = Spur::try_from_usize(
             (id as usize).checked_sub(1).expect("intern ID 0 is reserved"),
         )
@@ -58,7 +62,7 @@ impl StringInterner {
     /// Try to resolve an interned ID (returns None if not found)
     /// This uses a read lock, allowing concurrent reads
     pub fn try_resolve(&self, id: u32) -> Option<String> {
-        let interner = self.inner.read().unwrap();
+        let interner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         let idx = (id as usize).checked_sub(1)?;
         let spur = Spur::try_from_usize(idx)?;
         interner.try_resolve(&spur).map(|s| s.to_string())
@@ -67,14 +71,14 @@ impl StringInterner {
     /// Get the ID for a string if it's already interned (returns None if not found)
     /// This uses a read lock, allowing concurrent reads
     pub fn get(&self, s: &str) -> Option<u32> {
-        let interner = self.inner.read().unwrap();
+        let interner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         interner.get(s).map(|spur| spur.into_usize() as u32 + 1)
     }
 
     /// Get the number of interned strings
     /// This uses a read lock, allowing concurrent reads
     pub fn len(&self) -> usize {
-        let interner = self.inner.read().unwrap();
+        let interner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         interner.len()
     }
 
@@ -86,26 +90,32 @@ impl StringInterner {
     /// Extract all interned strings as a Vec (for snapshot creation).
     /// Returns a Vec indexed by 1-based intern ID: index 0 is always "",
     /// index 1 is the first interned string, etc.
+    ///
+    /// Consumes the underlying storage when this is the only reference;
+    /// otherwise falls back to copying the strings out under a read lock.
     pub fn into_vec(self) -> Vec<String> {
-        let rwlock = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
-            panic!("StringInterner has multiple Arc references - cannot extract");
-        });
-        let rodeo = rwlock.into_inner().unwrap();
-        let reader = rodeo.into_reader();
-        let len = reader.len();
-
-        if len == 0 {
-            return vec!["".to_string()];
+        match Arc::try_unwrap(self.inner) {
+            Ok(rwlock) => {
+                let rodeo = rwlock.into_inner().unwrap_or_else(PoisonError::into_inner);
+                let reader = rodeo.into_reader();
+                Self::collect_strings(reader.len(), |spur| reader.resolve(spur).to_string())
+            }
+            Err(shared) => {
+                let rodeo = shared.read().unwrap_or_else(PoisonError::into_inner);
+                Self::collect_strings(rodeo.len(), |spur| rodeo.resolve(spur).to_string())
+            }
         }
+    }
 
+    /// Build the 1-based string table: index 0 is "", indices 1..=len are
+    /// the interned strings in intern order.
+    fn collect_strings(len: usize, resolve: impl Fn(&Spur) -> String) -> Vec<String> {
         let mut result = Vec::with_capacity(len + 1);
-        result.push("".to_string()); // Index 0 is always empty string
-
+        result.push(String::new()); // Index 0 is always empty string
         for i in 0..len {
             let spur = Spur::try_from_usize(i).expect("invalid intern id in into_vec");
-            result.push(reader.resolve(&spur).to_string());
+            result.push(resolve(&spur));
         }
-
         result
     }
 }
