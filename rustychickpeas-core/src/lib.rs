@@ -11,7 +11,12 @@ pub mod graph_builder_parquet;
 pub mod graph_snapshot;
 pub mod interner;
 pub mod rusty_chickpeas;
+pub mod serialize;
 pub mod types;
+
+/// On-disk formats (RCPG graph file, RRSR record store), re-exported for
+/// direct access to the codec and record-store range planning.
+pub use rustychickpeas_format as format;
 
 // Re-export main types
 pub use error::{GraphError, Result};

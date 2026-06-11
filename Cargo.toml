@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "rustychickpeas-core",
+    "rustychickpeas-format",
     "rustychickpeas-python",
 ]
 resolver = "2"

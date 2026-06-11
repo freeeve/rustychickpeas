@@ -2513,10 +2513,20 @@ dependencies = [
  "rayon",
  "reqwest 0.11.27",
  "roaring",
+ "rustychickpeas-format",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "rustychickpeas-format"
+version = "0.7.0"
+dependencies = [
+ "bitvec",
+ "proptest",
+ "roaring",
 ]
 
 [[package]]

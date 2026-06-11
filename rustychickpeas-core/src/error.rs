@@ -14,6 +14,8 @@ pub enum GraphError {
     CapacityError(String),
     #[error("CSV error: {0}")]
     CsvError(String),
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
 }
 
 pub type Result<T> = std::result::Result<T, GraphError>;

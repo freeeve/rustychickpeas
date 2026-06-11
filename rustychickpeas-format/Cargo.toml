@@ -1,0 +1,16 @@
+[package]
+name = "rustychickpeas-format"
+description = "On-disk serialization formats for RustyChickpeas graph snapshots (RCPG) and RRSR record stores"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Deliberately minimal dependencies: this crate must build for
+# wasm32-unknown-unknown so browser readers can share the codec.
+[dependencies]
+roaring = { workspace = true }
+bitvec = "1.0"
+
+[dev-dependencies]
+proptest = "1.5"
