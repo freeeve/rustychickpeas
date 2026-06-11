@@ -60,6 +60,12 @@ tarpaulin-report.html
 # Maturin
 rustychickpeas-python/target/
 
+# wasm-pack output and generated demo data
+rustychickpeas-reader/pkg/
+rustychickpeas-reader/demo/graph.rcpg
+rustychickpeas-reader/demo/records.idx
+rustychickpeas-reader/demo/records.bin
+
 # Test artifacts
 *.parquet
 test_*.parquet

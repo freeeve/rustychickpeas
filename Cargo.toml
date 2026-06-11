@@ -3,6 +3,7 @@ members = [
     "rustychickpeas-core",
     "rustychickpeas-format",
     "rustychickpeas-python",
+    "rustychickpeas-reader",
 ]
 resolver = "2"
 

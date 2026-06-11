@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>rustychickpeas wasm reader demo</title>
+  <style>
+    body { font-family: ui-monospace, monospace; margin: 2rem; max-width: 60rem; }
+    h1 { font-size: 1.2rem; }
+    button { margin: 0.1rem; }
+    #record { white-space: pre-wrap; background: #f4f4f4; padding: 0.75rem; }
+    #stats, #log { color: #555; font-size: 0.85rem; }
+    .nbr { display: inline-block; padding: 0.15rem 0.4rem; }
+  </style>
+</head>
+<body>
+  <h1>rustychickpeas: resident graph traversal + ranged record gets</h1>
+  <div id="stats">loading…</div>
+  <p>
+    node <input id="node" type="number" value="0" min="0" style="width: 5rem">
+    <button id="show">show</button>
+    <button id="bfs">bfs depth 2</button>
+  </p>
+  <div id="out"></div>
+  <h2 style="font-size:1rem">record (fetched via HTTP Range)</h2>
+  <div id="record">–</div>
+  <div id="log"></div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

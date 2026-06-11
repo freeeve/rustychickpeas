@@ -41,6 +41,13 @@ rustychickpeas/
 │       ├── ldbc_snb_bi_benchmark.rs
 │       ├── python_api_coverage_test.rs
 │       └── s3_integration_test.rs
+├── rustychickpeas-format/        # On-disk formats (RCPG snapshot, RRSR records)
+│   ├── FORMAT.md                 # Frozen byte-layout spec
+│   └── src/                      # rcpg.rs, rrsr.rs, graph.rs (wasm-safe, deps: roaring+bitvec)
+├── rustychickpeas-reader/        # Split-residency reader (native + wasm32)
+│   ├── src/                      # GraphReader (resident traversal), records (roaringrange dep), wasm bindings
+│   ├── examples/generate_demo.rs # Demo dataset generator
+│   └── demo/                     # Browser demo (index.html + main.js; data+pkg generated)
 ├── rustychickpeas-python/        # PyO3 Python bindings
 │   ├── Cargo.toml
 │   ├── pyproject.toml            # Maturin build config, pytest config

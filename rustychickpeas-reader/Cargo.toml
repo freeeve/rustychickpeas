@@ -1,0 +1,28 @@
+[package]
+name = "rustychickpeas-reader"
+description = "Split-residency graph reader: resident RCPG traversal with range-fetched RRSR records, for native and wasm32 targets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.7.0" }
+roaring = { workspace = true }
+# Record store reader (RRSR v1 + v2/zstd) and the RangeFetch abstraction.
+# Pinned to a rev so builds are reproducible; bump deliberately.
+roaringrange = { git = "https://github.com/freeeve/roaringrange", rev = "0c5731faaa8c2e8743dafc31825b9c48ef4d863a", default-features = false }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[features]
+# Browser bindings: build with `wasm-pack build --target web --features wasm`
+wasm = ["dep:wasm-bindgen"]
+# zstd shared-dictionary record decoding (tag-1 frames in RRSR v2)
+zstd = ["roaringrange/zstd"]
+
+[dev-dependencies]
+rustychickpeas-core = { path = "../rustychickpeas-core" }
+futures = { version = "0.3", default-features = false, features = ["executor"] }
