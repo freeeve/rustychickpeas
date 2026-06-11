@@ -1,6 +1,6 @@
 //! GraphSnapshot Python wrapper
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use pyo3::prelude::*;
 use rustychickpeas_core::{
     GraphSnapshot as CoreGraphSnapshot, Label, RelationshipType, ValueId,
@@ -657,23 +657,23 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap().is_some() { return false; }
+                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     Python::with_gil(|py| {
                         match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
                 Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap().is_some() { return false; }
+                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     let rf_obj = rf_obj.clone();
                     Python::with_gil(|py| {
                         let rel_type_str = snapshot.resolve_string(rel_type.id())
                             .unwrap_or("").to_string();
                         match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
@@ -689,11 +689,11 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap().is_some() { return false; }
+                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     Python::with_gil(|py| {
                         match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
@@ -711,14 +711,14 @@ impl GraphSnapshot {
                 rel_types_str.as_deref(),
                 None,
                 Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap().is_some() { return false; }
+                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     let rf_obj = rf_obj.clone();
                     Python::with_gil(|py| {
                         let rel_type_str = snapshot.resolve_string(rel_type.id())
                             .unwrap_or("").to_string();
                         match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
@@ -739,7 +739,7 @@ impl GraphSnapshot {
         };
 
         // Propagate any Python exception captured during BFS
-        if let Some(err) = error_cell.lock().unwrap().take() {
+        if let Some(err) = error_cell.lock().unwrap_or_else(PoisonError::into_inner).take() {
             return Err(err);
         }
 
@@ -836,23 +836,23 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap().is_some() { return false; }
+                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     Python::with_gil(|py| {
                         match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
                 Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap().is_some() { return false; }
+                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     let rf_obj = rf_obj.clone();
                     Python::with_gil(|py| {
                         let rel_type_str = snapshot.resolve_string(rel_type.id())
                             .unwrap_or("").to_string();
                         match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
@@ -867,11 +867,11 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap().is_some() { return false; }
+                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     Python::with_gil(|py| {
                         match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
@@ -888,14 +888,14 @@ impl GraphSnapshot {
                 rel_types_str.as_deref(),
                 None,
                 Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap().is_some() { return false; }
+                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
                     let rf_obj = rf_obj.clone();
                     Python::with_gil(|py| {
                         let rel_type_str = snapshot.resolve_string(rel_type.id())
                             .unwrap_or("").to_string();
                         match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
                             Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap() = Some(e); false }
+                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
                         }
                     })
                 }),
@@ -915,7 +915,7 @@ impl GraphSnapshot {
         };
 
         // Propagate any Python exception captured during BFS
-        if let Some(err) = error_cell.lock().unwrap().take() {
+        if let Some(err) = error_cell.lock().unwrap_or_else(PoisonError::into_inner).take() {
             return Err(err);
         }
 
