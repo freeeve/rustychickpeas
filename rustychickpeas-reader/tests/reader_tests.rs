@@ -14,6 +14,7 @@ fn demo_graph_bytes() -> Vec<u8> {
     builder.add_node(Some(1), &["Person"]).unwrap();
     builder.add_node(Some(2), &["Company"]).unwrap();
     builder.add_node(Some(7), &["Company"]).unwrap(); // sparse gap 3..=6
+    builder.set_prop_str(0, "name", "alice").unwrap(); // exercises column sections
     builder.add_rel(0, 1, "KNOWS").unwrap();
     builder.add_rel(1, 2, "WORKS_FOR").unwrap();
     builder.add_rel(0, 2, "WORKS_FOR").unwrap();
@@ -69,6 +70,20 @@ fn reader_bfs() {
 #[test]
 fn reader_rejects_garbage() {
     assert!(GraphReader::from_rcpg_bytes(b"not a graph").is_err());
+}
+
+#[test]
+fn topology_only_reader_traverses_without_columns() {
+    // The demo graph carries property columns; a topology-only reader must
+    // skip them while traversal stays fully functional
+    let bytes = demo_graph_bytes();
+    let reader = GraphReader::topology_only(&bytes).unwrap();
+    assert!(reader.graph().node_columns.is_empty());
+    assert!(reader.graph().rel_columns.is_empty());
+    assert_eq!(reader.out_neighbors(0), &[1, 2]);
+    assert_eq!(reader.out_neighbors_by_type(0, "WORKS_FOR"), vec![2]);
+    assert_eq!(reader.bfs(0, 3, Direction::Outgoing), vec![1, 2, 7]);
+    assert_eq!(reader.node_labels(7), vec!["Company"]);
 }
 
 #[test]

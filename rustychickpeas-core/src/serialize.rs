@@ -64,6 +64,12 @@ fn data_to_column(data: ColumnData) -> Column {
 impl GraphSnapshot {
     /// Convert this snapshot to the plain on-disk data model.
     pub fn to_graph_section(&self) -> GraphSection {
+        self.graph_section_with(true, true)
+    }
+
+    /// Build the on-disk model, cloning only the requested column sets so
+    /// topology-only writes don't copy property data at all.
+    fn graph_section_with(&self, node_cols: bool, rel_cols: bool) -> GraphSection {
         let mut label_index: Vec<(u32, RoaringBitmap)> = self
             .label_index
             .iter()
@@ -78,18 +84,24 @@ impl GraphSnapshot {
             .collect();
         type_index.sort_unstable_by_key(|(atom, _)| *atom);
 
-        let mut node_columns: Vec<(u32, ColumnData)> = self
-            .columns
-            .iter()
-            .map(|(key, col)| (*key, column_to_data(col)))
-            .collect();
+        let mut node_columns: Vec<(u32, ColumnData)> = if node_cols {
+            self.columns
+                .iter()
+                .map(|(key, col)| (*key, column_to_data(col)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         node_columns.sort_unstable_by_key(|(key, _)| *key);
 
-        let mut rel_columns: Vec<(u32, ColumnData)> = self
-            .rel_columns
-            .iter()
-            .map(|(key, col)| (*key, column_to_data(col)))
-            .collect();
+        let mut rel_columns: Vec<(u32, ColumnData)> = if rel_cols {
+            self.rel_columns
+                .iter()
+                .map(|(key, col)| (*key, column_to_data(col)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         rel_columns.sort_unstable_by_key(|(key, _)| *key);
 
         GraphSection {
@@ -160,10 +172,19 @@ impl GraphSnapshot {
         }
     }
 
-    /// Serialize this snapshot to RCPG bytes (see rustychickpeas-format's
-    /// FORMAT.md for the layout).
+    /// Serialize this snapshot to RCPG bytes including property columns
+    /// (see rustychickpeas-format's FORMAT.md for the layout).
     pub fn write_rcpg<W: Write>(&self, out: &mut W) -> Result<()> {
-        rcpg::write(&self.to_graph_section(), out)?;
+        self.write_rcpg_with(out, &rcpg::WriteOptions::default())
+    }
+
+    /// Serialize this snapshot to RCPG bytes, emitting optional sections
+    /// per `opts`. `WriteOptions::topology_only()` produces a lean
+    /// traversal-only file (no property columns cloned or written) for
+    /// readers that keep per-node data in a record store instead.
+    pub fn write_rcpg_with<W: Write>(&self, out: &mut W, opts: &rcpg::WriteOptions) -> Result<()> {
+        let section = self.graph_section_with(opts.node_columns, opts.rel_columns);
+        rcpg::write_with(&section, out, opts)?;
         Ok(())
     }
 

@@ -34,6 +34,13 @@ compatibility) and MUST reject files whose `version` exceeds what they
 support. A reader interested only in topology can fetch the directory, then
 read just the sections it wants by offset.
 
+The property column sections (5 and 6) are **optional in both directions**:
+writers MAY omit them (`WriteOptions::topology_only()`) to ship a lean
+traversal-only file, and readers MAY skip materializing them even when
+present (`ParseOptions::topology_only()`). Sections 1–4 are always written.
+Keeping per-node data in a range-fetched RRSR record store instead of
+resident columns is the intended deployment for large graphs.
+
 ## Sections
 
 | id | name | contents |

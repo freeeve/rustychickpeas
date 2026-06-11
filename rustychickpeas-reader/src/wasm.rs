@@ -25,10 +25,18 @@ pub struct WasmGraph {
 
 #[wasm_bindgen]
 impl WasmGraph {
+    /// Parse RCPG bytes. By default only topology stays resident
+    /// (adjacency, label/type indexes, strings) — the safe choice for
+    /// large graphs. Pass `loadProperties = true` to also materialize
+    /// property columns in wasm memory.
     #[wasm_bindgen(constructor)]
-    pub fn new(bytes: &[u8]) -> Result<WasmGraph, JsError> {
-        let inner =
-            GraphReader::from_rcpg_bytes(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    pub fn new(bytes: &[u8], load_properties: Option<bool>) -> Result<WasmGraph, JsError> {
+        let inner = if load_properties.unwrap_or(false) {
+            GraphReader::from_rcpg_bytes(bytes)
+        } else {
+            GraphReader::topology_only(bytes)
+        }
+        .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(WasmGraph { inner })
     }
 

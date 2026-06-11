@@ -33,16 +33,82 @@ const SECTION_REL_COLS: u32 = 6;
 const HEADER_LEN: usize = 16;
 const DIR_ENTRY_LEN: usize = 24;
 
-/// Serialize a graph to RCPG bytes.
+/// Controls which optional sections a writer emits. Topology (atoms, meta,
+/// nodes, relationships) is always written; property columns are optional
+/// so large graphs can ship a lean traversal-only file and leave per-node
+/// data to a range-fetched record store.
+#[derive(Debug, Clone, Copy)]
+pub struct WriteOptions {
+    pub node_columns: bool,
+    pub rel_columns: bool,
+}
+
+impl Default for WriteOptions {
+    fn default() -> Self {
+        WriteOptions {
+            node_columns: true,
+            rel_columns: true,
+        }
+    }
+}
+
+impl WriteOptions {
+    /// Topology only: no property column sections.
+    pub fn topology_only() -> Self {
+        WriteOptions {
+            node_columns: false,
+            rel_columns: false,
+        }
+    }
+}
+
+/// Controls which optional sections a reader materializes. Skipped sections
+/// cost nothing to parse and nothing in resident memory, regardless of
+/// whether the file contains them.
+#[derive(Debug, Clone, Copy)]
+pub struct ParseOptions {
+    pub node_columns: bool,
+    pub rel_columns: bool,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        ParseOptions {
+            node_columns: true,
+            rel_columns: true,
+        }
+    }
+}
+
+impl ParseOptions {
+    /// Topology only: ignore property column sections even when present.
+    pub fn topology_only() -> Self {
+        ParseOptions {
+            node_columns: false,
+            rel_columns: false,
+        }
+    }
+}
+
+/// Serialize a graph to RCPG bytes, including all sections.
 pub fn write<W: Write>(graph: &GraphSection, out: &mut W) -> Result<()> {
-    let sections: Vec<(u32, Vec<u8>)> = vec![
+    write_with(graph, out, &WriteOptions::default())
+}
+
+/// Serialize a graph to RCPG bytes, emitting optional sections per `opts`.
+pub fn write_with<W: Write>(graph: &GraphSection, out: &mut W, opts: &WriteOptions) -> Result<()> {
+    let mut sections: Vec<(u32, Vec<u8>)> = vec![
         (SECTION_ATOMS, encode_atoms(&graph.atoms)?),
         (SECTION_META, encode_meta(graph)?),
         (SECTION_NODES, encode_nodes(graph)?),
         (SECTION_RELS, encode_rels(graph)?),
-        (SECTION_NODE_COLS, encode_columns(&graph.node_columns)?),
-        (SECTION_REL_COLS, encode_columns(&graph.rel_columns)?),
     ];
+    if opts.node_columns {
+        sections.push((SECTION_NODE_COLS, encode_columns(&graph.node_columns)?));
+    }
+    if opts.rel_columns {
+        sections.push((SECTION_REL_COLS, encode_columns(&graph.rel_columns)?));
+    }
 
     out.write_all(MAGIC)?;
     w::u16(out, VERSION)?;
@@ -64,9 +130,17 @@ pub fn write<W: Write>(graph: &GraphSection, out: &mut W) -> Result<()> {
     Ok(())
 }
 
-/// Parse RCPG bytes into a [`GraphSection`]. Never panics on malformed
-/// input; all structural problems surface as [`FormatError::Corrupt`].
+/// Parse RCPG bytes into a [`GraphSection`], materializing all sections.
+/// Never panics on malformed input; all structural problems surface as
+/// [`FormatError::Corrupt`].
 pub fn parse(bytes: &[u8]) -> Result<GraphSection> {
+    parse_with(bytes, &ParseOptions::default())
+}
+
+/// Parse RCPG bytes, materializing optional sections per `opts`. Use
+/// [`ParseOptions::topology_only`] to keep property columns out of memory
+/// on large graphs.
+pub fn parse_with(bytes: &[u8], opts: &ParseOptions) -> Result<GraphSection> {
     let mut c = Cursor::new(bytes);
     let magic = c.take(4)?;
     if magic != MAGIC {
@@ -117,8 +191,9 @@ pub fn parse(bytes: &[u8]) -> Result<GraphSection> {
             SECTION_META => decode_meta(body, &mut graph)?,
             SECTION_NODES => decode_nodes(body, &mut graph)?,
             SECTION_RELS => decode_rels(body, &mut graph)?,
-            SECTION_NODE_COLS => graph.node_columns = decode_columns(body)?,
-            SECTION_REL_COLS => graph.rel_columns = decode_columns(body)?,
+            SECTION_NODE_COLS if opts.node_columns => graph.node_columns = decode_columns(body)?,
+            SECTION_REL_COLS if opts.rel_columns => graph.rel_columns = decode_columns(body)?,
+            SECTION_NODE_COLS | SECTION_REL_COLS => {} // present but skipped
             _ => {} // forward compatibility: ignore unknown sections
         }
     }

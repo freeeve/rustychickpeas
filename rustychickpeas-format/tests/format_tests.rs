@@ -68,6 +68,40 @@ fn rcpg_neighbors_accessors() {
 }
 
 #[test]
+fn rcpg_topology_only_write_omits_columns() {
+    let graph = sample_graph();
+    let mut full = Vec::new();
+    rcpg::write(&graph, &mut full).unwrap();
+    let mut lean = Vec::new();
+    rcpg::write_with(&graph, &mut lean, &rcpg::WriteOptions::topology_only()).unwrap();
+    assert!(lean.len() < full.len());
+
+    let parsed = rcpg::parse(&lean).unwrap();
+    assert!(parsed.node_columns.is_empty());
+    assert!(parsed.rel_columns.is_empty());
+    // topology intact
+    assert_eq!(parsed.out_offsets, graph.out_offsets);
+    assert_eq!(parsed.label_index, graph.label_index);
+    assert_eq!(parsed.atoms, graph.atoms);
+}
+
+#[test]
+fn rcpg_topology_only_parse_skips_present_columns() {
+    let graph = sample_graph();
+    let mut bytes = Vec::new();
+    rcpg::write(&graph, &mut bytes).unwrap();
+
+    let parsed = rcpg::parse_with(&bytes, &rcpg::ParseOptions::topology_only()).unwrap();
+    assert!(parsed.node_columns.is_empty());
+    assert!(parsed.rel_columns.is_empty());
+    assert_eq!(parsed.out_nbrs, graph.out_nbrs);
+    assert_eq!(parsed.type_index, graph.type_index);
+
+    // full parse of the same bytes still materializes everything
+    assert_eq!(rcpg::parse(&bytes).unwrap(), graph);
+}
+
+#[test]
 fn rcpg_rejects_bad_magic() {
     let err = rcpg::parse(b"NOPE0000000000000000").unwrap_err();
     assert!(err.to_string().contains("magic"), "{}", err);

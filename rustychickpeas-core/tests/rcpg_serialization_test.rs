@@ -76,6 +76,39 @@ fn rcpg_round_trip_with_properties() {
 }
 
 #[test]
+fn rcpg_topology_only_write() {
+    use rustychickpeas_core::format::rcpg::WriteOptions;
+
+    let mut builder = GraphBuilder::new(None, None);
+    builder.add_node(Some(0), &["Person"]).unwrap();
+    builder.add_node(Some(1), &["Person"]).unwrap();
+    builder.set_prop_str(0, "name", "Alice").unwrap();
+    builder.set_prop_i64(1, "age", 25).unwrap();
+    builder.add_rel(0, 1, "KNOWS").unwrap();
+    let snapshot = builder.finalize(None);
+
+    let mut full = Vec::new();
+    snapshot.write_rcpg(&mut full).unwrap();
+    let mut lean = Vec::new();
+    snapshot
+        .write_rcpg_with(&mut lean, &WriteOptions::topology_only())
+        .unwrap();
+    assert!(lean.len() < full.len());
+
+    let restored = GraphSnapshot::read_rcpg(&lean).unwrap();
+    // traversal and labels intact, properties absent
+    assert_eq!(restored.out_neighbors(0), &[1]);
+    let people: Vec<u32> = restored
+        .nodes_with_label("Person")
+        .unwrap()
+        .iter()
+        .collect();
+    assert_eq!(people, vec![0, 1]);
+    assert_eq!(restored.prop(0, "name"), None);
+    assert_eq!(restored.prop(1, "age"), None);
+}
+
+#[test]
 fn rcpg_file_round_trip() {
     let mut builder = GraphBuilder::new(None, None);
     builder.add_node(Some(0), &["N"]).unwrap();

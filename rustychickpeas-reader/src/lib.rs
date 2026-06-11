@@ -43,9 +43,28 @@ pub struct GraphReader {
 }
 
 impl GraphReader {
-    /// Parse RCPG bytes (the whole file) into a resident reader.
+    /// Parse RCPG bytes (the whole file) into a resident reader,
+    /// materializing every section including property columns. Prefer
+    /// [`GraphReader::topology_only`] for large graphs unless you need
+    /// resident properties.
     pub fn from_rcpg_bytes(bytes: &[u8]) -> Result<Self, FormatError> {
-        let graph = rcpg::parse(bytes)?;
+        Self::from_rcpg_bytes_with(bytes, &rcpg::ParseOptions::default())
+    }
+
+    /// Parse RCPG bytes keeping only topology resident (adjacency,
+    /// label/type indexes, atoms); property column sections are skipped
+    /// even when the file contains them. Per-node data should come from a
+    /// range-fetched record store instead.
+    pub fn topology_only(bytes: &[u8]) -> Result<Self, FormatError> {
+        Self::from_rcpg_bytes_with(bytes, &rcpg::ParseOptions::topology_only())
+    }
+
+    /// Parse RCPG bytes with explicit section options.
+    pub fn from_rcpg_bytes_with(
+        bytes: &[u8],
+        opts: &rcpg::ParseOptions,
+    ) -> Result<Self, FormatError> {
+        let graph = rcpg::parse_with(bytes, opts)?;
         let atom_ids = graph
             .atoms
             .iter()
