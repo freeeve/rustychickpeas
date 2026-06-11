@@ -12,7 +12,7 @@ use object_store::{ObjectStore, path::Path as ObjectPath, aws::AmazonS3Builder};
 use std::fs::File;
 use std::sync::Arc;
 use hashbrown::HashMap;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use roaring::RoaringBitmap;
 
 /// Extract a string value from an Arrow array column, supporting both Utf8 (StringArray)
@@ -131,17 +131,22 @@ fn set_node_property_from_arrow(
             }
         }
         _ => {
-            // Fallback: try string conversion
-            if let Some(val) = extract_string_value(column, i) {
-                builder.set_prop_str(node_id, key, val)?;
+            if column.is_null(i) {
+                return Ok(());
             }
+            return Err(GraphError::SchemaError(format!(
+                "Unsupported data type {:?} for node property column '{}'",
+                data_type, key
+            )));
         }
     }
     Ok(())
 }
 
 /// Set a relationship property on the builder from an Arrow column value.
-/// Handles Utf8, LargeUtf8, Int64, Float64, Boolean, and fallback to string.
+/// Handles Utf8, LargeUtf8, Int64/Int32, Float64/Float32, and Boolean.
+/// Returns SchemaError for unsupported column types so values are never
+/// silently dropped.
 fn set_rel_property_from_arrow(
     builder: &mut GraphBuilder,
     rel_idx: usize,
@@ -149,7 +154,7 @@ fn set_rel_property_from_arrow(
     column: &ArrayRef,
     data_type: &DataType,
     i: usize,
-) {
+) -> Result<()> {
     let k = builder.interner.get_or_intern(key);
     match data_type {
         DataType::Utf8 | DataType::LargeUtf8 => {
@@ -194,13 +199,16 @@ fn set_rel_property_from_arrow(
             }
         }
         _ => {
-            // Fallback: try string conversion
-            if let Some(val) = extract_string_value(column, i) {
-                let v = builder.interner.get_or_intern(val);
-                builder.rel_col_str.entry(k).or_default().push((rel_idx, v));
+            if column.is_null(i) {
+                return Ok(());
             }
+            return Err(GraphError::SchemaError(format!(
+                "Unsupported data type {:?} for relationship property column '{}'",
+                data_type, key
+            )));
         }
     }
+    Ok(())
 }
 
 /// Validate that all specified column names exist in the Parquet schema.
@@ -269,12 +277,16 @@ fn next_auto_node_id(builder: &mut GraphBuilder) -> Result<NodeId> {
     Ok(id)
 }
 
-/// Enum to handle both sync (local file) and async (S3) Parquet readers
+/// Enum to handle both sync (local file) and async (S3) Parquet readers.
+/// The async variant holds its tokio runtime and pulls one batch per call,
+/// so remote files stream incrementally instead of being buffered whole.
 enum ParquetReaderEnum {
     Sync(parquet::arrow::arrow_reader::ParquetRecordBatchReader),
     Async {
-        batches: Vec<arrow::array::RecordBatch>,
-        current: usize,
+        runtime: tokio::runtime::Runtime,
+        stream: parquet::arrow::async_reader::ParquetRecordBatchStream<
+            parquet::arrow::async_reader::ParquetObjectReader,
+        >,
     },
 }
 
@@ -282,15 +294,11 @@ impl ParquetReaderEnum {
     fn next(&mut self) -> Option<std::result::Result<arrow::array::RecordBatch, arrow::error::ArrowError>> {
         match self {
             ParquetReaderEnum::Sync(reader) => reader.next(),
-            ParquetReaderEnum::Async { batches, current } => {
-                if *current < batches.len() {
-                    let batch = batches[*current].clone();
-                    *current += 1;
-                    Some(Ok(batch))
-                } else {
-                    None
-                }
-            }
+            ParquetReaderEnum::Async { runtime, stream } => runtime
+                .block_on(stream.next())
+                .map(|result| {
+                    result.map_err(|e| arrow::error::ArrowError::ExternalError(Box::new(e)))
+                }),
         }
     }
 }
@@ -349,24 +357,20 @@ fn create_parquet_reader(path: &str) -> Result<(ParquetReaderEnum, Arc<Schema>)>
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| GraphError::BulkLoadError(format!("Failed to create tokio runtime: {}", e)))?;
         
-        let (schema, batches) = rt.block_on(async {
+        let (schema, stream) = rt.block_on(async {
             let reader = parquet::arrow::async_reader::ParquetObjectReader::new(store, object_path);
             let builder = ParquetRecordBatchStreamBuilder::new(reader)
                 .await
                 .map_err(|e| GraphError::BulkLoadError(format!("Failed to create ParquetRecordBatchStreamBuilder: {}", e)))?;
-            
+
             let schema = builder.schema().clone();
             let stream = builder.build()
                 .map_err(|e| GraphError::BulkLoadError(format!("Failed to build Parquet stream: {}", e)))?;
-            
-            // Collect all batches from the async stream
-            let batches = stream.try_collect::<Vec<_>>().await
-                .map_err(|e| GraphError::BulkLoadError(format!("Failed to read Parquet batches: {}", e)))?;
-            
-            Ok::<(Arc<Schema>, Vec<arrow::array::RecordBatch>), GraphError>((schema, batches))
+
+            Ok::<_, GraphError>((schema, stream))
         })?;
-        
-        Ok((ParquetReaderEnum::Async { batches, current: 0 }, schema))
+
+        Ok((ParquetReaderEnum::Async { runtime: rt, stream }, schema))
     } else {
         // Local file - use synchronous reader
         let file = File::open(path)
@@ -547,29 +551,21 @@ impl GraphBuilder {
             // Now apply deduplication to node_ids_batch
             // Track which nodes were already processed in deduplication to avoid double-processing
             let mut processed_in_dedup: std::collections::HashSet<usize> = std::collections::HashSet::new();
-            let mut dedup_updates: Vec<(usize, u32, Vec<String>)> = Vec::new(); // (row_index, existing_node_id, merged_labels)
-            
+            let mut dedup_updates: Vec<(usize, u32, Vec<String>)> = Vec::new(); // (row_index, existing_node_id, row_labels)
+
             // First pass: check for duplicates and prepare updates (only if deduplication is enabled)
-            // OPTIMIZATION: Use a HashSet to track which node_ids we've already seen labels for
-            let mut labels_cache: hashbrown::HashMap<u32, Vec<String>> = hashbrown::HashMap::new();
+            // Each update carries only that row's labels; the second pass merges
+            // against the node's current labels at apply time, so no label state
+            // is cached across rows where it could go stale
             if !dedup_keys_per_row.is_empty() {
                 for i in 0..batch.num_rows() {
                     if let Some(Some(ref dedup_key)) = dedup_keys_per_row.get(i) {
                         if let Some(&existing_node_id) = self.dedup_map.get(dedup_key) {
-                            // Use existing node_id, merge labels
+                            // Use existing node_id, merge labels in the second pass
                             node_ids_batch[i] = Some(existing_node_id);
-                            // Get or compute existing labels (cache to avoid repeated lookups)
-                            let existing_labels = labels_cache.entry(existing_node_id).or_insert_with(|| {
-                                self.node_labels(existing_node_id)
-                            });
-                            let new_labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
-                            // Merge labels efficiently
-                            for label in &new_labels {
-                                if !existing_labels.iter().any(|l| l == label) {
-                                    existing_labels.push(label.to_string());
-                                }
-                            }
-                            dedup_updates.push((i, existing_node_id, existing_labels.clone()));
+                            let row_labels: Vec<String> =
+                                labels_per_row[i].iter().map(|l| l.to_string()).collect();
+                            dedup_updates.push((i, existing_node_id, row_labels));
                             processed_in_dedup.insert(i);
                         } else {
                             // First time seeing this combination, add to map
@@ -964,7 +960,7 @@ impl GraphBuilder {
 
                     for i in 0..batch.num_rows() {
                         if let Some(rel_idx) = row_to_rel_idx[i] {
-                            set_rel_property_from_arrow(self, rel_idx, prop_col, column, field.data_type(), i);
+                            set_rel_property_from_arrow(self, rel_idx, prop_col, column, field.data_type(), i)?;
                         }
                     }
                 }
@@ -1344,7 +1340,7 @@ impl GraphBuilder {
 
                     for i in 0..batch.num_rows() {
                         if let Some(rel_idx) = row_to_rel_idx[i] {
-                            set_rel_property_from_arrow(self, rel_idx, prop_col, column, field.data_type(), i);
+                            set_rel_property_from_arrow(self, rel_idx, prop_col, column, field.data_type(), i)?;
                         }
                     }
                 }
@@ -1655,28 +1651,27 @@ mod tests {
         assert_eq!(rel_ids, vec![(1, 2), (2, 3)]);
     }
 
-    // TODO: Fix lasso into_vec() issue - this test fails due to string interner extraction
-    // #[test]
-    // fn test_read_from_parquet() {
-    //     let temp_dir = TempDir::new().unwrap();
-    //     let nodes_path = create_test_nodes_parquet(&temp_dir);
-    //     let rels_path = create_test_relationships_parquet(&temp_dir);
-    //     
-    //     let snapshot = read_from_parquet(
-    //         Some(nodes_path.to_str().unwrap()),
-    //         Some(rels_path.to_str().unwrap()),
-    //         Some("id"),
-    //         Some(vec!["label"]),
-    //         Some(vec!["name", "age"]),
-    //         Some("from"),
-    //         Some("to"),
-    //         Some("type"),
-    //         None,
-    //     ).unwrap();
-    //     
-    //     assert_eq!(snapshot.n_nodes, 5);
-    //     assert_eq!(snapshot.n_rels, 4);
-    // }
+    #[test]
+    fn test_read_from_parquet() {
+        let temp_dir = TempDir::new().unwrap();
+        let nodes_path = create_test_nodes_parquet(&temp_dir);
+        let rels_path = create_test_relationships_parquet(&temp_dir);
+
+        let snapshot = read_from_parquet(
+            Some(nodes_path.to_str().unwrap()),
+            Some(rels_path.to_str().unwrap()),
+            Some("id"),
+            Some(vec!["label"]),
+            Some(vec!["name", "age"]),
+            Some("from"),
+            Some("to"),
+            Some("type"),
+            None,
+        ).unwrap();
+
+        assert_eq!(snapshot.n_nodes, 5);
+        assert_eq!(snapshot.n_rels, 4);
+    }
 
     #[test]
     fn test_load_nodes_from_parquet_nonexistent_file() {
@@ -3428,9 +3423,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        // Should succeed, but Date32 will fall through to the _ case
-        // which tries to convert to string, but Date32Array doesn't downcast to StringArray
-        // So the property won't be set, but the node will be loaded
+        // Date32 is not a supported property type; requesting it as a
+        // property column must fail loudly rather than silently drop values
         let result = builder.load_nodes_from_parquet(
             file_path.to_str().unwrap(),
             Some("id"),
@@ -3439,11 +3433,8 @@ mod tests {
             None,
             None, // default_label
         );
-        
-        // Should succeed (node loaded, but property might not be set due to type mismatch)
-        assert!(result.is_ok());
-        let node_ids = result.unwrap();
-        assert_eq!(node_ids.len(), 2);
+
+        assert!(matches!(result, Err(GraphError::SchemaError(ref msg)) if msg.contains("birth_date")));
     }
 
     #[test]
@@ -3578,9 +3569,8 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        // Should succeed, but TimestampSecond will fall through to the _ case
-        // which tries to convert to string, but TimestampSecondArray doesn't downcast to StringArray
-        // So the property won't be set, but the node will be loaded
+        // Timestamp is not a supported property type; requesting it as a
+        // property column must fail loudly rather than silently drop values
         let result = builder.load_nodes_from_parquet(
             file_path.to_str().unwrap(),
             Some("id"),
@@ -3589,11 +3579,8 @@ mod tests {
             None,
             None, // default_label
         );
-        
-        // Should succeed (node loaded, but property might not be set due to type mismatch)
-        assert!(result.is_ok());
-        let node_ids = result.unwrap();
-        assert_eq!(node_ids.len(), 2);
+
+        assert!(matches!(result, Err(GraphError::SchemaError(ref msg)) if msg.contains("timestamp")));
     }
 
     #[test]
@@ -3637,9 +3624,8 @@ mod tests {
         builder.add_node(Some(1), &["Node"]).unwrap();
         builder.add_node(Some(2), &["Node"]).unwrap();
         
-        // Should succeed, but Date64 will fall through to the _ case
-        // which tries to convert to string, but Date64Array doesn't downcast to StringArray
-        // So the property won't be set, but the relationship will be loaded
+        // Date64 is not a supported property type; requesting it as a
+        // property column must fail loudly rather than silently drop values
         let result = builder.load_relationships_from_parquet(
             file_path.to_str().unwrap(),
             "from",
@@ -3651,10 +3637,7 @@ mod tests {
             None, // key_property_columns
         );
 
-        // Should succeed (relationship loaded, but property might not be set due to type mismatch)
-        assert!(result.is_ok());
-        let rel_ids = result.unwrap();
-        assert_eq!(rel_ids.len(), 1);
+        assert!(matches!(result, Err(GraphError::SchemaError(ref msg)) if msg.contains("created")));
     }
 
     #[test]
@@ -3853,20 +3836,18 @@ mod tests {
         writer.close().unwrap();
         
         let mut builder = GraphBuilder::new(None, None);
-        // Date32 falls through to _ case which tries string conversion
-        // But Date32Array doesn't downcast to StringArray, so dedup_key will be None
-        let node_ids = builder.load_nodes_from_parquet(
+        // Date32 is not a supported property type; requesting it as a
+        // property/dedup column must fail loudly rather than silently skip
+        let result = builder.load_nodes_from_parquet(
             file_path.to_str().unwrap(),
             Some("id"),
             Some(vec!["label"]),
             Some(vec!["birth_date"]),
             Some(vec!["birth_date"]), // Deduplicate by Date32
             None, // default_label
-        ).unwrap();
-        
-        // Both nodes should be loaded (deduplication won't work due to type mismatch)
-        assert_eq!(node_ids.len(), 2);
-        assert_eq!(builder.node_count(), 2);
+        );
+
+        assert!(matches!(result, Err(GraphError::SchemaError(ref msg)) if msg.contains("birth_date")));
     }
 
     #[test]

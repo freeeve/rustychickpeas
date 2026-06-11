@@ -138,9 +138,7 @@ fn set_node_properties(
                 match val {
                     ValueId::I64(v) => { builder.set_prop_i64(node_id, prop_name, v)?; }
                     ValueId::F64(bits) => {
-                        if let Some(f) = ValueId::F64(bits).to_f64() {
-                            builder.set_prop_f64(node_id, prop_name, f)?;
-                        }
+                        builder.set_prop_f64(node_id, prop_name, f64::from_bits(bits))?;
                     }
                     ValueId::Bool(v) => { builder.set_prop_bool(node_id, prop_name, v)?; }
                     ValueId::Str(v) => {
@@ -648,9 +646,7 @@ fn process_rel_row(
                 builder.rel_col_i64.entry(prop_key).or_insert_with(Vec::new).push((rel_idx, v));
             }
             ValueId::F64(bits) => {
-                if let Some(f) = ValueId::F64(bits).to_f64() {
-                    builder.rel_col_f64.entry(prop_key).or_insert_with(Vec::new).push((rel_idx, f));
-                }
+                builder.rel_col_f64.entry(prop_key).or_insert_with(Vec::new).push((rel_idx, f64::from_bits(bits)));
             }
             ValueId::Bool(v) => {
                 builder.rel_col_bool.entry(prop_key).or_insert_with(Vec::new).push((rel_idx, v));
