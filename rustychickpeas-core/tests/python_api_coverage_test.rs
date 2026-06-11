@@ -1,15 +1,15 @@
 //! Integration test for Python API coverage
-//! 
+//!
 //! This test runs the Python tests and allows cargo-tarpaulin to track
 //! which Rust code paths are executed by the Python API.
-//! 
+//!
 //! To run with coverage:
 //! ```bash
 //! cargo tarpaulin --test python_api_coverage_test --follow-exec
 //! ```
 
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Find the project root directory
 fn find_project_root() -> PathBuf {
@@ -30,26 +30,26 @@ fn find_project_root() -> PathBuf {
 fn run_python_tests_for_coverage() {
     let project_root = find_project_root();
     let python_dir = project_root.join("rustychickpeas-python");
-    
+
     // Check if Python extension is built
     if !python_dir.exists() {
         eprintln!("Python package directory not found. Skipping Python API coverage test.");
         return;
     }
-    
+
     // Build the Python extension in debug mode if needed
     // Note: This should be done before running tarpaulin
     let build_status = Command::new("maturin")
         .arg("develop")
         .current_dir(&python_dir)
         .status();
-    
+
     if let Err(e) = build_status {
         eprintln!("Warning: Could not build Python extension: {}", e);
         eprintln!("Make sure maturin is installed and the extension is built.");
         return;
     }
-    
+
     // Find the Python executable from the venv if it exists
     let python_exe = if python_dir.join(".venv").exists() {
         if cfg!(target_os = "windows") {
@@ -61,7 +61,7 @@ fn run_python_tests_for_coverage() {
         // Fall back to system python
         PathBuf::from("python")
     };
-    
+
     // Run pytest using the venv Python if available
     let output = Command::new(&python_exe)
         .arg("-m")
@@ -70,7 +70,7 @@ fn run_python_tests_for_coverage() {
         .arg("-v")
         .current_dir(&python_dir)
         .output();
-    
+
     match output {
         Ok(result) => {
             // Print stdout and stderr for debugging
@@ -80,11 +80,14 @@ fn run_python_tests_for_coverage() {
             if !result.stderr.is_empty() {
                 eprintln!("{}", String::from_utf8_lossy(&result.stderr));
             }
-            
+
             // Don't fail the test if pytest fails - we just want coverage data
             // The actual test results are less important than tracking coverage
             if !result.status.success() {
-                eprintln!("Python tests completed with exit code: {:?}", result.status.code());
+                eprintln!(
+                    "Python tests completed with exit code: {:?}",
+                    result.status.code()
+                );
             }
         }
         Err(e) => {
@@ -93,4 +96,3 @@ fn run_python_tests_for_coverage() {
         }
     }
 }
-

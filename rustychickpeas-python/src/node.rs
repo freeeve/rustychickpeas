@@ -1,13 +1,13 @@
 //! Node Python wrapper
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, RelationshipType};
 use crate::direction::Direction;
 use crate::relationship::Relationship;
 use crate::utils::value_id_to_pyobject;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, RelationshipType};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Python wrapper for a Node in a GraphSnapshot
 #[pyclass(name = "Node")]
@@ -23,9 +23,10 @@ impl Node {
         let key_id = self.snapshot.atoms.get_id(&key);
 
         if key_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Property key '{}' not found", key)
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Property key '{}' not found",
+                key
+            )));
         }
 
         let value_id = self.snapshot.prop(self.node_id, &key);
@@ -36,25 +37,30 @@ impl Node {
     }
 
     /// Get relationships of this node as Relationship objects
-    /// 
+    ///
     /// # Arguments
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (direction, rel_types=None))]
-    fn relationships(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
+    fn relationships(
+        &self,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<Relationship>> {
         // Convert string types to RelationshipType IDs using O(1) reverse index
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().map(|types| {
-            let ids: Vec<RelationshipType> = types.iter()
-                .filter_map(|s| {
-                    self.snapshot.atoms.get_id(s)
-                        .map(RelationshipType::new)
-                })
-                .collect();
-            if ids.is_empty() && !types.is_empty() {
-                return None;
-            }
-            Some(ids)
-        }).flatten();
+        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types
+            .as_ref()
+            .map(|types| {
+                let ids: Vec<RelationshipType> = types
+                    .iter()
+                    .filter_map(|s| self.snapshot.atoms.get_id(s).map(RelationshipType::new))
+                    .collect();
+                if ids.is_empty() && !types.is_empty() {
+                    return None;
+                }
+                Some(ids)
+            })
+            .flatten();
 
         let mut relationships = Vec::new();
 
@@ -62,10 +68,10 @@ impl Node {
             Direction::Outgoing => {
                 let start = self.snapshot.out_offsets[self.node_id as usize] as usize;
                 let end = self.snapshot.out_offsets[self.node_id as usize + 1] as usize;
-                
+
                 for idx in start..end {
                     let rel_type = self.snapshot.out_types[idx];
-                    
+
                     // Apply type filter if provided
                     if let Some(type_ids) = rel_type_ids.as_ref() {
                         if !type_ids.contains(&rel_type) {
@@ -75,7 +81,7 @@ impl Node {
                         // Filter was provided but no types found - skip
                         continue;
                     }
-                    
+
                     relationships.push(Relationship {
                         snapshot: self.snapshot.clone(),
                         rel_index: idx as u32,
@@ -86,11 +92,11 @@ impl Node {
             Direction::Incoming => {
                 let start = self.snapshot.in_offsets[self.node_id as usize] as usize;
                 let end = self.snapshot.in_offsets[self.node_id as usize + 1] as usize;
-                
+
                 for idx in start..end {
                     let rel_type = self.snapshot.in_types[idx];
                     let source_node = self.snapshot.in_nbrs[idx];
-                    
+
                     // Apply type filter if provided
                     if let Some(type_ids) = rel_type_ids.as_ref() {
                         if !type_ids.contains(&rel_type) {
@@ -100,16 +106,17 @@ impl Node {
                         // Filter was provided but no types found - skip
                         continue;
                     }
-                    
+
                     // Find the corresponding outgoing index for this relationship
                     // We need to search the source node's outgoing relationships
                     let source_start = self.snapshot.out_offsets[source_node as usize] as usize;
                     let source_end = self.snapshot.out_offsets[source_node as usize + 1] as usize;
-                    
+
                     // Find the relationship in the source node's outgoing edges
                     for out_idx in source_start..source_end {
-                        if self.snapshot.out_nbrs[out_idx] == self.node_id &&
-                           self.snapshot.out_types[out_idx] == rel_type {
+                        if self.snapshot.out_nbrs[out_idx] == self.node_id
+                            && self.snapshot.out_types[out_idx] == rel_type
+                        {
                             relationships.push(Relationship {
                                 snapshot: self.snapshot.clone(),
                                 rel_index: out_idx as u32,
@@ -124,10 +131,10 @@ impl Node {
                 // Get outgoing relationships
                 let start = self.snapshot.out_offsets[self.node_id as usize] as usize;
                 let end = self.snapshot.out_offsets[self.node_id as usize + 1] as usize;
-                
+
                 for idx in start..end {
                     let rel_type = self.snapshot.out_types[idx];
-                    
+
                     // Apply type filter if provided
                     if let Some(type_ids) = rel_type_ids.as_ref() {
                         if !type_ids.contains(&rel_type) {
@@ -136,22 +143,22 @@ impl Node {
                     } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
                         continue;
                     }
-                    
+
                     relationships.push(Relationship {
                         snapshot: self.snapshot.clone(),
                         rel_index: idx as u32,
                         is_outgoing: true,
                     });
                 }
-                
+
                 // Get incoming relationships (map to outgoing indices)
                 let in_start = self.snapshot.in_offsets[self.node_id as usize] as usize;
                 let in_end = self.snapshot.in_offsets[self.node_id as usize + 1] as usize;
-                
+
                 for in_idx in in_start..in_end {
                     let rel_type = self.snapshot.in_types[in_idx];
                     let source_node = self.snapshot.in_nbrs[in_idx];
-                    
+
                     // Apply type filter if provided
                     if let Some(type_ids) = rel_type_ids.as_ref() {
                         if !type_ids.contains(&rel_type) {
@@ -160,14 +167,15 @@ impl Node {
                     } else if rel_types.as_ref().map(|t| !t.is_empty()).unwrap_or(false) {
                         continue;
                     }
-                    
+
                     // Find the corresponding outgoing index
                     let source_start = self.snapshot.out_offsets[source_node as usize] as usize;
                     let source_end = self.snapshot.out_offsets[source_node as usize + 1] as usize;
-                    
+
                     for out_idx in source_start..source_end {
-                        if self.snapshot.out_nbrs[out_idx] == self.node_id &&
-                           self.snapshot.out_types[out_idx] == rel_type {
+                        if self.snapshot.out_nbrs[out_idx] == self.node_id
+                            && self.snapshot.out_types[out_idx] == rel_type
+                        {
                             relationships.push(Relationship {
                                 snapshot: self.snapshot.clone(),
                                 rel_index: out_idx as u32,
@@ -192,11 +200,15 @@ impl Node {
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (direction, rel_types=None))]
-    fn neighbor_ids(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
+    fn neighbor_ids(
+        &self,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<u32>> {
         // Convert Vec<String> to Vec<&str> for the Rust API
-        let rel_type_strs: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
-            types.iter().map(|s| s.as_str()).collect()
-        });
+        let rel_type_strs: Option<Vec<&str>> = rel_types
+            .as_ref()
+            .map(|types| types.iter().map(|s| s.as_str()).collect());
 
         let neighbor_ids = match direction {
             Direction::Outgoing => {
@@ -231,7 +243,11 @@ impl Node {
 
     /// Deprecated: use neighbor_ids instead
     #[pyo3(name = "relationship_ids", signature = (direction, rel_types=None))]
-    fn relationship_ids_deprecated(&self, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<u32>> {
+    fn relationship_ids_deprecated(
+        &self,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<u32>> {
         self.neighbor_ids(direction, rel_types)
     }
 
@@ -253,10 +269,8 @@ impl Node {
         match direction {
             Direction::Outgoing => Ok(self.snapshot.out_neighbors(self.node_id).len()),
             Direction::Incoming => Ok(self.snapshot.in_neighbors(self.node_id).len()),
-            Direction::Both => {
-                Ok(self.snapshot.out_neighbors(self.node_id).len() + 
-                   self.snapshot.in_neighbors(self.node_id).len())
-            }
+            Direction::Both => Ok(self.snapshot.out_neighbors(self.node_id).len()
+                + self.snapshot.in_neighbors(self.node_id).len()),
         }
     }
 
@@ -267,7 +281,11 @@ impl Node {
 
     fn __repr__(&self) -> PyResult<String> {
         let labels = self.labels()?;
-        Ok(format!("Node(id={}, labels=[{}])", self.node_id, labels.join(", ")))
+        Ok(format!(
+            "Node(id={}, labels=[{}])",
+            self.node_id,
+            labels.join(", ")
+        ))
     }
 
     fn __eq__(&self, other: &Node) -> bool {
@@ -285,14 +303,14 @@ impl Node {
     fn to_dict(&self) -> PyResult<PyObject> {
         Python::with_gil(|py| {
             let dict = PyDict::new(py);
-            
+
             // Add ID
             dict.set_item("id", self.node_id)?;
-            
+
             // Add labels
             let labels = self.labels()?;
             dict.set_item("labels", labels)?;
-            
+
             // Add all properties (nested in properties dict)
             let properties = PyDict::new(py);
             for (key_id, _column) in &self.snapshot.columns {
@@ -303,7 +321,7 @@ impl Node {
                 }
             }
             dict.set_item("properties", properties)?;
-            
+
             Ok(dict.into())
         })
     }
@@ -328,4 +346,3 @@ impl Node {
         self.node_id
     }
 }
-

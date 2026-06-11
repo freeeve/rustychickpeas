@@ -1,9 +1,9 @@
 //! RustyChickpeas manager Python wrapper
 
-use pyo3::prelude::*;
-use rustychickpeas_core::RustyChickpeas as CoreRustyChickpeas;
 use crate::graph_snapshot::GraphSnapshot;
 use crate::graph_snapshot_builder::GraphSnapshotBuilder;
+use pyo3::prelude::*;
+use rustychickpeas_core::RustyChickpeas as CoreRustyChickpeas;
 
 /// Python wrapper for RustyChickpeas manager
 #[pyclass(name = "RustyChickpeas")]
@@ -21,12 +21,12 @@ impl RustyChickpeas {
     }
 
     /// Create a new GraphBuilder
-    /// 
+    ///
     /// # Arguments
     /// * `version` - Optional version string for the snapshot (e.g., "v1.0")
     /// * `capacity_nodes` - Optional capacity hint for nodes (defaults to 2^20 = 1,048,576, auto-grows as needed)
     /// * `capacity_rels` - Optional capacity hint for relationships (defaults to 2^20 = 1,048,576, auto-grows as needed)
-    /// 
+    ///
     /// Capacity is just a performance hint. The builder automatically grows as needed up to
     /// the maximum limits (4.3B nodes, 18.4 quintillion relationships).
     fn create_builder(
@@ -35,12 +35,14 @@ impl RustyChickpeas {
         capacity_nodes: Option<usize>,
         capacity_rels: Option<usize>,
     ) -> GraphSnapshotBuilder {
-        let builder = self.manager.create_builder(
-            version.as_deref(),
-            capacity_nodes,
-            capacity_rels,
-        );
-        GraphSnapshotBuilder { builder, version_str: version, finalized: false }
+        let builder =
+            self.manager
+                .create_builder(version.as_deref(), capacity_nodes, capacity_rels);
+        GraphSnapshotBuilder {
+            builder,
+            version_str: version,
+            finalized: false,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -87,4 +89,3 @@ impl RustyChickpeas {
         self.manager.clear()
     }
 }
-

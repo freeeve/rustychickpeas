@@ -53,7 +53,9 @@ impl StringInterner {
     pub fn resolve(&self, id: u32) -> String {
         let interner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         let spur = Spur::try_from_usize(
-            (id as usize).checked_sub(1).expect("intern ID 0 is reserved"),
+            (id as usize)
+                .checked_sub(1)
+                .expect("intern ID 0 is reserved"),
         )
         .expect("invalid intern id");
         interner.resolve(&spur).to_string()

@@ -105,29 +105,31 @@ impl Column {
     pub fn iter_entries(&self) -> Box<dyn Iterator<Item = (NodeId, ValueId)> + '_> {
         match self {
             Column::DenseI64(col) => Box::new(
-                col.iter().enumerate().map(|(i, &v)| (i as NodeId, ValueId::I64(v)))
+                col.iter()
+                    .enumerate()
+                    .map(|(i, &v)| (i as NodeId, ValueId::I64(v))),
             ),
             Column::DenseF64(col) => Box::new(
-                col.iter().enumerate().map(|(i, &v)| (i as NodeId, ValueId::from_f64(v)))
+                col.iter()
+                    .enumerate()
+                    .map(|(i, &v)| (i as NodeId, ValueId::from_f64(v))),
             ),
             Column::DenseBool(col) => Box::new(
-                col.iter().enumerate().map(|(i, b)| (i as NodeId, ValueId::Bool(*b)))
+                col.iter()
+                    .enumerate()
+                    .map(|(i, b)| (i as NodeId, ValueId::Bool(*b))),
             ),
             Column::DenseStr(col) => Box::new(
-                col.iter().enumerate().map(|(i, &v)| (i as NodeId, ValueId::Str(v)))
+                col.iter()
+                    .enumerate()
+                    .map(|(i, &v)| (i as NodeId, ValueId::Str(v))),
             ),
-            Column::SparseI64(col) => Box::new(
-                col.iter().map(|&(id, v)| (id, ValueId::I64(v)))
-            ),
-            Column::SparseF64(col) => Box::new(
-                col.iter().map(|&(id, v)| (id, ValueId::from_f64(v)))
-            ),
-            Column::SparseBool(col) => Box::new(
-                col.iter().map(|&(id, v)| (id, ValueId::Bool(v)))
-            ),
-            Column::SparseStr(col) => Box::new(
-                col.iter().map(|&(id, v)| (id, ValueId::Str(v)))
-            ),
+            Column::SparseI64(col) => Box::new(col.iter().map(|&(id, v)| (id, ValueId::I64(v)))),
+            Column::SparseF64(col) => {
+                Box::new(col.iter().map(|&(id, v)| (id, ValueId::from_f64(v))))
+            }
+            Column::SparseBool(col) => Box::new(col.iter().map(|&(id, v)| (id, ValueId::Bool(v)))),
+            Column::SparseStr(col) => Box::new(col.iter().map(|&(id, v)| (id, ValueId::Str(v)))),
         }
     }
 }
@@ -149,7 +151,7 @@ impl Atoms {
         for (id, s) in strings.iter().enumerate() {
             reverse_index.insert(s.clone(), id as u32);
         }
-        Atoms { 
+        Atoms {
             strings,
             reverse_index,
         }
@@ -200,7 +202,7 @@ pub struct GraphSnapshot {
     pub label_index: HashMap<Label, NodeSet>,
     /// Relationship type index: type -> relationships with that type
     pub type_index: HashMap<RelationshipType, NodeSet>,
-    
+
     // --- Version tracking ---
     /// Version identifier for this snapshot (e.g., "v0.1", "v1.0")
     pub version: Option<String>,
@@ -280,7 +282,10 @@ impl GraphSnapshot {
 
     /// Build the property index for a specific key and label using Column::iter_entries.
     /// If label_nodes is Some, only nodes in that set are included in the index.
-    fn build_property_index_for_key_and_label(column: &Column, label_nodes: Option<&NodeSet>) -> HashMap<ValueId, NodeSet> {
+    fn build_property_index_for_key_and_label(
+        column: &Column,
+        label_nodes: Option<&NodeSet>,
+    ) -> HashMap<ValueId, NodeSet> {
         let mut key_index: HashMap<ValueId, Vec<NodeId>> = HashMap::new();
 
         for (node_id, val_id) in column.iter_entries() {
@@ -289,12 +294,15 @@ impl GraphSnapshot {
             }
         }
 
-        key_index.into_iter().map(|(val_id, mut node_ids)| {
-            node_ids.sort_unstable();
-            node_ids.dedup();
-            let bitmap = RoaringBitmap::from_sorted_iter(node_ids.into_iter()).unwrap();
-            (val_id, NodeSet::new(bitmap))
-        }).collect()
+        key_index
+            .into_iter()
+            .map(|(val_id, mut node_ids)| {
+                node_ids.sort_unstable();
+                node_ids.dedup();
+                let bitmap = RoaringBitmap::from_sorted_iter(node_ids.into_iter()).unwrap();
+                (val_id, NodeSet::new(bitmap))
+            })
+            .collect()
     }
 
     /// Create a new empty snapshot
@@ -326,7 +334,11 @@ impl GraphSnapshot {
                 .iter()
                 .filter_map(|s| self.relationship_type_from_str(s))
                 .collect();
-            if ids.is_empty() { None } else { Some(ids) }
+            if ids.is_empty() {
+                None
+            } else {
+                Some(ids)
+            }
         })
     }
 
@@ -345,9 +357,16 @@ impl GraphSnapshot {
         let end = offsets[node_id as usize + 1] as usize;
         match allowed_types {
             None => nbrs[start..end].to_vec(),
-            Some(allowed) => nbrs[start..end].iter()
+            Some(allowed) => nbrs[start..end]
+                .iter()
                 .zip(types[start..end].iter())
-                .filter_map(|(&nbr, &rt)| if allowed.contains(&rt) { Some(nbr) } else { None })
+                .filter_map(|(&nbr, &rt)| {
+                    if allowed.contains(&rt) {
+                        Some(nbr)
+                    } else {
+                        None
+                    }
+                })
                 .collect(),
         }
     }
@@ -365,7 +384,8 @@ impl GraphSnapshot {
         }
         let start = offsets[node_id as usize] as usize;
         let end = offsets[node_id as usize + 1] as usize;
-        let iter = nbrs[start..end].iter()
+        let iter = nbrs[start..end]
+            .iter()
             .zip(types[start..end].iter())
             .enumerate()
             .map(|(idx, (&nbr, &rt))| (nbr, rt, (start + idx) as u32));
@@ -385,17 +405,33 @@ impl GraphSnapshot {
         let at = allowed_types.as_ref();
         match direction {
             Direction::Outgoing => Self::neighbors_by_type_from_csr(
-                &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+                &self.out_offsets,
+                &self.out_nbrs,
+                &self.out_types,
+                node_id,
+                at,
             ),
             Direction::Incoming => Self::neighbors_by_type_from_csr(
-                &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+                &self.in_offsets,
+                &self.in_nbrs,
+                &self.in_types,
+                node_id,
+                at,
             ),
             Direction::Both => {
                 let mut both = Self::neighbors_by_type_from_csr(
-                    &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+                    &self.out_offsets,
+                    &self.out_nbrs,
+                    &self.out_types,
+                    node_id,
+                    at,
                 );
                 both.extend(Self::neighbors_by_type_from_csr(
-                    &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+                    &self.in_offsets,
+                    &self.in_nbrs,
+                    &self.in_types,
+                    node_id,
+                    at,
                 ));
                 both
             }
@@ -412,17 +448,33 @@ impl GraphSnapshot {
         let at = allowed_types.as_ref();
         match direction {
             Direction::Outgoing => Self::neighbors_with_positions_from_csr(
-                &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+                &self.out_offsets,
+                &self.out_nbrs,
+                &self.out_types,
+                node_id,
+                at,
             ),
             Direction::Incoming => Self::neighbors_with_positions_from_csr(
-                &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+                &self.in_offsets,
+                &self.in_nbrs,
+                &self.in_types,
+                node_id,
+                at,
             ),
             Direction::Both => {
                 let mut both = Self::neighbors_with_positions_from_csr(
-                    &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, at,
+                    &self.out_offsets,
+                    &self.out_nbrs,
+                    &self.out_types,
+                    node_id,
+                    at,
                 );
                 both.extend(Self::neighbors_with_positions_from_csr(
-                    &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, at,
+                    &self.in_offsets,
+                    &self.in_nbrs,
+                    &self.in_types,
+                    node_id,
+                    at,
                 ));
                 both
             }
@@ -462,15 +514,15 @@ impl GraphSnapshot {
 
     /// Get outgoing neighbors filtered by relationship types
     /// Returns only neighbors connected via relationships of the specified types
-    /// 
+    ///
     /// # Arguments
     /// * `node_id` - The node ID
     /// * `rel_types` - Relationship type names (e.g., `&["KNOWS", "WORKS_WITH"]`)
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::GraphBuilder;
-    /// 
+    ///
     /// // Create a graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
@@ -487,27 +539,35 @@ impl GraphSnapshot {
     /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
     pub fn out_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
-        let ids: Vec<RelationshipType> = rel_types.iter()
+        let ids: Vec<RelationshipType> = rel_types
+            .iter()
             .filter_map(|s| self.relationship_type_from_str(s))
             .collect();
-        let allowed: Option<std::collections::HashSet<RelationshipType>> =
-            if ids.is_empty() { None } else { Some(ids.into_iter().collect()) };
+        let allowed: Option<std::collections::HashSet<RelationshipType>> = if ids.is_empty() {
+            None
+        } else {
+            Some(ids.into_iter().collect())
+        };
         Self::neighbors_by_type_from_csr(
-            &self.out_offsets, &self.out_nbrs, &self.out_types, node_id, allowed.as_ref(),
+            &self.out_offsets,
+            &self.out_nbrs,
+            &self.out_types,
+            node_id,
+            allowed.as_ref(),
         )
     }
 
     /// Get incoming neighbors filtered by relationship types
     /// Returns only neighbors connected via relationships of the specified types
-    /// 
+    ///
     /// # Arguments
     /// * `node_id` - The node ID
     /// * `rel_types` - Relationship type names (e.g., `&["KNOWS", "WORKS_WITH"]`)
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::GraphBuilder;
-    /// 
+    ///
     /// // Create a graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
@@ -524,20 +584,28 @@ impl GraphSnapshot {
     /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
     /// ```
     pub fn in_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
-        let ids: Vec<RelationshipType> = rel_types.iter()
+        let ids: Vec<RelationshipType> = rel_types
+            .iter()
             .filter_map(|s| self.relationship_type_from_str(s))
             .collect();
-        let allowed: Option<std::collections::HashSet<RelationshipType>> =
-            if ids.is_empty() { None } else { Some(ids.into_iter().collect()) };
+        let allowed: Option<std::collections::HashSet<RelationshipType>> = if ids.is_empty() {
+            None
+        } else {
+            Some(ids.into_iter().collect())
+        };
         Self::neighbors_by_type_from_csr(
-            &self.in_offsets, &self.in_nbrs, &self.in_types, node_id, allowed.as_ref(),
+            &self.in_offsets,
+            &self.in_nbrs,
+            &self.in_types,
+            node_id,
+            allowed.as_ref(),
         )
     }
 
     /// Check if one node can reach another via traversal
-    /// 
+    ///
     /// Uses breadth-first search (BFS) to efficiently determine reachability.
-    /// 
+    ///
     /// # Arguments
     /// * `from` - Starting node ID
     /// * `to` - Target node ID
@@ -545,33 +613,33 @@ impl GraphSnapshot {
     /// * `rel_types` - Optional filter: only follow relationships of these types.
     ///   If `None` or empty, all relationship types are allowed.
     /// * `max_depth` - Optional maximum traversal depth. If `None`, no limit.
-    /// 
+    ///
     /// # Returns
     /// `true` if `to` is reachable from `from` under the given constraints, `false` otherwise.
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
     /// use rustychickpeas_core::types::Direction;
-    /// 
+    ///
     /// // Create a simple graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(5), &["Person"]).unwrap();
     /// builder.add_node(Some(10), &["Person"]).unwrap();
     /// builder.add_rel(5, 10, "KNOWS").unwrap();
     /// let snapshot = builder.finalize(None);
-    /// 
+    ///
     /// // Check if node 5 can reach node 10 via outgoing relationships
     /// let reachable = snapshot.can_reach(5, 10, Direction::Outgoing, None, None);
-    /// 
+    ///
     /// // Check reachability only via "KNOWS" and "WORKS_WITH" relationships, max 3 hops
     /// let reachable = snapshot.can_reach(
-    ///     5, 10, 
-    ///     Direction::Outgoing, 
-    ///     Some(&["KNOWS", "WORKS_WITH"]), 
+    ///     5, 10,
+    ///     Direction::Outgoing,
+    ///     Some(&["KNOWS", "WORKS_WITH"]),
     ///     Some(3)
     /// );
-    /// 
+    ///
     /// // Check bidirectional reachability with no type filter
     /// let reachable = snapshot.can_reach(5, 10, Direction::Both, None, None);
     /// ```
@@ -588,8 +656,9 @@ impl GraphSnapshot {
         }
 
         // Pre-compute HashSet once for the entire BFS
-        let allowed_types: Option<std::collections::HashSet<RelationshipType>> =
-            self.resolve_rel_types(rel_types).map(|ids| ids.into_iter().collect());
+        let allowed_types: Option<std::collections::HashSet<RelationshipType>> = self
+            .resolve_rel_types(rel_types)
+            .map(|ids| ids.into_iter().collect());
 
         let mut queue = std::collections::VecDeque::new();
         queue.push_back((from, 0u32));
@@ -617,10 +686,10 @@ impl GraphSnapshot {
     }
 
     /// Bidirectional BFS to find paths between source and target node sets
-    /// 
+    ///
     /// Performs BFS from both source and target nodes simultaneously, meeting in the middle.
     /// Returns the intersection of nodes and relationships that lie on paths between the sets.
-    /// 
+    ///
     /// # Arguments
     /// * `source_nodes` - Starting nodes for forward traversal
     /// * `target_nodes` - Starting nodes for backward traversal
@@ -634,19 +703,19 @@ impl GraphSnapshot {
     /// * `rel_filter` - Optional filter: returns `true` to follow a relationship.
     ///   Takes `(from_node, to_node, rel_type, csr_position, snapshot)` and should return `true` to follow.
     /// * `max_depth` - Optional maximum depth for each direction (default: no limit)
-    /// 
+    ///
     /// # Returns
     /// A tuple `(node_bitmap, rel_bitmap)` where:
     /// - `node_bitmap`: RoaringBitmap of node IDs on paths between source and target
     /// - `rel_bitmap`: RoaringBitmap of relationship CSR positions on paths between source and target
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
     /// use rustychickpeas_core::bitmap::NodeSet;
     /// use rustychickpeas_core::types::Direction;
     /// use roaring::RoaringBitmap;
-    /// 
+    ///
     /// // Create a simple graph
     /// let mut builder = GraphBuilder::new(Some(20), Some(20));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
@@ -656,7 +725,7 @@ impl GraphSnapshot {
     /// builder.add_rel(0, 10, "KNOWS").unwrap();
     /// builder.add_rel(1, 11, "WORKS_WITH").unwrap();
     /// let snapshot = builder.finalize(None);
-    /// 
+    ///
     /// // Simple bidirectional search (default: Outgoing for forward, Incoming for backward)
     /// let source = NodeSet::new(RoaringBitmap::from_iter([0, 1]));
     /// let target = NodeSet::new(RoaringBitmap::from_iter([10, 11]));
@@ -665,12 +734,12 @@ impl GraphSnapshot {
     /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
     ///     &source, &target, Direction::Outgoing, None, None, None, None
     /// );
-    /// 
+    ///
     /// // With relationship type filter
     /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
     ///     &source, &target, Direction::Outgoing, Some(&["KNOWS", "WORKS_WITH"]), None, None, None
     /// );
-    /// 
+    ///
     /// // Bidirectional traversal (both directions)
     /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
     ///     &source, &target, Direction::Both, None, None, None, None
@@ -704,10 +773,15 @@ impl GraphSnapshot {
                     continue;
                 }
             }
-            let neighbors = self.get_neighbors_with_positions_for_direction(current, direction, allowed_types);
+            let neighbors =
+                self.get_neighbors_with_positions_for_direction(current, direction, allowed_types);
             for (neighbor, rel_type, csr_pos) in neighbors {
                 if let Some(ref rf) = rel_filter {
-                    let (from, to) = if is_backward { (neighbor, current) } else { (current, neighbor) };
+                    let (from, to) = if is_backward {
+                        (neighbor, current)
+                    } else {
+                        (current, neighbor)
+                    };
                     if !rf(from, to, rel_type, csr_pos, self) {
                         continue;
                     }
@@ -744,8 +818,9 @@ impl GraphSnapshot {
         RF: Fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool,
     {
         // Pre-compute allowed types HashSet once for the entire BFS
-        let allowed_types: Option<std::collections::HashSet<RelationshipType>> =
-            self.resolve_rel_types(rel_types).map(|ids| ids.into_iter().collect());
+        let allowed_types: Option<std::collections::HashSet<RelationshipType>> = self
+            .resolve_rel_types(rel_types)
+            .map(|ids| ids.into_iter().collect());
 
         let mut forward_visited_nodes = RoaringBitmap::new();
         let mut forward_visited_rels = RoaringBitmap::new();
@@ -777,14 +852,28 @@ impl GraphSnapshot {
 
         while !forward_queue.is_empty() || !backward_queue.is_empty() {
             self.bfs_expand_step(
-                &mut forward_queue, &mut forward_visited_nodes, &mut forward_visited_rels,
-                &backward_visited_nodes, direction, &allowed_types,
-                &node_filter, &rel_filter, max_depth, false,
+                &mut forward_queue,
+                &mut forward_visited_nodes,
+                &mut forward_visited_rels,
+                &backward_visited_nodes,
+                direction,
+                &allowed_types,
+                &node_filter,
+                &rel_filter,
+                max_depth,
+                false,
             );
             self.bfs_expand_step(
-                &mut backward_queue, &mut backward_visited_nodes, &mut backward_visited_rels,
-                &forward_visited_nodes, backward_direction, &allowed_types,
-                &node_filter, &rel_filter, max_depth, true,
+                &mut backward_queue,
+                &mut backward_visited_nodes,
+                &mut backward_visited_rels,
+                &forward_visited_nodes,
+                backward_direction,
+                &allowed_types,
+                &node_filter,
+                &rel_filter,
+                max_depth,
+                true,
             );
         }
 
@@ -801,10 +890,10 @@ impl GraphSnapshot {
     }
 
     /// BFS traversal from a set of starting nodes
-    /// 
+    ///
     /// Performs BFS from the starting nodes, following edges in the specified direction.
     /// Returns all nodes and relationships visited during the traversal.
-    /// 
+    ///
     /// # Arguments
     /// * `start_nodes` - Starting nodes for traversal
     /// * `direction` - Direction of traversal:
@@ -817,19 +906,19 @@ impl GraphSnapshot {
     /// * `rel_filter` - Optional filter: returns `true` to follow a relationship.
     ///   Takes `(from_node, to_node, rel_type, csr_position, snapshot)` and should return `true` to follow.
     /// * `max_depth` - Optional maximum depth (default: no limit)
-    /// 
+    ///
     /// # Returns
     /// A tuple `(node_bitmap, rel_bitmap)` where:
     /// - `node_bitmap`: RoaringBitmap of node IDs visited during traversal
     /// - `rel_bitmap`: RoaringBitmap of relationship CSR positions traversed
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
     /// use rustychickpeas_core::bitmap::NodeSet;
     /// use rustychickpeas_core::types::{Direction, NodeId};
     /// use roaring::RoaringBitmap;
-    /// 
+    ///
     /// // Create a simple graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
@@ -846,17 +935,17 @@ impl GraphSnapshot {
     /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
     ///     &start, Direction::Outgoing, None, None, None, None
     /// );
-    /// 
+    ///
     /// // BFS with relationship type filter
     /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
     ///     &start, Direction::Outgoing, Some(&["KNOWS", "WORKS_WITH"]), None, None, None
     /// );
-    /// 
+    ///
     /// // BFS with max depth
     /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
     ///     &start, Direction::Outgoing, None, None, None, Some(3)
     /// );
-    /// 
+    ///
     /// // BFS with node filter (only "Person" nodes)
     /// let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
     ///     snapshot.nodes_with_label("Person")
@@ -880,8 +969,9 @@ impl GraphSnapshot {
         RF: Fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool,
     {
         // Pre-compute allowed types HashSet once for the entire BFS
-        let allowed_types: Option<std::collections::HashSet<RelationshipType>> =
-            self.resolve_rel_types(rel_types).map(|ids| ids.into_iter().collect());
+        let allowed_types: Option<std::collections::HashSet<RelationshipType>> = self
+            .resolve_rel_types(rel_types)
+            .map(|ids| ids.into_iter().collect());
 
         let mut queue = std::collections::VecDeque::new();
         let mut visited_nodes = RoaringBitmap::new();
@@ -902,7 +992,8 @@ impl GraphSnapshot {
                 }
             }
 
-            let neighbors = self.get_neighbors_with_positions_for_direction(current, direction, &allowed_types);
+            let neighbors =
+                self.get_neighbors_with_positions_for_direction(current, direction, &allowed_types);
 
             for (neighbor, rel_type, csr_pos) in neighbors {
                 if let Some(ref rf) = rel_filter {
@@ -924,7 +1015,7 @@ impl GraphSnapshot {
     }
 
     /// Get nodes with a specific label
-    /// 
+    ///
     /// # Arguments
     /// * `label` - The label name (e.g., "Person")
     pub fn nodes_with_label(&self, label: &str) -> Option<&NodeSet> {
@@ -938,7 +1029,7 @@ impl GraphSnapshot {
     }
 
     /// Get relationships with a specific type
-    /// 
+    ///
     /// # Arguments
     /// * `rel_type` - The relationship type name (e.g., "KNOWS")
     pub fn relationships_with_type(&self, rel_type: &str) -> Option<&NodeSet> {
@@ -952,19 +1043,19 @@ impl GraphSnapshot {
     }
 
     /// Get nodes with a specific property value
-    /// 
+    ///
     /// This method lazily builds the index for the property key on first access.
     /// The index is built by scanning the column and grouping nodes by value.
-    /// 
+    ///
     /// # Arguments
     /// * `label` - The label name (e.g., "Person")
     /// * `key` - The property key name (e.g., "name")
     /// * `value` - The property value to search for (can be `&str`, `String`, `i64`, `i32`, `f64`, `bool`, or `ValueId`)
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::GraphBuilder;
-    /// 
+    ///
     /// // Create a graph with properties
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
@@ -972,17 +1063,22 @@ impl GraphSnapshot {
     /// builder.set_prop_i64(0, "age", 30).unwrap();
     /// builder.set_prop_bool(0, "active", true).unwrap();
     /// let snapshot = builder.finalize(None);
-    /// 
+    ///
     /// // Find all Person nodes with name "Alice"
     /// let nodes = snapshot.nodes_with_property("Person", "name", "Alice");
-    /// 
+    ///
     /// // Find all Person nodes with age 30
     /// let nodes = snapshot.nodes_with_property("Person", "age", 30i64);
-    /// 
+    ///
     /// // Find all Person nodes with active = true
     /// let nodes = snapshot.nodes_with_property("Person", "active", true);
     /// ```
-    pub fn nodes_with_property<V: IntoValueId>(&self, label: &str, key: &str, value: V) -> Option<NodeSet> {
+    pub fn nodes_with_property<V: IntoValueId>(
+        &self,
+        label: &str,
+        key: &str,
+        value: V,
+    ) -> Option<NodeSet> {
         let label_id = self.label_from_str(label)?;
         let key_id = self.property_key_from_str(key)?;
         let value_id = value.into_value_id(self)?;
@@ -991,12 +1087,20 @@ impl GraphSnapshot {
 
     /// Get nodes with a specific property value (internal ID-based version).
     /// Uses check-release-build-reacquire pattern to avoid holding the mutex during index build.
-    fn nodes_with_property_id(&self, label: Label, key: PropertyKey, value: ValueId) -> Option<NodeSet> {
+    fn nodes_with_property_id(
+        &self,
+        label: Label,
+        key: PropertyKey,
+        value: ValueId,
+    ) -> Option<NodeSet> {
         let index_key = (label, key);
 
         // Check if the index already exists (short lock)
         {
-            let index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+            let index = self
+                .prop_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if let Some(key_index) = index.get(&index_key) {
                 return key_index.get(&value).cloned();
             }
@@ -1004,16 +1108,20 @@ impl GraphSnapshot {
         // Release lock, build index outside the lock
         let label_nodes = self.nodes_with_label_id(label)?;
         let column = self.columns.get(&key)?;
-        let key_index_final = Self::build_property_index_for_key_and_label(column, Some(label_nodes));
+        let key_index_final =
+            Self::build_property_index_for_key_and_label(column, Some(label_nodes));
 
         // Re-acquire lock and insert (another thread may have built it first)
-        let mut index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut index = self
+            .prop_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let entry = index.entry(index_key).or_insert(key_index_final);
         entry.get(&value).cloned()
     }
 
     /// Get property value for a node
-    /// 
+    ///
     /// # Arguments
     /// * `node_id` - The node ID
     /// * `key` - The property key name (e.g., "name")
@@ -1028,7 +1136,7 @@ impl GraphSnapshot {
     }
 
     /// Get property value for a relationship
-    /// 
+    ///
     /// # Arguments
     /// * `rel_csr_pos` - Relationship position in the outgoing CSR array (0 to n_rels-1)
     /// * `key` - The property key name (e.g., "verified")
@@ -1130,13 +1238,15 @@ mod tests {
 
         // Manually create snapshot to avoid into_vec() issue
         // Calculate n based on max node ID used (nodes are 0, 1, 2, so n should be 3)
-        let max_node_id = builder.node_labels.len()
+        let max_node_id = builder
+            .node_labels
+            .len()
             .max(builder.deg_out.len())
             .max(builder.deg_in.len())
             .saturating_sub(1);
         let n = (max_node_id + 1).max(3); // Ensure at least 3 for test nodes 0,1,2
         let m = builder.rels.len();
-        
+
         // Build CSR
         let mut out_offsets = vec![0u32; n + 1];
         for i in 0..n {
@@ -1152,7 +1262,7 @@ mod tests {
             out_types[pos] = *rel_type;
             out_pos[u_idx] += 1;
         }
-        
+
         let mut in_offsets = vec![0u32; n + 1];
         for i in 0..n {
             in_offsets[i + 1] = in_offsets[i] + builder.deg_in[i];
@@ -1167,12 +1277,15 @@ mod tests {
             in_types[pos] = *rel_type;
             in_pos[v_idx] += 1;
         }
-        
+
         // Build label index
         let mut label_index: HashMap<Label, Vec<NodeId>> = HashMap::new();
         for (node_id, labels) in builder.node_labels.iter().enumerate().take(n) {
             for label in labels {
-                label_index.entry(*label).or_default().push(node_id as NodeId);
+                label_index
+                    .entry(*label)
+                    .or_default()
+                    .push(node_id as NodeId);
             }
         }
         use roaring::RoaringBitmap;
@@ -1185,11 +1298,14 @@ mod tests {
                 (label, NodeSet::new(bitmap))
             })
             .collect();
-        
+
         // Build type index
         let mut type_index: HashMap<RelationshipType, Vec<u32>> = HashMap::new();
         for (rel_idx, rel_type) in builder.rel_types.iter().enumerate() {
-            type_index.entry(*rel_type).or_default().push(rel_idx as u32);
+            type_index
+                .entry(*rel_type)
+                .or_default()
+                .push(rel_idx as u32);
         }
         let type_index: HashMap<RelationshipType, NodeSet> = type_index
             .into_iter()
@@ -1200,12 +1316,12 @@ mod tests {
                 (rel_type, NodeSet::new(bitmap))
             })
             .collect();
-        
+
         // Build property columns (sparse for small test)
         let mut columns: HashMap<PropertyKey, Column> = HashMap::new();
         let name_key = builder.interner.get_or_intern("name");
         let age_key = builder.interner.get_or_intern("age");
-        
+
         if let Some(pairs) = builder.node_col_str.get(&name_key) {
             let mut pairs = pairs.clone();
             pairs.sort_unstable_by_key(|(id, _)| *id);
@@ -1216,11 +1332,11 @@ mod tests {
             pairs.sort_unstable_by_key(|(id, _)| *id);
             columns.insert(age_key, Column::SparseI64(pairs));
         }
-        
+
         // Create atoms manually - need to match the actual interner IDs
         // The interner assigns IDs sequentially, so we need to track what was interned
         let mut atoms_vec = vec!["".to_string()]; // ID 0 is always empty
-        // Get all interned strings in order by resolving IDs
+                                                  // Get all interned strings in order by resolving IDs
         let interner_len = builder.interner.len();
         for i in 1..interner_len {
             if let Some(s) = builder.interner.try_resolve(i as u32) {
@@ -1228,7 +1344,7 @@ mod tests {
             }
         }
         let atoms = Atoms::new(atoms_vec);
-        
+
         GraphSnapshot {
             n_nodes: n as u32,
             n_rels: m as u64,
@@ -1271,7 +1387,11 @@ mod tests {
 
     #[test]
     fn test_atoms_resolve() {
-        let atoms = Atoms::new(vec!["".to_string(), "hello".to_string(), "world".to_string()]);
+        let atoms = Atoms::new(vec![
+            "".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+        ]);
         assert_eq!(atoms.resolve(0), Some(""));
         assert_eq!(atoms.resolve(1), Some("hello"));
         assert_eq!(atoms.resolve(2), Some("world"));
@@ -1284,11 +1404,11 @@ mod tests {
         let neighbors = snapshot.out_neighbors(0);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 1);
-        
+
         let neighbors = snapshot.out_neighbors(1);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 2);
-        
+
         let neighbors = snapshot.out_neighbors(2);
         assert_eq!(neighbors.len(), 0);
     }
@@ -1298,11 +1418,11 @@ mod tests {
         let snapshot = create_test_snapshot();
         let neighbors = snapshot.in_neighbors(0);
         assert_eq!(neighbors.len(), 0);
-        
+
         let neighbors = snapshot.in_neighbors(1);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 0);
-        
+
         let neighbors = snapshot.in_neighbors(2);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 1);
@@ -1326,18 +1446,18 @@ mod tests {
     fn test_can_reach_basic() {
         let snapshot = create_test_snapshot();
         // Graph: 0 -> 1 -> 2 (via KNOWS and WORKS_FOR)
-        
+
         // Direct neighbors
         assert!(snapshot.can_reach(0, 1, Direction::Outgoing, None, None));
         assert!(snapshot.can_reach(1, 2, Direction::Outgoing, None, None));
-        
+
         // Multi-hop
         assert!(snapshot.can_reach(0, 2, Direction::Outgoing, None, None));
-        
+
         // Reverse direction (should not work for outgoing)
         assert!(!snapshot.can_reach(2, 0, Direction::Outgoing, None, None));
         assert!(!snapshot.can_reach(1, 0, Direction::Outgoing, None, None));
-        
+
         // Same node
         assert!(snapshot.can_reach(0, 0, Direction::Outgoing, None, None));
     }
@@ -1346,16 +1466,22 @@ mod tests {
     fn test_can_reach_with_rel_type_filter() {
         let snapshot = create_test_snapshot();
         // Graph: 0 -> 1 (KNOWS), 1 -> 2 (WORKS_FOR)
-        
+
         // Can reach via KNOWS
         assert!(snapshot.can_reach(0, 1, Direction::Outgoing, Some(&["KNOWS"]), None));
-        
+
         // Cannot reach 2 via KNOWS only (need WORKS_FOR)
         assert!(!snapshot.can_reach(0, 2, Direction::Outgoing, Some(&["KNOWS"]), None));
-        
+
         // Can reach 2 via both types
-        assert!(snapshot.can_reach(0, 2, Direction::Outgoing, Some(&["KNOWS", "WORKS_FOR"]), None));
-        
+        assert!(snapshot.can_reach(
+            0,
+            2,
+            Direction::Outgoing,
+            Some(&["KNOWS", "WORKS_FOR"]),
+            None
+        ));
+
         // Can reach 2 via WORKS_FOR only (from node 1)
         assert!(snapshot.can_reach(1, 2, Direction::Outgoing, Some(&["WORKS_FOR"]), None));
     }
@@ -1364,13 +1490,13 @@ mod tests {
     fn test_can_reach_with_max_depth() {
         let snapshot = create_test_snapshot();
         // Graph: 0 -> 1 -> 2
-        
+
         // Can reach with depth 2
         assert!(snapshot.can_reach(0, 2, Direction::Outgoing, None, Some(2)));
-        
+
         // Cannot reach with depth 1 (only one hop allowed)
         assert!(!snapshot.can_reach(0, 2, Direction::Outgoing, None, Some(1)));
-        
+
         // Can reach direct neighbor with depth 1
         assert!(snapshot.can_reach(0, 1, Direction::Outgoing, None, Some(1)));
     }
@@ -1379,14 +1505,14 @@ mod tests {
     fn test_can_reach_direction_both() {
         let snapshot = create_test_snapshot();
         // Graph: 0 -> 1 -> 2
-        
+
         // With Direction::Both, can traverse in both directions
         // From 2, can reach 1 via incoming edge
         assert!(snapshot.can_reach(2, 1, Direction::Both, None, None));
-        
+
         // From 2, can reach 0 via incoming edges (2 <- 1 <- 0)
         assert!(snapshot.can_reach(2, 0, Direction::Both, None, None));
-        
+
         // From 0, can still reach 2 via outgoing (0 -> 1 -> 2)
         assert!(snapshot.can_reach(0, 2, Direction::Both, None, None));
     }
@@ -1395,7 +1521,7 @@ mod tests {
     fn test_can_reach_unreachable() {
         let snapshot = create_test_snapshot();
         // Graph: 0 -> 1 -> 2
-        
+
         // Node 999 doesn't exist, so unreachable
         assert!(!snapshot.can_reach(0, 999, Direction::Outgoing, None, None));
         assert!(!snapshot.can_reach(999, 0, Direction::Outgoing, None, None));
@@ -1448,10 +1574,16 @@ mod tests {
         let snapshot = create_test_snapshot();
         assert_eq!(snapshot.resolve_string(0), Some(""));
         // Find Person and Alice by searching atoms
-        let person_idx = snapshot.atoms.strings.iter()
+        let person_idx = snapshot
+            .atoms
+            .strings
+            .iter()
             .position(|s| s == "Person")
             .unwrap();
-        let alice_idx = snapshot.atoms.strings.iter()
+        let alice_idx = snapshot
+            .atoms
+            .strings
+            .iter()
             .position(|s| s == "Alice")
             .unwrap();
         assert_eq!(snapshot.resolve_string(person_idx as u32), Some("Person"));
@@ -1613,7 +1745,7 @@ mod tests {
     #[test]
     fn test_get_nodes_with_property_lazy() {
         let snapshot = create_test_snapshot();
-        
+
         // First access should build the index lazily
         let nodes = snapshot.nodes_with_property("Person", "name", "Alice");
         assert!(nodes.is_some());
@@ -1641,7 +1773,7 @@ mod tests {
         // Test that nodes_with_property correctly scopes by label
         // Same property key on different labels should return different results
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        
+
         // Add nodes with different labels but same property key
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
@@ -1653,29 +1785,29 @@ mod tests {
         builder.set_prop_str(1, "name", "Bob").unwrap();
         builder.set_prop_str(2, "name", "Acme Corp").unwrap();
         builder.set_prop_str(3, "name", "Tech Inc").unwrap();
-        
+
         let snapshot = builder.finalize(None);
-        
+
         // Query Person label - should only return Person nodes
         let person_nodes = snapshot.nodes_with_property("Person", "name", "Alice");
         assert!(person_nodes.is_some());
         let person_nodes = person_nodes.unwrap();
         assert_eq!(person_nodes.len(), 1);
         assert!(person_nodes.contains(0));
-        
+
         let person_nodes = snapshot.nodes_with_property("Person", "name", "Bob");
         assert!(person_nodes.is_some());
         let person_nodes = person_nodes.unwrap();
         assert_eq!(person_nodes.len(), 1);
         assert!(person_nodes.contains(1));
-        
+
         // Query Company label - should only return Company nodes
         let company_nodes = snapshot.nodes_with_property("Company", "name", "Acme Corp");
         assert!(company_nodes.is_some());
         let company_nodes = company_nodes.unwrap();
         assert_eq!(company_nodes.len(), 1);
         assert!(company_nodes.contains(2));
-        
+
         // Query Person label for Company value - should return None
         let result = snapshot.nodes_with_property("Person", "name", "Acme Corp");
         assert!(result.is_none() || result.unwrap().len() == 0);
@@ -1685,7 +1817,7 @@ mod tests {
     fn test_get_nodes_with_property_multiple_values() {
         // Test that multiple nodes with the same property value are all returned
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        
+
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
@@ -1696,9 +1828,9 @@ mod tests {
         builder.set_prop_i64(1, "age", 30).unwrap();
         builder.set_prop_i64(2, "age", 25).unwrap();
         builder.set_prop_i64(3, "age", 30).unwrap();
-        
+
         let snapshot = builder.finalize(None);
-        
+
         // Should return 3 nodes with age 30
         let nodes = snapshot.nodes_with_property("Person", "age", 30i64);
         assert!(nodes.is_some());
@@ -1707,7 +1839,7 @@ mod tests {
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
         assert!(nodes.contains(3));
-        
+
         // Should return 1 node with age 25
         let nodes = snapshot.nodes_with_property("Person", "age", 25i64);
         assert!(nodes.is_some());
@@ -1720,7 +1852,7 @@ mod tests {
     fn test_get_nodes_with_property_all_types() {
         // Test nodes_with_property with all property value types
         let mut builder = GraphBuilder::new(Some(10), Some(10));
-        
+
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
@@ -1730,24 +1862,24 @@ mod tests {
         builder.set_prop_i64(1, "age", 30).unwrap();
         builder.set_prop_f64(2, "score", 95.5).unwrap();
         builder.set_prop_bool(3, "active", true).unwrap();
-        
+
         let snapshot = builder.finalize(None);
-        
+
         // Test string property
         let nodes = snapshot.nodes_with_property("Person", "name", "Alice");
         assert!(nodes.is_some());
         assert_eq!(nodes.unwrap().len(), 1);
-        
+
         // Test i64 property
         let nodes = snapshot.nodes_with_property("Person", "age", 30i64);
         assert!(nodes.is_some());
         assert_eq!(nodes.unwrap().len(), 1);
-        
+
         // Test f64 property
         let nodes = snapshot.nodes_with_property("Person", "score", 95.5);
         assert!(nodes.is_some());
         assert_eq!(nodes.unwrap().len(), 1);
-        
+
         // Test bool property
         let nodes = snapshot.nodes_with_property("Person", "active", true);
         assert!(nodes.is_some());
@@ -1775,7 +1907,9 @@ mod tests {
         builder.add_node(Some(0), &["Person"]).unwrap();
 
         // Manually create snapshot with version
-        let max_node_id = builder.node_labels.len()
+        let max_node_id = builder
+            .node_labels
+            .len()
             .max(builder.deg_out.len())
             .max(builder.deg_in.len())
             .saturating_sub(1);
@@ -1787,7 +1921,7 @@ mod tests {
                 atoms_vec.push(s);
             }
         }
-        
+
         let snapshot = GraphSnapshot {
             n_nodes: n as u32,
             n_rels: 0,
@@ -1805,7 +1939,7 @@ mod tests {
             prop_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(atoms_vec),
         };
-        
+
         assert_eq!(snapshot.version(), Some("v1.0"));
     }
 
@@ -1854,16 +1988,24 @@ mod tests {
         let snapshot = create_bidirectional_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: find paths from node 0 to node 3
         let source = NodeSet::new(RoaringBitmap::from_iter([0]));
         let target = NodeSet::new(RoaringBitmap::from_iter([3]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, Direction::Outgoing, None, None, None, None);
-        
+        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
+            &source,
+            &target,
+            Direction::Outgoing,
+            None,
+            None,
+            None,
+            None,
+        );
+
         // Should find nodes 0, 1, 2, 3, 4 (all on paths from 0 to 3)
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
@@ -1871,7 +2013,7 @@ mod tests {
         assert!(nodes.contains(3));
         assert!(nodes.contains(4));
         assert!(!nodes.contains(5)); // Node 5 doesn't exist
-        
+
         // Should find relationships on paths
         assert!(rels.len() > 0);
     }
@@ -1881,16 +2023,24 @@ mod tests {
         let snapshot = create_bidirectional_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: no path from node 3 to node 0 (reverse direction)
         let source = NodeSet::new(RoaringBitmap::from_iter([3]));
         let target = NodeSet::new(RoaringBitmap::from_iter([0]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, Direction::Outgoing, None, None, None, None);
-        
+        let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
+            &source,
+            &target,
+            Direction::Outgoing,
+            None,
+            None,
+            None,
+            None,
+        );
+
         // Should find intersection (both sets contain their starting nodes)
         // But no actual path, so intersection should be empty or just the endpoints
         // Actually, if source and target don't overlap initially, and no path exists,
@@ -1903,21 +2053,24 @@ mod tests {
         let snapshot = create_bidirectional_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: filter by relationship type
         let source = NodeSet::new(RoaringBitmap::from_iter([0]));
         let target = NodeSet::new(RoaringBitmap::from_iter([3]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
-            &source, &target, 
+            &source,
+            &target,
             Direction::Outgoing,
-            Some(&["KNOWS"]), 
-            None, None, None
+            Some(&["KNOWS"]),
+            None,
+            None,
+            None,
         );
-        
+
         // Should still find the path
         assert!(nodes.contains(0));
         assert!(nodes.contains(3));
@@ -1928,27 +2081,29 @@ mod tests {
         let snapshot = create_bidirectional_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: filter nodes by label
         let source = NodeSet::new(RoaringBitmap::from_iter([0]));
         let target = NodeSet::new(RoaringBitmap::from_iter([3]));
-        
+
         let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
-            snapshot.nodes_with_label("Person")
+            snapshot
+                .nodes_with_label("Person")
                 .map_or(false, |nodes| nodes.contains(node_id))
         };
-        
+
         // Type annotations needed for None filters
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bidirectional_bfs(
-            &source, &target, 
+            &source,
+            &target,
             Direction::Outgoing,
-            None, 
-            Some(&node_filter), 
-            None::<RelFilter>, 
-            None
+            None,
+            Some(&node_filter),
+            None::<RelFilter>,
+            None,
         );
-        
+
         // Should find path since all nodes have "Person" label
         assert!(nodes.contains(0));
         assert!(nodes.contains(3));
@@ -1959,37 +2114,39 @@ mod tests {
         let snapshot = create_bidirectional_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: max depth limits traversal
         let source = NodeSet::new(RoaringBitmap::from_iter([0]));
         let target = NodeSet::new(RoaringBitmap::from_iter([3]));
-        
+
         // With depth 1, should not reach node 3
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
-            &source, &target, 
+            &source,
+            &target,
             Direction::Outgoing,
-            None, 
-            None, 
-            None, 
-            Some(1)
+            None,
+            None,
+            None,
+            Some(1),
         );
-        
+
         // Should not find node 3 with depth 1
         assert!(!nodes.contains(3));
-        
+
         // With depth 3, should reach node 3
         let (nodes, _rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
-            &source, &target, 
+            &source,
+            &target,
             Direction::Outgoing,
-            None, 
-            None, 
-            None, 
-            Some(3)
+            None,
+            None,
+            None,
+            Some(3),
         );
-        
+
         // Should find node 3 with depth 3
         assert!(nodes.contains(3));
     }
@@ -1999,16 +2156,24 @@ mod tests {
         let snapshot = create_bidirectional_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: multiple source and target nodes
         let source = NodeSet::new(RoaringBitmap::from_iter([0, 1]));
         let target = NodeSet::new(RoaringBitmap::from_iter([2, 3]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(&source, &target, Direction::Outgoing, None, None, None, None);
-        
+        let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
+            &source,
+            &target,
+            Direction::Outgoing,
+            None,
+            None,
+            None,
+            None,
+        );
+
         // Should find intersection nodes
         assert!(nodes.contains(1));
         assert!(nodes.contains(2));
@@ -2040,19 +2205,22 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: BFS from node 0, outgoing direction
         let start = NodeSet::new(RoaringBitmap::from_iter([0]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
-            Direction::Outgoing, 
-            None, None, None, None
+            &start,
+            Direction::Outgoing,
+            None,
+            None,
+            None,
+            None,
         );
-        
+
         // Should find nodes 0, 1, 2, 3, 4, 5 (all reachable from 0)
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
@@ -2068,20 +2236,22 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: filter by relationship type "KNOWS" only
         let start = NodeSet::new(RoaringBitmap::from_iter([0]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
+            &start,
             Direction::Outgoing,
-            Some(&["KNOWS"]), 
-            None, None, None
+            Some(&["KNOWS"]),
+            None,
+            None,
+            None,
         );
-        
+
         // Should find nodes 0, 1, 2, 3, 4 (via KNOWS relationships)
         // Should NOT find node 5 (connected via WORKS_FOR)
         assert!(nodes.contains(0));
@@ -2097,26 +2267,27 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: filter by node label "Person"
         let start = NodeSet::new(RoaringBitmap::from_iter([0]));
-        
+
         let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
-            snapshot.nodes_with_label("Person")
+            snapshot
+                .nodes_with_label("Person")
                 .map_or(false, |nodes| nodes.contains(node_id))
         };
-        
+
         // Type annotations needed for None filters
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs(
-            &start, 
+            &start,
             Direction::Outgoing,
-            None, 
-            Some(&node_filter), 
-            None::<RelFilter>, 
-            None
+            None,
+            Some(&node_filter),
+            None::<RelFilter>,
+            None,
         );
-        
+
         // Should find nodes 0, 1, 2, 3, 4 (all have "Person" label)
         // Should NOT find node 5 (has "Company" label)
         assert!(nodes.contains(0));
@@ -2132,23 +2303,23 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: max depth limits traversal
         let start = NodeSet::new(RoaringBitmap::from_iter([0]));
-        
+
         // With depth 1, should only reach direct neighbors
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
+            &start,
             Direction::Outgoing,
-            None, 
-            None, 
-            None, 
-            Some(1)
+            None,
+            None,
+            None,
+            Some(1),
         );
-        
+
         // Should find nodes 0, 1, 4, 5 (direct neighbors)
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
@@ -2157,17 +2328,17 @@ mod tests {
         // Should NOT find nodes 2, 3 (depth 2+)
         assert!(!nodes.contains(2));
         assert!(!nodes.contains(3));
-        
+
         // With depth 2, should reach nodes 2
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
+            &start,
             Direction::Outgoing,
-            None, 
-            None, 
-            None, 
-            Some(2)
+            None,
+            None,
+            None,
+            Some(2),
         );
-        
+
         assert!(nodes.contains(2));
         // Should find node 3 (reachable via 0->4->3 at depth 2)
         assert!(nodes.contains(3));
@@ -2178,19 +2349,22 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: BFS from node 3, incoming direction (reverse traversal)
         let start = NodeSet::new(RoaringBitmap::from_iter([3]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
-            Direction::Incoming, 
-            None, None, None, None
+            &start,
+            Direction::Incoming,
+            None,
+            None,
+            None,
+            None,
         );
-        
+
         // Should find nodes reachable by following incoming edges: 3, 2, 4, 1, 0
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
@@ -2204,19 +2378,16 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: BFS from node 2, both directions
         let start = NodeSet::new(RoaringBitmap::from_iter([2]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
-        let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
-            Direction::Both, 
-            None, None, None, None
-        );
-        
+        let (nodes, _rels) =
+            snapshot.bfs::<NodeFilter, RelFilter>(&start, Direction::Both, None, None, None, None);
+
         // Should find nodes reachable in both directions: 0, 1, 2, 3, 4
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
@@ -2230,25 +2401,26 @@ mod tests {
         let snapshot = create_bfs_test_snapshot();
         use crate::bitmap::NodeSet;
         use roaring::RoaringBitmap;
-        
+
         // Test: BFS from multiple starting nodes
         let start = NodeSet::new(RoaringBitmap::from_iter([0, 2]));
-        
+
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
         type RelFilter = fn(NodeId, NodeId, RelationshipType, u32, &GraphSnapshot) -> bool;
         let (nodes, _rels) = snapshot.bfs::<NodeFilter, RelFilter>(
-            &start, 
-            Direction::Outgoing, 
-            None, None, None, None
+            &start,
+            Direction::Outgoing,
+            None,
+            None,
+            None,
+            None,
         );
-        
+
         // Should find nodes reachable from either start node
         assert!(nodes.contains(0));
         assert!(nodes.contains(2));
         assert!(nodes.contains(3)); // Reachable from both
         assert!(nodes.contains(1)); // Reachable from 0
     }
-
 }
-

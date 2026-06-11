@@ -18,7 +18,6 @@ pub type PropertyKey = u32;
 // RelationshipId removed - GraphSnapshot doesn't track relationship IDs, only node-to-node connections
 // PropertyId removed - not used in GraphSnapshot
 
-
 /// Relationship direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -177,7 +176,7 @@ impl RelationshipType {
 /// Use PropertyIndexValue for hashable property values in indexes
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
-    String(String),                    // Not interned (default)
+    String(String),                   // Not interned (default)
     InternedString(InternedStringId), // Interned (when property value interning is enabled)
     Integer(i64),
     Float(f64),
@@ -191,11 +190,9 @@ impl PropertyValue {
     pub fn as_string(&self, interner: Option<&crate::interner::StringInterner>) -> String {
         match self {
             PropertyValue::String(s) => s.clone(),
-            PropertyValue::InternedString(id) => {
-                interner
-                    .expect("Interner required to resolve interned string")
-                    .resolve(*id)
-            }
+            PropertyValue::InternedString(id) => interner
+                .expect("Interner required to resolve interned string")
+                .resolve(*id),
             PropertyValue::Integer(i) => i.to_string(),
             PropertyValue::Float(f) => f.to_string(),
             PropertyValue::Boolean(b) => b.to_string(),

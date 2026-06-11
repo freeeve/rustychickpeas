@@ -1,12 +1,12 @@
 //! Relationship Python wrapper
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use crate::node::Node;
+use crate::utils::value_id_to_pyobject;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rustychickpeas_core::GraphSnapshot as CoreGraphSnapshot;
-use crate::node::Node;
-use crate::utils::value_id_to_pyobject;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Python wrapper for a Relationship in a GraphSnapshot
 /// Relationships are identified by their position in the CSR arrays
@@ -31,12 +31,12 @@ impl Relationship {
             // For incoming relationships, the start node is in in_nbrs
             if self.rel_index as usize >= self.snapshot.in_nbrs.len() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid relationship index"
+                    "Invalid relationship index",
                 ));
             }
             self.snapshot.in_nbrs[self.rel_index as usize]
         };
-        
+
         Ok(Node {
             snapshot: self.snapshot.clone(),
             node_id: start_id,
@@ -49,7 +49,7 @@ impl Relationship {
             // For outgoing relationships, the end node is in out_nbrs
             if self.rel_index as usize >= self.snapshot.out_nbrs.len() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid relationship index"
+                    "Invalid relationship index",
                 ));
             }
             self.snapshot.out_nbrs[self.rel_index as usize]
@@ -57,7 +57,7 @@ impl Relationship {
             // For incoming relationships, find which node has this relationship
             self.find_node_for_incoming_rel(self.rel_index)
         };
-        
+
         Ok(Node {
             snapshot: self.snapshot.clone(),
             node_id: end_id,
@@ -69,24 +69,24 @@ impl Relationship {
         let rel_type = if self.is_outgoing {
             if self.rel_index as usize >= self.snapshot.out_types.len() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid relationship index"
+                    "Invalid relationship index",
                 ));
             }
             self.snapshot.out_types[self.rel_index as usize]
         } else {
             if self.rel_index as usize >= self.snapshot.in_types.len() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid relationship index"
+                    "Invalid relationship index",
                 ));
             }
             self.snapshot.in_types[self.rel_index as usize]
         };
-        
+
         if let Some(type_str) = self.snapshot.resolve_string(rel_type.id()) {
             Ok(type_str.to_string())
         } else {
             Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Could not resolve relationship type"
+                "Could not resolve relationship type",
             ))
         }
     }
@@ -102,7 +102,10 @@ impl Relationship {
         let end = self.end_node()?;
         Ok(format!(
             "Relationship(id={}, type={}, {}->{})",
-            self.rel_index, rel_type, start.id_internal(), end.id_internal()
+            self.rel_index,
+            rel_type,
+            start.id_internal(),
+            end.id_internal()
         ))
     }
 
@@ -130,20 +133,20 @@ impl Relationship {
     fn to_dict(&self) -> PyResult<PyObject> {
         Python::with_gil(|py| {
             let dict = PyDict::new(py);
-            
+
             // Add ID
             dict.set_item("id", self.rel_index)?;
-            
+
             // Add type
             let rel_type = self.reltype()?;
             dict.set_item("type", rel_type)?;
-            
+
             // Add start and end nodes (as IDs)
             let start_node = self.start_node()?;
             let end_node = self.end_node()?;
             dict.set_item("start_node", start_node.id_internal())?;
             dict.set_item("end_node", end_node.id_internal())?;
-            
+
             // Add properties (nested in properties dict)
             let properties = PyDict::new(py);
             // Get all relationship properties by iterating through rel_columns
@@ -156,7 +159,7 @@ impl Relationship {
                 }
             }
             dict.set_item("properties", properties)?;
-            
+
             Ok(dict.into())
         })
     }
@@ -181,7 +184,7 @@ impl Relationship {
         let offsets = &self.snapshot.out_offsets;
         let mut left = 0;
         let mut right = offsets.len().saturating_sub(1);
-        
+
         while left < right {
             let mid = (left + right + 1) / 2;
             if offsets[mid] <= rel_index {
@@ -200,7 +203,7 @@ impl Relationship {
         let offsets = &self.snapshot.in_offsets;
         let mut left = 0;
         let mut right = offsets.len().saturating_sub(1);
-        
+
         while left < right {
             let mid = (left + right + 1) / 2;
             if offsets[mid] <= rel_index {
@@ -212,4 +215,3 @@ impl Relationship {
         left as u32
     }
 }
-

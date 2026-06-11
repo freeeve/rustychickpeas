@@ -9,19 +9,19 @@ use pyo3::prelude::*;
 
 // Module declarations
 mod direction;
-mod utils;
-mod node;
-mod relationship;
 mod graph_snapshot;
 mod graph_snapshot_builder;
+mod node;
+mod relationship;
 mod rusty_chickpeas;
+mod utils;
 
 // Re-export types for use in other modules
 pub(crate) use direction::Direction;
-pub(crate) use node::Node;
-pub(crate) use relationship::Relationship;
 pub(crate) use graph_snapshot::GraphSnapshot;
 pub(crate) use graph_snapshot_builder::GraphSnapshotBuilder;
+pub(crate) use node::Node;
+pub(crate) use relationship::Relationship;
 pub(crate) use rusty_chickpeas::RustyChickpeas;
 
 #[pymodule]

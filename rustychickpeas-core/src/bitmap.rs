@@ -28,11 +28,7 @@ impl NodeSet {
     pub fn iter(&self) -> Box<dyn Iterator<Item = u32> + '_> {
         match self {
             NodeSet::Roaring(bitmap) => Box::new(bitmap.iter()),
-            NodeSet::Bitset(bitset) => Box::new(
-                bitset
-                    .iter_ones()
-                    .map(|idx| idx as u32),
-            ),
+            NodeSet::Bitset(bitset) => Box::new(bitset.iter_ones().map(|idx| idx as u32)),
         }
     }
 
@@ -54,10 +50,7 @@ impl NodeSet {
     pub fn contains(&self, node_id: u32) -> bool {
         match self {
             NodeSet::Roaring(bitmap) => bitmap.contains(node_id),
-            NodeSet::Bitset(bitset) => bitset
-                .get(node_id as usize)
-                .map(|b| *b)
-                .unwrap_or(false),
+            NodeSet::Bitset(bitset) => bitset.get(node_id as usize).map(|b| *b).unwrap_or(false),
         }
     }
 
@@ -348,13 +341,13 @@ mod tests {
         rb1.insert(2);
         rb1.insert(3);
         let ns1 = NodeSet::new(rb1);
-        
+
         let mut rb2 = RoaringBitmap::new();
         rb2.insert(2);
         rb2.insert(3);
         rb2.insert(4);
         let ns2 = NodeSet::new(rb2);
-        
+
         let result = &ns1 & &ns2;
         assert_eq!(result.len(), 2);
         assert!(result.contains(2));
@@ -370,13 +363,13 @@ mod tests {
         bv1.set(1, true);
         bv1.set(2, true);
         let ns1 = NodeSet::new_bitset(bv1);
-        
+
         let mut bv2 = bitvec::vec::BitVec::new();
         bv2.resize(10, false);
         bv2.set(2, true);
         bv2.set(3, true);
         let ns2 = NodeSet::new_bitset(bv2);
-        
+
         let result = &ns1 & &ns2;
         assert_eq!(result.len(), 1);
         assert!(result.contains(2));
@@ -388,12 +381,12 @@ mod tests {
         rb1.insert(1);
         rb1.insert(2);
         let ns1 = NodeSet::new(rb1);
-        
+
         let mut rb2 = RoaringBitmap::new();
         rb2.insert(2);
         rb2.insert(3);
         let ns2 = NodeSet::new(rb2);
-        
+
         let result = &ns1 | &ns2;
         assert_eq!(result.len(), 3);
         assert!(result.contains(1));
@@ -407,12 +400,12 @@ mod tests {
         bv1.resize(10, false);
         bv1.set(1, true);
         let ns1 = NodeSet::new_bitset(bv1);
-        
+
         let mut bv2 = bitvec::vec::BitVec::new();
         bv2.resize(10, false);
         bv2.set(2, true);
         let ns2 = NodeSet::new_bitset(bv2);
-        
+
         let result = &ns1 | &ns2;
         assert_eq!(result.len(), 2);
         assert!(result.contains(1));
@@ -426,11 +419,11 @@ mod tests {
         rb1.insert(2);
         rb1.insert(3);
         let ns1 = NodeSet::new(rb1);
-        
+
         let mut rb2 = RoaringBitmap::new();
         rb2.insert(2);
         let ns2 = NodeSet::new(rb2);
-        
+
         let result = &ns1 - &ns2;
         assert_eq!(result.len(), 2);
         assert!(result.contains(1));
@@ -445,12 +438,12 @@ mod tests {
         bv1.set(1, true);
         bv1.set(2, true);
         let ns1 = NodeSet::new_bitset(bv1);
-        
+
         let mut bv2 = bitvec::vec::BitVec::new();
         bv2.resize(10, false);
         bv2.set(2, true);
         let ns2 = NodeSet::new_bitset(bv2);
-        
+
         let result = &ns1 - &ns2;
         assert_eq!(result.len(), 1);
         assert!(result.contains(1));
@@ -463,7 +456,7 @@ mod tests {
         bv.resize(10, false);
         bv.set(5, true);
         let mut ns = NodeSet::new_bitset(bv);
-        
+
         // Try to remove a node_id that's out of bounds
         assert_eq!(ns.remove(20), false);
         assert_eq!(ns.len(), 1);
@@ -478,18 +471,18 @@ mod tests {
             rb1.insert(i);
         }
         let ns1 = NodeSet::new(rb1);
-        
+
         let mut rb2 = RoaringBitmap::new();
         for i in 200..700 {
             rb2.insert(i);
         }
         let ns2 = NodeSet::new(rb2);
-        
+
         let result = &ns1 & &ns2;
         // Result should be > 256 nodes (intersection of 0..500 and 200..700 = 200..500 = 300 nodes)
         assert!(result.len() > 256, "Result length: {}", result.len());
         match result {
-            NodeSet::Roaring(_) => {},
+            NodeSet::Roaring(_) => {}
             NodeSet::Bitset(_) => panic!("Expected Roaring for large result"),
         }
     }
@@ -502,18 +495,18 @@ mod tests {
             rb1.insert(i);
         }
         let ns1 = NodeSet::new(rb1);
-        
+
         let mut rb2 = RoaringBitmap::new();
         for i in 300..600 {
             rb2.insert(i);
         }
         let ns2 = NodeSet::new(rb2);
-        
+
         let result = &ns1 | &ns2;
         // Result should be > 256 nodes, so it should be Roaring
         assert!(result.len() > 256);
         match result {
-            NodeSet::Roaring(_) => {},
+            NodeSet::Roaring(_) => {}
             NodeSet::Bitset(_) => panic!("Expected Roaring for large result"),
         }
     }
@@ -526,18 +519,18 @@ mod tests {
             rb1.insert(i);
         }
         let ns1 = NodeSet::new(rb1);
-        
+
         let mut rb2 = RoaringBitmap::new();
         for i in 100..200 {
             rb2.insert(i);
         }
         let ns2 = NodeSet::new(rb2);
-        
+
         let result = &ns1 - &ns2;
         // Result should be > 256 nodes, so it should be Roaring
         assert!(result.len() > 256);
         match result {
-            NodeSet::Roaring(_) => {},
+            NodeSet::Roaring(_) => {}
             NodeSet::Bitset(_) => panic!("Expected Roaring for large result"),
         }
     }

@@ -31,4 +31,3 @@ impl From<Direction> for rustychickpeas_core::Direction {
         }
     }
 }
-

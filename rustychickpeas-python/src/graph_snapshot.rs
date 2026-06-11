@@ -1,17 +1,15 @@
 //! GraphSnapshot Python wrapper
 
-use std::sync::{Arc, Mutex, PoisonError};
-use pyo3::prelude::*;
-use rustychickpeas_core::{
-    GraphSnapshot as CoreGraphSnapshot, Label, RelationshipType, ValueId,
-};
-use rustychickpeas_core::types::PropertyKey;
-use rustychickpeas_core::bitmap::NodeSet;
-use roaring::RoaringBitmap;
 use crate::direction::Direction;
 use crate::node::Node;
 use crate::relationship::Relationship;
 use crate::utils::{py_to_property_value, value_id_to_pyobject};
+use pyo3::prelude::*;
+use roaring::RoaringBitmap;
+use rustychickpeas_core::bitmap::NodeSet;
+use rustychickpeas_core::types::PropertyKey;
+use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, Label, RelationshipType, ValueId};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// Python wrapper for GraphSnapshot
 #[pyclass(name = "GraphSnapshot")]
@@ -46,9 +44,11 @@ impl GraphSnapshot {
     /// Internal constructor (not exposed to Python)
     /// Takes ownership of a GraphSnapshot
     pub(crate) fn new(snapshot: CoreGraphSnapshot) -> Self {
-        Self { snapshot: std::sync::Arc::new(snapshot) }
+        Self {
+            snapshot: std::sync::Arc::new(snapshot),
+        }
     }
-    
+
     /// Internal constructor from Arc (for manager.get_graph_snapshot)
     pub(crate) fn from_arc(snapshot: std::sync::Arc<CoreGraphSnapshot>) -> Self {
         Self { snapshot }
@@ -57,9 +57,10 @@ impl GraphSnapshot {
 
 #[pymethods]
 impl GraphSnapshot {
-
     fn __repr__(&self) -> String {
-        let version = self.snapshot.version()
+        let version = self
+            .snapshot
+            .version()
             .map(|v| v.to_string())
             .unwrap_or_else(|| "None".to_string());
         format!(
@@ -104,11 +105,12 @@ impl GraphSnapshot {
         // Since nodes_with_label_id returns Option<&NodeSet>, None means label not in index
         let label_id = self.label_from_str(&label);
         if label_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Label '{}' not found", label)
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Label '{}' not found",
+                label
+            )));
         }
-        
+
         // Label exists, now get nodes (will return Some even if empty)
         if let Some(node_set) = self.snapshot.nodes_with_label(&label) {
             Ok(node_set.iter().collect())
@@ -121,9 +123,11 @@ impl GraphSnapshot {
     /// Get a Node object for the given node ID
     fn node(&self, node_id: u32) -> PyResult<Node> {
         if node_id >= self.snapshot.n_nodes {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes.saturating_sub(1))
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Node ID {} out of range (max: {})",
+                node_id,
+                self.snapshot.n_nodes.saturating_sub(1)
+            )));
         }
         Ok(Node {
             snapshot: self.snapshot.clone(),
@@ -132,34 +136,42 @@ impl GraphSnapshot {
     }
 
     /// Get relationships (neighbors) of a node with optional type filtering
-    /// 
+    ///
     /// # Arguments
     /// * `node_id` - The node ID
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
     #[pyo3(signature = (node_id, direction, rel_types=None))]
-    fn relationships(&self, node_id: u32, direction: Direction, rel_types: Option<Vec<String>>) -> PyResult<Vec<Relationship>> {
+    fn relationships(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<Relationship>> {
         use rustychickpeas_core::types::RelationshipType;
-        
+
         if node_id >= self.snapshot.n_nodes {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Node ID {} out of range (max: {})", node_id, self.snapshot.n_nodes.saturating_sub(1))
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Node ID {} out of range (max: {})",
+                node_id,
+                self.snapshot.n_nodes.saturating_sub(1)
+            )));
         }
 
         // Convert string types to RelationshipType IDs using O(1) reverse index
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().map(|types| {
-            let ids: Vec<RelationshipType> = types.iter()
-                .filter_map(|s| {
-                    self.snapshot.atoms.get_id(s)
-                        .map(RelationshipType::new)
-                })
-                .collect();
-            if ids.is_empty() && !types.is_empty() {
-                return None;
-            }
-            Some(ids)
-        }).flatten();
+        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types
+            .as_ref()
+            .map(|types| {
+                let ids: Vec<RelationshipType> = types
+                    .iter()
+                    .filter_map(|s| self.snapshot.atoms.get_id(s).map(RelationshipType::new))
+                    .collect();
+                if ids.is_empty() && !types.is_empty() {
+                    return None;
+                }
+                Some(ids)
+            })
+            .flatten();
 
         let mut relationships = Vec::new();
 
@@ -167,14 +179,14 @@ impl GraphSnapshot {
         if matches!(direction, Direction::Outgoing | Direction::Both) {
             let start = self.snapshot.out_offsets[node_id as usize] as usize;
             let end = self.snapshot.out_offsets[node_id as usize + 1] as usize;
-            
+
             for (idx, (&_neighbor, &rel_type)) in self.snapshot.out_nbrs[start..end]
                 .iter()
                 .zip(self.snapshot.out_types[start..end].iter())
                 .enumerate()
             {
                 let rel_csr_index = start + idx;
-                
+
                 // Apply type filter if provided
                 if let Some(ref type_ids) = rel_type_ids {
                     if !type_ids.contains(&rel_type) {
@@ -184,7 +196,7 @@ impl GraphSnapshot {
                     // Filter was provided but no types found - skip
                     continue;
                 }
-                
+
                 relationships.push(Relationship {
                     snapshot: self.snapshot.clone(),
                     rel_index: rel_csr_index as u32,
@@ -197,14 +209,14 @@ impl GraphSnapshot {
         if matches!(direction, Direction::Incoming | Direction::Both) {
             let start = self.snapshot.in_offsets[node_id as usize] as usize;
             let end = self.snapshot.in_offsets[node_id as usize + 1] as usize;
-            
+
             for (idx, (&_neighbor, &rel_type)) in self.snapshot.in_nbrs[start..end]
                 .iter()
                 .zip(self.snapshot.in_types[start..end].iter())
                 .enumerate()
             {
                 let rel_csr_index = start + idx;
-                
+
                 // Apply type filter if provided
                 if let Some(ref type_ids) = rel_type_ids {
                     if !type_ids.contains(&rel_type) {
@@ -214,7 +226,7 @@ impl GraphSnapshot {
                     // Filter was provided but no types found - skip
                     continue;
                 }
-                
+
                 relationships.push(Relationship {
                     snapshot: self.snapshot.clone(),
                     rel_index: rel_csr_index as u32,
@@ -230,12 +242,8 @@ impl GraphSnapshot {
     /// Returns a list of node IDs for neighbors in the specified direction
     fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
         match direction {
-            Direction::Outgoing => {
-                Ok(self.snapshot.out_neighbors(node_id).to_vec())
-            }
-            Direction::Incoming => {
-                Ok(self.snapshot.in_neighbors(node_id).to_vec())
-            }
+            Direction::Outgoing => Ok(self.snapshot.out_neighbors(node_id).to_vec()),
+            Direction::Incoming => Ok(self.snapshot.in_neighbors(node_id).to_vec()),
             Direction::Both => {
                 let mut neighbors = Vec::new();
                 neighbors.extend_from_slice(self.snapshot.out_neighbors(node_id));
@@ -251,7 +259,7 @@ impl GraphSnapshot {
         // Get relationships and extract neighbor node IDs
         let rels = self.relationships(node_id, direction, None)?;
         let mut neighbor_ids = Vec::new();
-        
+
         for rel in rels {
             let neighbor_id = if rel.is_outgoing {
                 // For outgoing relationships, the end node is in out_nbrs
@@ -272,8 +280,9 @@ impl GraphSnapshot {
             };
             neighbor_ids.push(neighbor_id);
         }
-        
-        Ok(neighbor_ids.into_iter()
+
+        Ok(neighbor_ids
+            .into_iter()
             .map(|id| Node {
                 snapshot: self.snapshot.clone(),
                 node_id: id,
@@ -286,24 +295,24 @@ impl GraphSnapshot {
         match direction {
             Direction::Outgoing => Ok(self.snapshot.out_neighbors(node_id).len()),
             Direction::Incoming => Ok(self.snapshot.in_neighbors(node_id).len()),
-            Direction::Both => {
-                Ok(self.snapshot.out_neighbors(node_id).len() + 
-                   self.snapshot.in_neighbors(node_id).len())
-            }
+            Direction::Both => Ok(self.snapshot.out_neighbors(node_id).len()
+                + self.snapshot.in_neighbors(node_id).len()),
         }
     }
-
 
     /// Get relationships by type using the type_index bitmap for O(1) lookup
     /// Returns Relationship objects for all relationships of the specified type
     fn relationships_by_type(&self, rel_type: String) -> PyResult<Vec<Relationship>> {
-        let rel_type_id = self.rel_type_from_str(&rel_type)
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Relationship type '{}' not found", rel_type)
-            ))?;
+        let rel_type_id = self.rel_type_from_str(&rel_type).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Relationship type '{}' not found",
+                rel_type
+            ))
+        })?;
 
         if let Some(bitmap) = self.snapshot.type_index.get(&rel_type_id) {
-            let relationships: Vec<Relationship> = bitmap.iter()
+            let relationships: Vec<Relationship> = bitmap
+                .iter()
                 .map(|idx| Relationship {
                     snapshot: self.snapshot.clone(),
                     rel_index: idx,
@@ -320,14 +329,14 @@ impl GraphSnapshot {
     fn all_nodes(&self) -> PyResult<Vec<u32>> {
         use std::collections::HashSet;
         let mut nodes = HashSet::new();
-        
+
         // Add nodes with labels
         for (_label, node_set) in &self.snapshot.label_index {
             for node_id in node_set.iter() {
                 nodes.insert(node_id);
             }
         }
-        
+
         // Add nodes with edges (check CSR arrays)
         // Nodes with outgoing edges
         for node_id in 0..self.snapshot.out_offsets.len().saturating_sub(1) {
@@ -337,7 +346,7 @@ impl GraphSnapshot {
                 nodes.insert(node_id as u32);
             }
         }
-        
+
         // Nodes with incoming edges
         for node_id in 0..self.snapshot.in_offsets.len().saturating_sub(1) {
             let start = self.snapshot.in_offsets[node_id] as usize;
@@ -346,12 +355,14 @@ impl GraphSnapshot {
                 nodes.insert(node_id as u32);
             }
         }
-        
+
         // Add nodes with properties
         for column in self.snapshot.columns.values() {
             match column {
-                rustychickpeas_core::Column::DenseI64(_) | rustychickpeas_core::Column::DenseF64(_) | 
-                rustychickpeas_core::Column::DenseBool(_) | rustychickpeas_core::Column::DenseStr(_) => {
+                rustychickpeas_core::Column::DenseI64(_)
+                | rustychickpeas_core::Column::DenseF64(_)
+                | rustychickpeas_core::Column::DenseBool(_)
+                | rustychickpeas_core::Column::DenseStr(_) => {
                     // Dense columns: all nodes from 0 to n_nodes-1 have this property
                     // But we only want nodes that actually have data, so skip dense columns
                     // (they're dense because most nodes have the property, but we can't tell which ones)
@@ -378,7 +389,7 @@ impl GraphSnapshot {
                 }
             }
         }
-        
+
         let mut result: Vec<u32> = nodes.into_iter().collect();
         result.sort_unstable();
         Ok(result)
@@ -388,7 +399,7 @@ impl GraphSnapshot {
     /// Returns all relationships in the graph
     fn all_relationships(&self) -> PyResult<Vec<Relationship>> {
         let mut relationships = Vec::with_capacity(self.snapshot.out_nbrs.len());
-        
+
         // Iterate through all outgoing relationships (each relationship appears once)
         for idx in 0..self.snapshot.out_nbrs.len() {
             relationships.push(Relationship {
@@ -397,26 +408,28 @@ impl GraphSnapshot {
                 is_outgoing: true,
             });
         }
-        
+
         Ok(relationships)
     }
 
     /// Get a relationship by index
-    /// 
+    ///
     /// Uses the outgoing relationship index (canonical index in out_nbrs).
     /// Each relationship appears once in out_nbrs, so this is a unique identifier.
-    /// 
+    ///
     /// # Arguments
     /// * `rel_index` - The relationship index in out_nbrs (0 to n_rels-1)
     fn relationship(&self, rel_index: u32) -> PyResult<Relationship> {
         let max_index = self.snapshot.out_nbrs.len() as u32;
-        
+
         if rel_index >= max_index {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Relationship index {} out of range (max: {})", rel_index, max_index.saturating_sub(1))
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Relationship index {} out of range (max: {})",
+                rel_index,
+                max_index.saturating_sub(1)
+            )));
         }
-        
+
         Ok(Relationship {
             snapshot: self.snapshot.clone(),
             rel_index,
@@ -425,22 +438,26 @@ impl GraphSnapshot {
     }
 
     /// Get a relationship by node pair
-    /// 
+    ///
     /// Finds a relationship between two nodes. If multiple relationships exist
     /// between the same nodes, returns the first one found.
-    /// 
+    ///
     /// # Arguments
     /// * `start_node` - Source node ID
     /// * `end_node` - Destination node ID
-    fn relationship_by_nodes(&self, start_node: u32, end_node: u32) -> PyResult<Option<Relationship>> {
+    fn relationship_by_nodes(
+        &self,
+        start_node: u32,
+        end_node: u32,
+    ) -> PyResult<Option<Relationship>> {
         // Check if start_node is valid
         if start_node as usize >= self.snapshot.out_offsets.len().saturating_sub(1) {
             return Ok(None);
         }
-        
+
         let start = self.snapshot.out_offsets[start_node as usize] as usize;
         let end = self.snapshot.out_offsets[start_node as usize + 1] as usize;
-        
+
         // Search for end_node in the outgoing neighbors of start_node
         for (idx, &nbr) in self.snapshot.out_nbrs[start..end].iter().enumerate() {
             if nbr == end_node {
@@ -451,7 +468,7 @@ impl GraphSnapshot {
                 }));
             }
         }
-        
+
         Ok(None)
     }
 
@@ -459,9 +476,10 @@ impl GraphSnapshot {
     fn node_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
         let key_id = self.property_key_from_str(&key);
         if key_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Property key '{}' not found", key)
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Property key '{}' not found",
+                key
+            )));
         }
 
         let value_id = self.snapshot.prop(node_id, &key);
@@ -472,7 +490,7 @@ impl GraphSnapshot {
     }
 
     /// Get nodes with a specific property value, scoped by label
-    /// 
+    ///
     /// # Arguments
     /// * `label` - The label to scope the query to
     /// * `key` - The property key
@@ -483,28 +501,32 @@ impl GraphSnapshot {
         // because it returns None for both "label doesn't exist" and "no matches"
         let label_id = self.label_from_str(&label);
         if label_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Label '{}' not found", label)
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Label '{}' not found",
+                label
+            )));
         }
-        
+
         // Check if property key exists
         let key_id = self.property_key_from_str(&key);
         if key_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("Property key '{}' not found", key)
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Property key '{}' not found",
+                key
+            )));
         }
-        
+
         // Both label and key exist, now convert value and query
         let prop_value = py_to_property_value(value)?;
         let value_id = match prop_value {
             rustychickpeas_core::PropertyValue::String(s) => {
                 // Need to find string ID
-                let sid = self.get_string_id(&s)
-                    .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        format!("Property value string '{}' not found", s)
-                    ))?;
+                let sid = self.get_string_id(&s).ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Property value string '{}' not found",
+                        s
+                    ))
+                })?;
                 ValueId::Str(sid)
             }
             rustychickpeas_core::PropertyValue::Integer(i) => ValueId::I64(i),
@@ -512,11 +534,11 @@ impl GraphSnapshot {
             rustychickpeas_core::PropertyValue::Boolean(b) => ValueId::Bool(b),
             rustychickpeas_core::PropertyValue::InternedString(_) => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "InternedString not supported in GraphSnapshot queries"
+                    "InternedString not supported in GraphSnapshot queries",
                 ));
             }
         };
-        
+
         // get_nodes_with_property now returns Option<NodeSet> (cloned) instead of Option<&NodeSet>
         // None means no matches (valid), Some means matches found
         if let Some(node_set) = self.snapshot.nodes_with_property(&label, &key, value_id) {
@@ -544,10 +566,16 @@ impl GraphSnapshot {
         rel_type_column: Option<String>,
         rel_property_columns: Option<Vec<String>>,
     ) -> PyResult<GraphSnapshot> {
-        let label_cols = label_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        let node_prop_cols = node_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        let rel_prop_cols = rel_property_columns.as_ref().map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        
+        let label_cols = label_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let node_prop_cols = node_property_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let rel_prop_cols = rel_property_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+
         let snapshot = CoreGraphSnapshot::from_parquet(
             nodes_path.as_deref(),
             relationships_path.as_deref(),
@@ -560,15 +588,15 @@ impl GraphSnapshot {
             rel_prop_cols,
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        
+
         Ok(GraphSnapshot::new(snapshot))
     }
 
     /// Bidirectional BFS to find paths between source and target node sets
-    /// 
+    ///
     /// Performs BFS from both source and target nodes simultaneously, meeting in the middle.
     /// Returns the intersection of nodes and relationships that lie on paths between the sets.
-    /// 
+    ///
     /// # Arguments
     /// * `source_nodes` - List of starting node IDs for forward traversal
     /// * `target_nodes` - List of starting node IDs for backward traversal
@@ -582,36 +610,36 @@ impl GraphSnapshot {
     /// * `rel_filter` - Optional callable that takes (from_node: int, to_node: int, rel_type: str, csr_pos: int) and returns bool.
     ///   Returns True to follow a relationship.
     /// * `max_depth` - Optional maximum depth for each direction (default: no limit)
-    /// 
+    ///
     /// # Returns
     /// A tuple `(node_ids, rel_csr_positions)` where:
     /// - `node_ids`: List of node IDs on paths between source and target
     /// - `rel_csr_positions`: List of relationship CSR positions on paths between source and target
-    /// 
+    ///
     /// # Examples
     /// ```python
     /// from rustychickpeas import Direction
-    /// 
+    ///
     /// # Simple bidirectional search (default: Outgoing)
     /// nodes, rels = snapshot.bidirectional_bfs([0, 1], [10, 11], Direction.Outgoing)
-    /// 
+    ///
     /// # With relationship type filter
     /// nodes, rels = snapshot.bidirectional_bfs(
-    ///     [0, 1], [10, 11], 
+    ///     [0, 1], [10, 11],
     ///     Direction.Outgoing,
     ///     rel_types=["KNOWS", "WORKS_WITH"]
     /// )
-    /// 
+    ///
     /// # Bidirectional traversal (both directions)
     /// nodes, rels = snapshot.bidirectional_bfs(
     ///     [0, 1], [10, 11],
     ///     Direction.Both
     /// )
-    /// 
+    ///
     /// # With node filter (only "Person" nodes)
     /// def node_filter(node_id):
     ///     return "Person" in snapshot.node_labels(node_id)
-    /// 
+    ///
     /// nodes, rels = snapshot.bidirectional_bfs(
     ///     [0, 1], [10, 11],
     ///     Direction.Outgoing,
@@ -639,14 +667,16 @@ impl GraphSnapshot {
             Direction::Both => CoreDirection::Both,
         };
 
-        let rel_types_str: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
-            types.iter().map(|s| s.as_str()).collect()
-        });
+        let rel_types_str: Option<Vec<&str>> = rel_types
+            .as_ref()
+            .map(|types| types.iter().map(|s| s.as_str()).collect());
 
         // Error cell to capture Python exceptions from filter callbacks
         let error_cell: Arc<Mutex<Option<PyErr>>> = Arc::new(Mutex::new(None));
 
-        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
+        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) =
+            (node_filter.as_ref(), rel_filter.as_ref())
+        {
             let nf_obj = nf_obj.clone();
             let rf_obj = rf_obj.clone();
             let nf_err = error_cell.clone();
@@ -657,26 +687,60 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
+                    if nf_err
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_some()
+                    {
+                        return false;
+                    }
                     Python::with_gil(|py| {
-                        match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
+                        match nf_obj
+                            .call1(py, (node_id,))
+                            .and_then(|r| r.extract::<bool>(py))
+                        {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                            Err(e) => {
+                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
+                                false
+                            }
                         }
                     })
                 }),
-                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
-                    let rf_obj = rf_obj.clone();
-                    Python::with_gil(|py| {
-                        let rel_type_str = snapshot.resolve_string(rel_type.id())
-                            .unwrap_or("").to_string();
-                        match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
-                            Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                Some(
+                    move |from: u32,
+                          to: u32,
+                          rel_type: RelationshipType,
+                          csr_pos: u32,
+                          snapshot: &CoreGraphSnapshot|
+                          -> bool {
+                        if rf_err
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .is_some()
+                        {
+                            return false;
                         }
-                    })
-                }),
+                        let rf_obj = rf_obj.clone();
+                        Python::with_gil(|py| {
+                            let rel_type_str = snapshot
+                                .resolve_string(rel_type.id())
+                                .unwrap_or("")
+                                .to_string();
+                            match rf_obj
+                                .call1(py, (from, to, rel_type_str, csr_pos))
+                                .and_then(|r| r.extract::<bool>(py))
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                        Some(e);
+                                    false
+                                }
+                            }
+                        })
+                    },
+                ),
                 max_depth,
             )
         } else if let Some(nf_obj) = node_filter.as_ref() {
@@ -689,11 +753,23 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
+                    if nf_err
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_some()
+                    {
+                        return false;
+                    }
                     Python::with_gil(|py| {
-                        match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
+                        match nf_obj
+                            .call1(py, (node_id,))
+                            .and_then(|r| r.extract::<bool>(py))
+                        {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                            Err(e) => {
+                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
+                                false
+                            }
                         }
                     })
                 }),
@@ -710,18 +786,40 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 None,
-                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
-                    let rf_obj = rf_obj.clone();
-                    Python::with_gil(|py| {
-                        let rel_type_str = snapshot.resolve_string(rel_type.id())
-                            .unwrap_or("").to_string();
-                        match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
-                            Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                Some(
+                    move |from: u32,
+                          to: u32,
+                          rel_type: RelationshipType,
+                          csr_pos: u32,
+                          snapshot: &CoreGraphSnapshot|
+                          -> bool {
+                        if rf_err
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .is_some()
+                        {
+                            return false;
                         }
-                    })
-                }),
+                        let rf_obj = rf_obj.clone();
+                        Python::with_gil(|py| {
+                            let rel_type_str = snapshot
+                                .resolve_string(rel_type.id())
+                                .unwrap_or("")
+                                .to_string();
+                            match rf_obj
+                                .call1(py, (from, to, rel_type_str, csr_pos))
+                                .and_then(|r| r.extract::<bool>(py))
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                        Some(e);
+                                    false
+                                }
+                            }
+                        })
+                    },
+                ),
                 max_depth,
             )
         } else {
@@ -739,21 +837,22 @@ impl GraphSnapshot {
         };
 
         // Propagate any Python exception captured during BFS
-        if let Some(err) = error_cell.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        if let Some(err) = error_cell
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             return Err(err);
         }
 
-        Ok((
-            node_bitmap.iter().collect(),
-            rel_bitmap.iter().collect(),
-        ))
+        Ok((node_bitmap.iter().collect(), rel_bitmap.iter().collect()))
     }
 
     /// BFS traversal from a set of starting nodes
-    /// 
+    ///
     /// Performs BFS from the starting nodes, following edges in the specified direction.
     /// Returns all nodes and relationships visited during the traversal.
-    /// 
+    ///
     /// # Arguments
     /// * `start_nodes` - List of starting node IDs
     /// * `direction` - Direction of traversal (Direction.Outgoing, Direction.Incoming, or Direction.Both)
@@ -766,35 +865,35 @@ impl GraphSnapshot {
     /// * `rel_filter` - Optional callable that takes (from_node: int, to_node: int, rel_type: str, csr_pos: int) and returns bool.
     ///   Returns True to follow a relationship.
     /// * `max_depth` - Optional maximum depth (default: no limit)
-    /// 
+    ///
     /// # Returns
     /// A tuple `(node_ids, rel_csr_positions)` where:
     /// - `node_ids`: List of node IDs visited during traversal
     /// - `rel_csr_positions`: List of relationship CSR positions traversed
-    /// 
+    ///
     /// # Examples
     /// ```python
     /// from rustychickpeas import Direction
-    /// 
+    ///
     /// # Simple BFS from a single node
     /// nodes, rels = snapshot.bfs([0], Direction.Outgoing)
-    /// 
+    ///
     /// # BFS with relationship type filter
     /// nodes, rels = snapshot.bfs(
-    ///     [0], Direction.Outgoing, 
+    ///     [0], Direction.Outgoing,
     ///     rel_types=["KNOWS", "WORKS_WITH"]
     /// )
-    /// 
+    ///
     /// # BFS with max depth
     /// nodes, rels = snapshot.bfs(
-    ///     [0], Direction.Outgoing, 
+    ///     [0], Direction.Outgoing,
     ///     max_depth=3
     /// )
-    /// 
+    ///
     /// # BFS with node filter (only "Person" nodes)
     /// def node_filter(node_id):
     ///     return "Person" in snapshot.node_labels(node_id)
-    /// 
+    ///
     /// nodes, rels = snapshot.bfs(
     ///     [0], Direction.Outgoing,
     ///     node_filter=node_filter
@@ -819,14 +918,16 @@ impl GraphSnapshot {
             Direction::Both => CoreDirection::Both,
         };
 
-        let rel_types_str: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
-            types.iter().map(|s| s.as_str()).collect()
-        });
+        let rel_types_str: Option<Vec<&str>> = rel_types
+            .as_ref()
+            .map(|types| types.iter().map(|s| s.as_str()).collect());
 
         // Error cell to capture Python exceptions from filter callbacks
         let error_cell: Arc<Mutex<Option<PyErr>>> = Arc::new(Mutex::new(None));
 
-        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
+        let (node_bitmap, rel_bitmap) = if let (Some(nf_obj), Some(rf_obj)) =
+            (node_filter.as_ref(), rel_filter.as_ref())
+        {
             let nf_obj = nf_obj.clone();
             let rf_obj = rf_obj.clone();
             let nf_err = error_cell.clone();
@@ -836,26 +937,60 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
+                    if nf_err
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_some()
+                    {
+                        return false;
+                    }
                     Python::with_gil(|py| {
-                        match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
+                        match nf_obj
+                            .call1(py, (node_id,))
+                            .and_then(|r| r.extract::<bool>(py))
+                        {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                            Err(e) => {
+                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
+                                false
+                            }
                         }
                     })
                 }),
-                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
-                    let rf_obj = rf_obj.clone();
-                    Python::with_gil(|py| {
-                        let rel_type_str = snapshot.resolve_string(rel_type.id())
-                            .unwrap_or("").to_string();
-                        match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
-                            Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                Some(
+                    move |from: u32,
+                          to: u32,
+                          rel_type: RelationshipType,
+                          csr_pos: u32,
+                          snapshot: &CoreGraphSnapshot|
+                          -> bool {
+                        if rf_err
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .is_some()
+                        {
+                            return false;
                         }
-                    })
-                }),
+                        let rf_obj = rf_obj.clone();
+                        Python::with_gil(|py| {
+                            let rel_type_str = snapshot
+                                .resolve_string(rel_type.id())
+                                .unwrap_or("")
+                                .to_string();
+                            match rf_obj
+                                .call1(py, (from, to, rel_type_str, csr_pos))
+                                .and_then(|r| r.extract::<bool>(py))
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                        Some(e);
+                                    false
+                                }
+                            }
+                        })
+                    },
+                ),
                 max_depth,
             )
         } else if let Some(nf_obj) = node_filter.as_ref() {
@@ -867,11 +1002,23 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 Some(move |node_id: u32, _snapshot: &CoreGraphSnapshot| -> bool {
-                    if nf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
+                    if nf_err
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_some()
+                    {
+                        return false;
+                    }
                     Python::with_gil(|py| {
-                        match nf_obj.call1(py, (node_id,)).and_then(|r| r.extract::<bool>(py)) {
+                        match nf_obj
+                            .call1(py, (node_id,))
+                            .and_then(|r| r.extract::<bool>(py))
+                        {
                             Ok(v) => v,
-                            Err(e) => { *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                            Err(e) => {
+                                *nf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e);
+                                false
+                            }
                         }
                     })
                 }),
@@ -887,18 +1034,40 @@ impl GraphSnapshot {
                 rust_direction,
                 rel_types_str.as_deref(),
                 None,
-                Some(move |from: u32, to: u32, rel_type: RelationshipType, csr_pos: u32, snapshot: &CoreGraphSnapshot| -> bool {
-                    if rf_err.lock().unwrap_or_else(PoisonError::into_inner).is_some() { return false; }
-                    let rf_obj = rf_obj.clone();
-                    Python::with_gil(|py| {
-                        let rel_type_str = snapshot.resolve_string(rel_type.id())
-                            .unwrap_or("").to_string();
-                        match rf_obj.call1(py, (from, to, rel_type_str, csr_pos)).and_then(|r| r.extract::<bool>(py)) {
-                            Ok(v) => v,
-                            Err(e) => { *rf_err.lock().unwrap_or_else(PoisonError::into_inner) = Some(e); false }
+                Some(
+                    move |from: u32,
+                          to: u32,
+                          rel_type: RelationshipType,
+                          csr_pos: u32,
+                          snapshot: &CoreGraphSnapshot|
+                          -> bool {
+                        if rf_err
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .is_some()
+                        {
+                            return false;
                         }
-                    })
-                }),
+                        let rf_obj = rf_obj.clone();
+                        Python::with_gil(|py| {
+                            let rel_type_str = snapshot
+                                .resolve_string(rel_type.id())
+                                .unwrap_or("")
+                                .to_string();
+                            match rf_obj
+                                .call1(py, (from, to, rel_type_str, csr_pos))
+                                .and_then(|r| r.extract::<bool>(py))
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    *rf_err.lock().unwrap_or_else(PoisonError::into_inner) =
+                                        Some(e);
+                                    false
+                                }
+                            }
+                        })
+                    },
+                ),
                 max_depth,
             )
         } else {
@@ -915,14 +1084,15 @@ impl GraphSnapshot {
         };
 
         // Propagate any Python exception captured during BFS
-        if let Some(err) = error_cell.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        if let Some(err) = error_cell
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             return Err(err);
         }
 
-        Ok((
-            node_bitmap.iter().collect(),
-            rel_bitmap.iter().collect(),
-        ))
+        Ok((node_bitmap.iter().collect(), rel_bitmap.iter().collect()))
     }
 
     /// Check if a path exists between two nodes
@@ -936,14 +1106,18 @@ impl GraphSnapshot {
         max_depth: Option<usize>,
     ) -> PyResult<bool> {
         if from_node >= self.snapshot.n_nodes {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("from_node {} out of range (max: {})", from_node, self.snapshot.n_nodes.saturating_sub(1))
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "from_node {} out of range (max: {})",
+                from_node,
+                self.snapshot.n_nodes.saturating_sub(1)
+            )));
         }
         if to_node >= self.snapshot.n_nodes {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                format!("to_node {} out of range (max: {})", to_node, self.snapshot.n_nodes.saturating_sub(1))
-            ));
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "to_node {} out of range (max: {})",
+                to_node,
+                self.snapshot.n_nodes.saturating_sub(1)
+            )));
         }
 
         use rustychickpeas_core::types::Direction as CoreDirection;
@@ -953,9 +1127,9 @@ impl GraphSnapshot {
             Direction::Both => CoreDirection::Both,
         };
 
-        let rel_types_str: Option<Vec<&str>> = rel_types.as_ref().map(|types| {
-            types.iter().map(|s| s.as_str()).collect()
-        });
+        let rel_types_str: Option<Vec<&str>> = rel_types
+            .as_ref()
+            .map(|types| types.iter().map(|s| s.as_str()).collect());
 
         // can_reach takes Option<u32> for max_depth
         let max_depth_u32 = max_depth.map(|d| d as u32);
@@ -969,4 +1143,3 @@ impl GraphSnapshot {
         ))
     }
 }
-
