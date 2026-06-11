@@ -49,6 +49,9 @@ jobs:
         continue-on-error: true
       
       - name: Commit artifacts
+        # Only push results from direct pushes to the default branches;
+        # checkout@v4 persists a scoped credential, so no token in the URL
+        if: github.event_name == 'push'
         run: |
           git config user.name "bench-bot"
           git config user.email "bench-bot@users.noreply.github.com"
@@ -57,7 +60,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "bench: update results [skip ci]"
-            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            git pull --rebase origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }} || echo "Push failed"
           fi
         continue-on-error: true
