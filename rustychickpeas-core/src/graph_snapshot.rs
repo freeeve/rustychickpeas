@@ -289,7 +289,7 @@ impl GraphSnapshot {
         let mut key_index: HashMap<ValueId, Vec<NodeId>> = HashMap::new();
 
         for (node_id, val_id) in column.iter_entries() {
-            if label_nodes.map_or(true, |nodes| nodes.contains(node_id)) {
+            if label_nodes.is_none_or(|nodes| nodes.contains(node_id)) {
                 key_index.entry(val_id).or_default().push(node_id);
             }
         }
@@ -299,7 +299,7 @@ impl GraphSnapshot {
             .map(|(val_id, mut node_ids)| {
                 node_ids.sort_unstable();
                 node_ids.dedup();
-                let bitmap = RoaringBitmap::from_sorted_iter(node_ids.into_iter()).unwrap();
+                let bitmap = RoaringBitmap::from_sorted_iter(node_ids).unwrap();
                 (val_id, NodeSet::new(bitmap))
             })
             .collect()
@@ -746,6 +746,7 @@ impl GraphSnapshot {
     /// );
     /// ```
     /// BFS expand step shared by forward and backward passes of bidirectional_bfs.
+    #[allow(clippy::too_many_arguments)]
     fn bfs_expand_step<NF, RF>(
         &self,
         queue: &mut std::collections::VecDeque<(NodeId, u32)>,
@@ -788,21 +789,22 @@ impl GraphSnapshot {
                 }
                 if other_visited_nodes.contains(neighbor) {
                     visited_rels.insert(csr_pos);
-                    if visited_nodes.insert(neighbor) {
-                        if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                            queue.push_back((neighbor, depth + 1));
-                        }
-                    }
-                } else if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
-                    if visited_nodes.insert(neighbor) {
-                        visited_rels.insert(csr_pos);
+                    if visited_nodes.insert(neighbor)
+                        && node_filter.as_ref().is_none_or(|f| f(neighbor, self))
+                    {
                         queue.push_back((neighbor, depth + 1));
                     }
+                } else if node_filter.as_ref().is_none_or(|f| f(neighbor, self))
+                    && visited_nodes.insert(neighbor)
+                {
+                    visited_rels.insert(csr_pos);
+                    queue.push_back((neighbor, depth + 1));
                 }
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn bidirectional_bfs<NF, RF>(
         &self,
         source_nodes: &NodeSet,
@@ -830,14 +832,14 @@ impl GraphSnapshot {
         let mut backward_queue = std::collections::VecDeque::new();
 
         for node_id in source_nodes.iter() {
-            if node_filter.as_ref().map_or(true, |f| f(node_id, self)) {
+            if node_filter.as_ref().is_none_or(|f| f(node_id, self)) {
                 forward_visited_nodes.insert(node_id);
                 forward_queue.push_back((node_id, 0u32));
             }
         }
 
         for node_id in target_nodes.iter() {
-            if node_filter.as_ref().map_or(true, |f| f(node_id, self)) {
+            if node_filter.as_ref().is_none_or(|f| f(node_id, self)) {
                 backward_visited_nodes.insert(node_id);
                 backward_queue.push_back((node_id, 0u32));
             }
@@ -978,10 +980,10 @@ impl GraphSnapshot {
         let mut visited_rels = RoaringBitmap::new();
 
         for node_id in start_nodes.iter() {
-            if node_filter.as_ref().map_or(true, |f| f(node_id, self)) {
-                if visited_nodes.insert(node_id) {
-                    queue.push_back((node_id, 0u32));
-                }
+            if node_filter.as_ref().is_none_or(|f| f(node_id, self))
+                && visited_nodes.insert(node_id)
+            {
+                queue.push_back((node_id, 0u32));
             }
         }
 
@@ -1002,7 +1004,7 @@ impl GraphSnapshot {
                     }
                 }
 
-                if node_filter.as_ref().map_or(true, |f| f(neighbor, self)) {
+                if node_filter.as_ref().is_none_or(|f| f(neighbor, self)) {
                     visited_rels.insert(csr_pos);
                     if visited_nodes.insert(neighbor) {
                         queue.push_back((neighbor, depth + 1));
@@ -1193,6 +1195,7 @@ impl Default for GraphSnapshot {
 
 impl GraphSnapshot {
     /// Create a GraphSnapshot from Parquet files using GraphBuilder
+    #[allow(clippy::too_many_arguments)]
     pub fn from_parquet(
         nodes_path: Option<&str>,
         relationships_path: Option<&str>,
@@ -1294,7 +1297,7 @@ mod tests {
             .map(|(label, mut nodes)| {
                 nodes.sort_unstable();
                 nodes.dedup();
-                let bitmap = RoaringBitmap::from_sorted_iter(nodes.into_iter()).unwrap();
+                let bitmap = RoaringBitmap::from_sorted_iter(nodes).unwrap();
                 (label, NodeSet::new(bitmap))
             })
             .collect();
@@ -1312,7 +1315,7 @@ mod tests {
             .map(|(rel_type, mut rel_ids)| {
                 rel_ids.sort_unstable();
                 rel_ids.dedup();
-                let bitmap = RoaringBitmap::from_sorted_iter(rel_ids.into_iter()).unwrap();
+                let bitmap = RoaringBitmap::from_sorted_iter(rel_ids).unwrap();
                 (rel_type, NodeSet::new(bitmap))
             })
             .collect();
@@ -1659,8 +1662,8 @@ mod tests {
 
     #[test]
     fn test_valueid_from_f64() {
-        let val = ValueId::from_f64(3.14);
-        assert_eq!(val.to_f64(), Some(3.14));
+        let val = ValueId::from_f64(2.5);
+        assert_eq!(val.to_f64(), Some(2.5));
     }
 
     #[test]
@@ -1810,7 +1813,7 @@ mod tests {
 
         // Query Person label for Company value - should return None
         let result = snapshot.nodes_with_property("Person", "name", "Acme Corp");
-        assert!(result.is_none() || result.unwrap().len() == 0);
+        assert!(result.is_none() || result.unwrap().is_empty());
     }
 
     #[test]
@@ -2015,7 +2018,7 @@ mod tests {
         assert!(!nodes.contains(5)); // Node 5 doesn't exist
 
         // Should find relationships on paths
-        assert!(rels.len() > 0);
+        assert!(!rels.is_empty());
     }
 
     #[test]
@@ -2045,7 +2048,7 @@ mod tests {
         // But no actual path, so intersection should be empty or just the endpoints
         // Actually, if source and target don't overlap initially, and no path exists,
         // the intersection should be empty
-        assert!(nodes.is_empty() || nodes.len() == 0);
+        assert!(nodes.is_empty() || nodes.is_empty());
     }
 
     #[test]
@@ -2089,7 +2092,7 @@ mod tests {
         let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
             snapshot
                 .nodes_with_label("Person")
-                .map_or(false, |nodes| nodes.contains(node_id))
+                .is_some_and(|nodes| nodes.contains(node_id))
         };
 
         // Type annotations needed for None filters
@@ -2178,7 +2181,7 @@ mod tests {
         assert!(nodes.contains(1));
         assert!(nodes.contains(2));
         assert!(nodes.contains(3));
-        assert!(rels.len() > 0);
+        assert!(!rels.is_empty());
     }
 
     // Helper to create a snapshot for BFS testing
@@ -2228,7 +2231,7 @@ mod tests {
         assert!(nodes.contains(3));
         assert!(nodes.contains(4));
         assert!(nodes.contains(5));
-        assert!(rels.len() > 0);
+        assert!(!rels.is_empty());
     }
 
     #[test]
@@ -2274,7 +2277,7 @@ mod tests {
         let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
             snapshot
                 .nodes_with_label("Person")
-                .map_or(false, |nodes| nodes.contains(node_id))
+                .is_some_and(|nodes| nodes.contains(node_id))
         };
 
         // Type annotations needed for None filters

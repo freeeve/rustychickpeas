@@ -383,7 +383,7 @@ impl GraphBuilder {
             .collect::<Vec<_>>();
 
         // Validate column names against headers
-        if let Some(ref id_col) = node_id_column {
+        if let Some(id_col) = node_id_column {
             validate_columns_exist(&headers, &[id_col], "Node ID")?;
         }
         let label_cols = label_columns.unwrap_or_default();
@@ -496,6 +496,7 @@ impl GraphBuilder {
     /// * `fixed_rel_type` - Optional fixed relationship type to use for all relationships. Required if `rel_type_column` is None.
     /// * `deduplication` - Optional deduplication strategy for relationships
     /// * `column_types` - Optional map of column names to types. If not specified, uses heuristic parsing (Auto).
+    #[allow(clippy::too_many_arguments)]
     pub fn load_relationships_from_csv(
         &mut self,
         path: &str,

@@ -210,7 +210,7 @@ impl GraphBuilder {
     ///
     /// # Arguments
     /// * `node_id` - Optional node ID. If None, auto-generates the next sequential ID.
-    ///               If Some(id), uses that ID (must be u32, users should map their own IDs to u32)
+    ///   If Some(id), uses that ID (must be u32, users should map their own IDs to u32)
     /// * `labels` - Slice of label strings
     ///
     /// # Returns
@@ -416,6 +416,7 @@ impl GraphBuilder {
     ///
     /// # Returns
     /// Number of relationships that were found and had properties set
+    #[allow(clippy::type_complexity)]
     pub fn set_rel_props(
         &mut self,
         rel_props: &[(
@@ -611,7 +612,7 @@ impl GraphBuilder {
         // Helper to check if a node has the specified label
         let has_label = |node_id: NodeId| -> bool {
             if let Some(labels) = self.node_labels.get(node_id as usize) {
-                labels.iter().any(|&l| l == label_key)
+                labels.contains(&label_key)
             } else {
                 false
             }
@@ -798,7 +799,7 @@ impl GraphBuilder {
             .map(|(label, mut nodes)| {
                 nodes.sort_unstable();
                 nodes.dedup();
-                let bitmap = RoaringBitmap::from_sorted_iter(nodes.into_iter()).unwrap();
+                let bitmap = RoaringBitmap::from_sorted_iter(nodes).unwrap();
                 (label, NodeSet::new(bitmap))
             })
             .collect()
@@ -818,7 +819,7 @@ impl GraphBuilder {
             .map(|(rel_type, mut rel_ids)| {
                 rel_ids.sort_unstable();
                 rel_ids.dedup();
-                let bitmap = RoaringBitmap::from_sorted_iter(rel_ids.into_iter()).unwrap();
+                let bitmap = RoaringBitmap::from_sorted_iter(rel_ids).unwrap();
                 (rel_type, NodeSet::new(bitmap))
             })
             .collect()
@@ -1074,8 +1075,7 @@ impl GraphBuilder {
                         for (val_id, mut bucket) in inv_map {
                             bucket.sort_unstable();
                             bucket.dedup();
-                            let bitmap =
-                                RoaringBitmap::from_sorted_iter(bucket.into_iter()).unwrap();
+                            let bitmap = RoaringBitmap::from_sorted_iter(bucket).unwrap();
                             key_index.insert(val_id, NodeSet::new(bitmap));
                         }
 
@@ -1963,9 +1963,7 @@ mod tests {
         let verified_key = builder.interner.get_or_intern("verified");
         let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
         let props = builder.rel_col_bool.get(&verified_key).unwrap();
-        assert!(props
-            .iter()
-            .any(|(idx, val)| *idx == rel_idx && *val == true));
+        assert!(props.iter().any(|(idx, val)| *idx == rel_idx && *val));
     }
 
     #[test]
@@ -2014,7 +2012,7 @@ mod tests {
             .get(&verified_key)
             .unwrap()
             .iter()
-            .any(|(idx, val)| *idx == rel_idx && *val == true));
+            .any(|(idx, val)| *idx == rel_idx && *val));
     }
 
     #[test]
@@ -2170,7 +2168,7 @@ mod tests {
             .get(&active_key)
             .unwrap()
             .iter()
-            .any(|(idx, val)| *idx == rel_idx_2_3 && *val == true));
+            .any(|(idx, val)| *idx == rel_idx_2_3 && *val));
 
         // Check (1, 3, KNOWS) properties
         let since_2022 = builder.interner.get_or_intern("2022");
@@ -2244,6 +2242,6 @@ mod tests {
             .get(&verified_key)
             .unwrap()
             .iter()
-            .any(|(idx, val)| *idx == rel_idx && *val == true));
+            .any(|(idx, val)| *idx == rel_idx && *val));
     }
 }

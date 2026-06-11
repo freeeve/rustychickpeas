@@ -48,7 +48,7 @@ fn get_ldbc_data_dir() -> PathBuf {
     if !sf_path.exists() {
         let fallbacks = vec!["0.003", "1", "10"];
         for fallback_sf in fallbacks {
-            if fallback_sf != &scale_factor {
+            if fallback_sf != scale_factor {
                 let fallback_path = base_dir.join(format!("social-network-sf{}-bi-parquet/graphs/parquet/bi/composite-merged-fk/initial_snapshot", fallback_sf));
                 if fallback_path.exists() {
                     println!(
@@ -130,7 +130,7 @@ fn load_relationships_with_mapping(
     };
 
     let schema = builder_reader.schema().clone();
-    let mut reader = match builder_reader.build() {
+    let reader = match builder_reader.build() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("  Error building reader: {}", e);
@@ -157,7 +157,7 @@ fn load_relationships_with_mapping(
     let mut count = 0;
     let mut batch_num = 0;
     let rel_start = Instant::now();
-    while let Some(batch_result) = reader.next() {
+    for batch_result in reader {
         let batch = match batch_result {
             Ok(b) => b,
             Err(e) => {
@@ -949,7 +949,7 @@ fn bi3_popular_topics() {
 
     // Get top 10 tags
     let mut tag_vec: Vec<(u32, u32)> = tag_counts.into_iter().collect();
-    tag_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    tag_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
     let top_tags: Vec<(u32, u32)> = tag_vec.into_iter().take(10).collect();
 
     let elapsed = start.elapsed();
@@ -995,7 +995,7 @@ fn bi4_top_commenters() {
     }
 
     let mut person_vec: Vec<(u32, u32)> = person_comment_counts.into_iter().collect();
-    person_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    person_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
     let top_commenters: Vec<(u32, u32)> = person_vec.into_iter().take(10).collect();
 
     let elapsed = start.elapsed();
@@ -1032,7 +1032,7 @@ fn bi5_active_users() {
     }
 
     let mut person_vec: Vec<(u32, u32)> = person_post_counts.into_iter().collect();
-    person_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    person_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
     let top_users: Vec<(u32, u32)> = person_vec.into_iter().take(10).collect();
 
     let elapsed = start.elapsed();
@@ -1072,7 +1072,7 @@ fn bi6_tag_cooccurrence() {
     }
 
     let mut cooccurrence_vec: Vec<((u32, u32), u32)> = cooccurrence.into_iter().collect();
-    cooccurrence_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    cooccurrence_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
     let top_pairs: Vec<((u32, u32), u32)> = cooccurrence_vec.into_iter().take(10).collect();
 
     let elapsed = start.elapsed();

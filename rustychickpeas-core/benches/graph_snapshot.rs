@@ -336,7 +336,7 @@ fn bidirectional_bfs_with_filters_benchmark(c: &mut Criterion) {
             let node_filter = |node_id: u32, snapshot: &GraphSnapshot| -> bool {
                 snapshot
                     .nodes_with_label("Person")
-                    .map_or(false, |nodes| nodes.contains(node_id))
+                    .is_some_and(|nodes| nodes.contains(node_id))
             };
             type RelFilter = fn(
                 u32,
@@ -474,7 +474,7 @@ fn bfs_with_filters_benchmark(c: &mut Criterion) {
             let node_filter = |node_id: u32, snapshot: &GraphSnapshot| -> bool {
                 snapshot
                     .nodes_with_label("Person")
-                    .map_or(false, |nodes| nodes.contains(node_id))
+                    .is_some_and(|nodes| nodes.contains(node_id))
             };
             type RelFilter = fn(
                 u32,

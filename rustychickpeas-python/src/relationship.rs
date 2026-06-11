@@ -186,7 +186,7 @@ impl Relationship {
         let mut right = offsets.len().saturating_sub(1);
 
         while left < right {
-            let mid = (left + right + 1) / 2;
+            let mid = (left + right).div_ceil(2);
             if offsets[mid] <= rel_index {
                 left = mid;
             } else {
@@ -205,7 +205,7 @@ impl Relationship {
         let mut right = offsets.len().saturating_sub(1);
 
         while left < right {
-            let mid = (left + right + 1) / 2;
+            let mid = (left + right).div_ceil(2);
             if offsets[mid] <= rel_index {
                 left = mid;
             } else {

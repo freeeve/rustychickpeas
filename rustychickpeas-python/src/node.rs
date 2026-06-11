@@ -48,19 +48,16 @@ impl Node {
         rel_types: Option<Vec<String>>,
     ) -> PyResult<Vec<Relationship>> {
         // Convert string types to RelationshipType IDs using O(1) reverse index
-        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types
-            .as_ref()
-            .map(|types| {
-                let ids: Vec<RelationshipType> = types
-                    .iter()
-                    .filter_map(|s| self.snapshot.atoms.get_id(s).map(RelationshipType::new))
-                    .collect();
-                if ids.is_empty() && !types.is_empty() {
-                    return None;
-                }
-                Some(ids)
-            })
-            .flatten();
+        let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().and_then(|types| {
+            let ids: Vec<RelationshipType> = types
+                .iter()
+                .filter_map(|s| self.snapshot.atoms.get_id(s).map(RelationshipType::new))
+                .collect();
+            if ids.is_empty() && !types.is_empty() {
+                return None;
+            }
+            Some(ids)
+        });
 
         let mut relationships = Vec::new();
 

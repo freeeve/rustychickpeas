@@ -4,13 +4,15 @@
 //! These benchmarks require LDBC data files (see tests/ldbc_snb_bi_benchmark.rs for data setup).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
+use rustychickpeas_core::GraphSnapshot;
 use std::env;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// Get the path to LDBC data directory
 /// Defaults to SF0.003, with fallbacks to SF1 and SF10 if not found
+/// Retained for future graph loading in get_ldbc_graph (currently stubbed)
+#[allow(dead_code)]
 fn get_ldbc_data_dir() -> Option<PathBuf> {
     if let Ok(dir) = env::var("LDBC_DATA_DIR") {
         return Some(PathBuf::from(dir));
@@ -207,7 +209,7 @@ fn bi3_popular_topics_benchmark(c: &mut Criterion) {
             }
 
             let mut tag_vec: Vec<(u32, u32)> = tag_counts.into_iter().collect();
-            tag_vec.sort_by(|a, b| b.1.cmp(&a.1));
+            tag_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
             let top_tags: Vec<(u32, u32)> = tag_vec.into_iter().take(10).collect();
 
             black_box(top_tags);
@@ -247,7 +249,7 @@ fn bi4_top_commenters_benchmark(c: &mut Criterion) {
             }
 
             let mut person_vec: Vec<(u32, u32)> = person_comment_counts.into_iter().collect();
-            person_vec.sort_by(|a, b| b.1.cmp(&a.1));
+            person_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
             let top_commenters: Vec<(u32, u32)> = person_vec.into_iter().take(10).collect();
 
             black_box(top_commenters);
@@ -287,7 +289,7 @@ fn bi5_active_users_benchmark(c: &mut Criterion) {
             }
 
             let mut person_vec: Vec<(u32, u32)> = person_post_counts.into_iter().collect();
-            person_vec.sort_by(|a, b| b.1.cmp(&a.1));
+            person_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
             let top_users: Vec<(u32, u32)> = person_vec.into_iter().take(10).collect();
 
             black_box(top_users);
@@ -330,7 +332,7 @@ fn bi6_tag_cooccurrence_benchmark(c: &mut Criterion) {
             }
 
             let mut cooccurrence_vec: Vec<((u32, u32), u32)> = cooccurrence.into_iter().collect();
-            cooccurrence_vec.sort_by(|a, b| b.1.cmp(&a.1));
+            cooccurrence_vec.sort_by_key(|e| std::cmp::Reverse(e.1));
             let top_pairs: Vec<((u32, u32), u32)> = cooccurrence_vec.into_iter().take(10).collect();
 
             black_box(top_pairs);

@@ -317,6 +317,7 @@ fn next_auto_node_id(builder: &mut GraphBuilder) -> Result<NodeId> {
 /// Enum to handle both sync (local file) and async (S3) Parquet readers.
 /// The async variant holds its tokio runtime and pulls one batch per call,
 /// so remote files stream incrementally instead of being buffered whole.
+#[allow(clippy::large_enum_variant)]
 enum ParquetReaderEnum {
     Sync(parquet::arrow::arrow_reader::ParquetRecordBatchReader),
     Async {
@@ -550,9 +551,9 @@ impl GraphBuilder {
                 if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == label_col)
                 {
                     let column = batch.column(column_idx);
-                    for i in 0..batch.num_rows() {
+                    for (i, labels) in labels_per_row.iter_mut().enumerate() {
                         if let Some(val) = extract_string_value(column, i) {
-                            labels_per_row[i].push(val);
+                            labels.push(val);
                         }
                     }
                 }
@@ -591,7 +592,7 @@ impl GraphBuilder {
 
                 // Now process rows with pre-computed column info
                 if !dedup_columns.is_empty() {
-                    for i in 0..batch.num_rows() {
+                    for (i, dedup_slot) in dedup_keys_per_row.iter_mut().enumerate() {
                         let mut dedup_key = Vec::with_capacity(unique_props.len());
                         let mut all_present = true;
 
@@ -607,8 +608,7 @@ impl GraphBuilder {
                         }
 
                         if all_present && !dedup_key.is_empty() {
-                            dedup_keys_per_row[i] =
-                                Some(crate::types::DedupKey::from_slice(&dedup_key));
+                            *dedup_slot = Some(crate::types::DedupKey::from_slice(&dedup_key));
                         }
                     }
                 }
@@ -671,13 +671,13 @@ impl GraphBuilder {
                     let column = batch.column(column_idx);
                     let field = schema.field(column_idx);
 
-                    for i in 0..batch.num_rows() {
+                    for (i, node_id_slot) in node_ids_batch.iter_mut().enumerate() {
                         // Get node ID (auto-generate if None)
-                        let node_id = match node_ids_batch[i] {
+                        let node_id = match *node_id_slot {
                             Some(id) => id,
                             None => {
                                 let id = next_auto_node_id(self)?;
-                                node_ids_batch[i] = Some(id);
+                                *node_id_slot = Some(id);
                                 id
                             }
                         };
@@ -697,7 +697,7 @@ impl GraphBuilder {
             // Skip nodes that were already processed in the deduplication step
             for i in 0..node_ids_batch.len() {
                 if !processed_in_dedup.contains(&i) {
-                    let labels: Vec<&str> = labels_per_row[i].iter().copied().collect();
+                    let labels: Vec<&str> = labels_per_row[i].to_vec();
                     let actual_id = self.add_node(node_ids_batch[i], &labels)?;
                     // Update the batch with the actual ID (in case it was auto-generated)
                     node_ids_batch[i] = Some(actual_id);
@@ -831,6 +831,7 @@ impl GraphBuilder {
     /// * `deduplication` - Optional deduplication strategy
     /// * `key_property_columns` - Optional list of property columns to use as uniqueness key when
     ///   deduplication is CreateUniqueByRelTypeAndKeyProperties. If None, uses all property_columns.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_relationships_from_parquet(
         &mut self,
         path: &str,
@@ -877,11 +878,13 @@ impl GraphBuilder {
         let rel_type_idx =
             rel_type_column.and_then(|col| schema.fields().iter().position(|f| f.name() == col));
 
-        if rel_type_column.is_some() && rel_type_idx.is_none() {
-            return Err(GraphError::SchemaError(format!(
-                "Relationship type column '{}' not found in parquet schema",
-                rel_type_column.unwrap()
-            )));
+        if let Some(rel_type_col) = rel_type_column {
+            if rel_type_idx.is_none() {
+                return Err(GraphError::SchemaError(format!(
+                    "Relationship type column '{}' not found in parquet schema",
+                    rel_type_col
+                )));
+            }
         }
 
         if rel_type_column.is_none() && fixed_rel_type.is_none() {
@@ -981,7 +984,7 @@ impl GraphBuilder {
                 deduplication,
                 Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties)
             ) {
-                for i in 0..batch.num_rows() {
+                for (i, key_props_slot) in key_props_per_row.iter_mut().enumerate() {
                     let mut key_props = Vec::new();
                     for prop_col in &effective_key_cols {
                         if let Some(column_idx) =
@@ -997,7 +1000,7 @@ impl GraphBuilder {
                         }
                     }
                     if !key_props.is_empty() {
-                        key_props_per_row[i] = Some(key_props);
+                        *key_props_slot = Some(key_props);
                     }
                 }
             }
@@ -1061,8 +1064,8 @@ impl GraphBuilder {
                     let column = batch.column(column_idx);
                     let field = schema.field(column_idx);
 
-                    for i in 0..batch.num_rows() {
-                        if let Some(rel_idx) = row_to_rel_idx[i] {
+                    for (i, rel_idx_slot) in row_to_rel_idx.iter().enumerate() {
+                        if let Some(rel_idx) = *rel_idx_slot {
                             set_rel_property_from_arrow(
                                 self,
                                 rel_idx,
@@ -1106,6 +1109,7 @@ impl GraphBuilder {
     ///
     /// # Returns
     /// * Vec of (start_node_id, end_node_id) pairs for created relationships
+    #[allow(clippy::too_many_arguments)]
     pub fn load_relationships_from_parquet_v2(
         &mut self,
         path: &str,
@@ -1212,11 +1216,13 @@ impl GraphBuilder {
         // Handle relationship type
         let rel_type_idx =
             rel_type_column.and_then(|col| schema.fields().iter().position(|f| f.name() == col));
-        if rel_type_column.is_some() && rel_type_idx.is_none() {
-            return Err(GraphError::BulkLoadError(format!(
-                "Relationship type column '{}' not found",
-                rel_type_column.unwrap()
-            )));
+        if let Some(rel_type_col) = rel_type_column {
+            if rel_type_idx.is_none() {
+                return Err(GraphError::BulkLoadError(format!(
+                    "Relationship type column '{}' not found",
+                    rel_type_col
+                )));
+            }
         }
 
         // Validate: must have either rel_type_column or fixed_rel_type
@@ -1227,7 +1233,7 @@ impl GraphBuilder {
         }
 
         // Determine property columns
-        let prop_cols: Vec<&str> = property_columns.clone().unwrap_or_else(|| Vec::new());
+        let prop_cols: Vec<&str> = property_columns.clone().unwrap_or_default();
 
         // Determine effective key columns for deduplication
         let effective_key_cols: Vec<&str> = match (&deduplication, &key_property_columns) {
@@ -1257,7 +1263,7 @@ impl GraphBuilder {
                 NodeIndex::Id => {
                     // Direct ID lookup
                     let column = batch.column(start_col_indices[0]);
-                    for i in 0..batch.num_rows() {
+                    for (i, node_slot) in start_nodes.iter_mut().enumerate() {
                         if let Some(id_array) = column.as_any().downcast_ref::<Int64Array>() {
                             if !id_array.is_null(i) {
                                 let val = id_array.value(i);
@@ -1267,7 +1273,7 @@ impl GraphBuilder {
                                         val
                                     )));
                                 }
-                                start_nodes[i] = Some(val as NodeId);
+                                *node_slot = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<Int32Array>()
                         {
@@ -1279,12 +1285,12 @@ impl GraphBuilder {
                                         val
                                     )));
                                 }
-                                start_nodes[i] = Some(val as NodeId);
+                                *node_slot = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<UInt32Array>()
                         {
                             if !id_array.is_null(i) {
-                                start_nodes[i] = Some(id_array.value(i));
+                                *node_slot = Some(id_array.value(i));
                             }
                         }
                     }
@@ -1293,20 +1299,20 @@ impl GraphBuilder {
                     // Single property lookup
                     let column = batch.column(start_col_indices[0]);
                     let field = schema.field(start_col_indices[0]);
-                    for i in 0..batch.num_rows() {
+                    for (i, node_slot) in start_nodes.iter_mut().enumerate() {
                         if let Some(value_id) =
                             extract_value_id(column.as_ref(), field, i, &self.interner)
                         {
                             if let Some(node_ids) = index.get(&value_id) {
                                 // Use first matching node (or could error if multiple)
-                                start_nodes[i] = node_ids.first().copied();
+                                *node_slot = node_ids.first().copied();
                             }
                         }
                     }
                 }
                 NodeIndex::Composite(index) => {
                     // Composite property lookup
-                    for i in 0..batch.num_rows() {
+                    for (i, node_slot) in start_nodes.iter_mut().enumerate() {
                         let mut values: Vec<ValueId> = Vec::with_capacity(start_col_indices.len());
                         let mut all_found = true;
                         for &col_idx in &start_col_indices {
@@ -1324,7 +1330,7 @@ impl GraphBuilder {
                         if all_found && values.len() == start_col_indices.len() {
                             let key = DedupKey::from_slice(&values);
                             if let Some(node_ids) = index.get(&key) {
-                                start_nodes[i] = node_ids.first().copied();
+                                *node_slot = node_ids.first().copied();
                             }
                         }
                     }
@@ -1335,7 +1341,7 @@ impl GraphBuilder {
             match &end_index {
                 NodeIndex::Id => {
                     let column = batch.column(end_col_indices[0]);
-                    for i in 0..batch.num_rows() {
+                    for (i, node_slot) in end_nodes.iter_mut().enumerate() {
                         if let Some(id_array) = column.as_any().downcast_ref::<Int64Array>() {
                             if !id_array.is_null(i) {
                                 let val = id_array.value(i);
@@ -1345,7 +1351,7 @@ impl GraphBuilder {
                                         val
                                     )));
                                 }
-                                end_nodes[i] = Some(val as NodeId);
+                                *node_slot = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<Int32Array>()
                         {
@@ -1357,12 +1363,12 @@ impl GraphBuilder {
                                         val
                                     )));
                                 }
-                                end_nodes[i] = Some(val as NodeId);
+                                *node_slot = Some(val as NodeId);
                             }
                         } else if let Some(id_array) = column.as_any().downcast_ref::<UInt32Array>()
                         {
                             if !id_array.is_null(i) {
-                                end_nodes[i] = Some(id_array.value(i));
+                                *node_slot = Some(id_array.value(i));
                             }
                         }
                     }
@@ -1370,18 +1376,18 @@ impl GraphBuilder {
                 NodeIndex::Single(index) => {
                     let column = batch.column(end_col_indices[0]);
                     let field = schema.field(end_col_indices[0]);
-                    for i in 0..batch.num_rows() {
+                    for (i, node_slot) in end_nodes.iter_mut().enumerate() {
                         if let Some(value_id) =
                             extract_value_id(column.as_ref(), field, i, &self.interner)
                         {
                             if let Some(node_ids) = index.get(&value_id) {
-                                end_nodes[i] = node_ids.first().copied();
+                                *node_slot = node_ids.first().copied();
                             }
                         }
                     }
                 }
                 NodeIndex::Composite(index) => {
-                    for i in 0..batch.num_rows() {
+                    for (i, node_slot) in end_nodes.iter_mut().enumerate() {
                         let mut values: Vec<ValueId> = Vec::with_capacity(end_col_indices.len());
                         let mut all_found = true;
                         for &col_idx in &end_col_indices {
@@ -1399,7 +1405,7 @@ impl GraphBuilder {
                         if all_found && values.len() == end_col_indices.len() {
                             let key = DedupKey::from_slice(&values);
                             if let Some(node_ids) = index.get(&key) {
-                                end_nodes[i] = node_ids.first().copied();
+                                *node_slot = node_ids.first().copied();
                             }
                         }
                     }
@@ -1441,7 +1447,7 @@ impl GraphBuilder {
             // Extract key properties for deduplication
             let mut key_props_per_row: Vec<Option<Vec<ValueId>>> = vec![None; batch.num_rows()];
             if !effective_key_cols.is_empty() {
-                for i in 0..batch.num_rows() {
+                for (i, key_props_slot) in key_props_per_row.iter_mut().enumerate() {
                     let mut key_props: Vec<ValueId> = Vec::new();
                     for prop_col in &effective_key_cols {
                         if let Some(col_idx) =
@@ -1457,7 +1463,7 @@ impl GraphBuilder {
                         }
                     }
                     if !key_props.is_empty() {
-                        key_props_per_row[i] = Some(key_props);
+                        *key_props_slot = Some(key_props);
                     }
                 }
             }
@@ -1520,8 +1526,8 @@ impl GraphBuilder {
                     let column = batch.column(column_idx);
                     let field = schema.field(column_idx);
 
-                    for i in 0..batch.num_rows() {
-                        if let Some(rel_idx) = row_to_rel_idx[i] {
+                    for (i, rel_idx_slot) in row_to_rel_idx.iter().enumerate() {
+                        if let Some(rel_idx) = *rel_idx_slot {
                             set_rel_property_from_arrow(
                                 self,
                                 rel_idx,
@@ -1548,6 +1554,7 @@ impl GraphBuilder {
 }
 
 /// Create a GraphSnapshot from Parquet files using GraphBuilder
+#[allow(clippy::too_many_arguments)]
 pub fn read_from_parquet(
     nodes_path: Option<&str>,
     relationships_path: Option<&str>,
@@ -1952,7 +1959,7 @@ mod tests {
         // All nodes should be loaded (deduplication happens during load)
         assert_eq!(node_ids.len(), 5);
         // But dedup_map should track unique names
-        assert!(builder.dedup_map.len() > 0);
+        assert!(!builder.dedup_map.is_empty());
     }
 
     #[test]
@@ -3412,7 +3419,7 @@ mod tests {
         assert_eq!(node_ids[0], 1);
         assert_eq!(node_ids[2], 3);
         // Middle node should have auto-generated ID
-        assert!(node_ids[1] < 3 || node_ids[1] > 3); // Not 1 or 3
+        assert!(node_ids[1] != 3); // Not 1 or 3
     }
 
     #[test]
@@ -4135,7 +4142,7 @@ mod tests {
         // After deduplication, node_count() should be 2 (1&2 merged, plus 3)
         assert_eq!(builder.node_count(), 2);
         // dedup_map should have entries
-        assert!(builder.dedup_map.len() > 0);
+        assert!(!builder.dedup_map.is_empty());
     }
 
     #[test]
@@ -4242,7 +4249,7 @@ mod tests {
         // Both rows have the same email, deduplication should now work with LargeUtf8
         assert_eq!(node_ids.len(), 1);
         assert_eq!(builder.node_count(), 1);
-        assert!(builder.dedup_map.len() > 0);
+        assert!(!builder.dedup_map.is_empty());
     }
 
     #[test]
@@ -4297,7 +4304,7 @@ mod tests {
         // Should have 2 unique nodes (1&2 merged, plus 3) if deduplication worked
         assert_eq!(builder.node_count(), 2);
         // dedup_map should have entries
-        assert!(builder.dedup_map.len() > 0);
+        assert!(!builder.dedup_map.is_empty());
     }
 
     #[test]
@@ -4352,7 +4359,7 @@ mod tests {
         // Should have 2 unique nodes (1&2 merged, plus 3) if deduplication worked
         assert_eq!(builder.node_count(), 2);
         // dedup_map should have entries
-        assert!(builder.dedup_map.len() > 0);
+        assert!(!builder.dedup_map.is_empty());
     }
 
     #[test]
@@ -4463,7 +4470,7 @@ mod tests {
         // After deduplication, rows 1 and 2 map to the same node, so node_ids contains 1 unique node
         assert_eq!(node_ids.len(), 1);
         // Check that dedup_map has an entry
-        assert!(builder.dedup_map.len() > 0);
+        assert!(!builder.dedup_map.is_empty());
         // If deduplication worked, node_count should be 1
         assert_eq!(builder.node_count(), 1);
     }
@@ -4964,7 +4971,7 @@ mod tests {
         writer.close().unwrap();
 
         let mut builder = GraphBuilder::new(None, None);
-        let node_ids = builder
+        let _node_ids = builder
             .load_nodes_from_parquet(
                 file_path.to_str().unwrap(),
                 Some("id"),
@@ -5032,7 +5039,7 @@ mod tests {
         let ids = Int64Array::from(vec![1]);
         let str_props = StringArray::from(vec!["test_string"]);
         let i64_props = Int64Array::from(vec![42i64]);
-        let f64_props = Float64Array::from(vec![3.14159]);
+        let f64_props = Float64Array::from(vec![std::f64::consts::PI]);
         let bool_props = BooleanArray::from(vec![true]);
         let i32_ids = Int32Array::from(vec![100i32]);
 
@@ -5086,7 +5093,7 @@ mod tests {
         assert!(f64_val.is_some(), "Should have f64 property");
         if let Some(ValueId::F64(bits)) = f64_val {
             let f = f64::from_bits(bits);
-            assert!((f - 3.14159).abs() < 0.00001);
+            assert!((f - std::f64::consts::PI).abs() < 0.00001);
         } else {
             panic!("Expected F64 ValueId");
         }

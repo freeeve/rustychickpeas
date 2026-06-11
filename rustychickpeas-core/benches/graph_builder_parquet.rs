@@ -84,6 +84,7 @@ fn bulk_load_nodes_benchmark(c: &mut Criterion) {
                         Some(vec!["label"]),
                         Some(vec!["name", "active"]),
                         None, // unique_properties
+                        None, // default_label
                     )
                     .unwrap();
                 black_box(builder);
@@ -212,6 +213,7 @@ fn bulk_load_nodes_with_deduplication_benchmark(c: &mut Criterion) {
                         Some(vec!["label"]),
                         Some(vec!["email", "name"]),
                         Some(vec!["email"]), // unique_properties for deduplication
+                        None,                // default_label
                     )
                     .unwrap();
                 black_box(builder);
@@ -280,6 +282,7 @@ fn bulk_load_relationships_with_deduplication_benchmark(c: &mut Criterion) {
                         Some(vec!["label"]),
                         Some(vec!["name", "active"]),
                         None,
+                        None,
                     )
                     .unwrap();
                 builder
@@ -318,6 +321,7 @@ fn parquet_vs_regular_builder_benchmark(c: &mut Criterion) {
                         Some("id"),
                         Some(vec!["label"]),
                         Some(vec!["name", "active"]),
+                        None,
                         None,
                     )
                     .unwrap();
@@ -409,6 +413,7 @@ fn parquet_vs_regular_with_dedup_benchmark(c: &mut Criterion) {
                         Some(vec!["label"]),
                         Some(vec!["email", "name"]),
                         Some(vec!["email"]), // deduplication
+                        None,                // default_label
                     )
                     .unwrap();
                 black_box(builder);

@@ -458,7 +458,7 @@ mod tests {
         let mut ns = NodeSet::new_bitset(bv);
 
         // Try to remove a node_id that's out of bounds
-        assert_eq!(ns.remove(20), false);
+        assert!(!ns.remove(20));
         assert_eq!(ns.len(), 1);
     }
 

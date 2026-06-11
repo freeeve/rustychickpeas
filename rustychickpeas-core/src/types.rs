@@ -257,8 +257,8 @@ mod tests {
 
     #[test]
     fn test_property_value_float() {
-        let pv = PropertyValue::Float(3.14);
-        assert_eq!(pv.as_string(None), "3.14");
+        let pv = PropertyValue::Float(2.5);
+        assert_eq!(pv.as_string(None), "2.5");
     }
 
     #[test]

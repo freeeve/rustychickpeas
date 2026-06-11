@@ -417,6 +417,7 @@ impl GraphSnapshotBuilder {
     ///         (1, 2, "KNOWS", {"since": "2020", "weight": 5}),
     ///         (2, 3, "FOLLOWS", {"since": "2021", "active": True}),
     ///     ])
+    #[allow(clippy::type_complexity)]
     fn set_rel_props_bulk(
         &mut self,
         rel_props: Vec<(u32, u32, String, &PyDict)>,
@@ -507,6 +508,7 @@ impl GraphSnapshotBuilder {
     ///     key_property_columns: Optional list of property columns to use as uniqueness key when
     ///         deduplication is "CreateUniqueByRelTypeAndKeyProperties". If None, uses all property_columns.
     #[pyo3(signature = (path, start_node_column, end_node_column, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
+    #[allow(clippy::too_many_arguments)]
     fn load_relationships_from_parquet(
         &mut self,
         path: String,
@@ -568,6 +570,7 @@ impl GraphSnapshotBuilder {
     ///     deduplication: Optional deduplication strategy
     ///     key_property_columns: Optional list of property columns for uniqueness
     #[pyo3(signature = (path, start_node, end_node, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
+    #[allow(clippy::too_many_arguments)]
     fn load_relationships_from_parquet_v2(
         &mut self,
         path: String,
