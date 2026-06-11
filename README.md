@@ -343,7 +343,7 @@ For Python-specific performance tests, see [rustychickpeas-python/tests/benchmar
 **Memory Usage**:
 - **Base overhead**: ~3.5 bytes per node/relationship (structure + indexes)
 - **Properties**: Additional memory depends on property count and size
-- **String interning**: Reduces memory signficantly for graphs with high string duplication
+- **String interning**: Reduces memory significantly for graphs with high string duplication
 - **Property value interning**: Optional feature saves 32-50% memory when property values have high duplication
 
 **Performance Characteristics**:
@@ -402,7 +402,7 @@ Test coverage is set up for both Rust and Python:
 - Rust: `coverage/rust/tarpaulin-report.html`
 - Python: `coverage/python/htmlcov/index.html`
 
-See [docs/COVERAGE.md](docs/COVERAGE.md) for detailed coverage documentation.
+See [cursor_md/COVERAGE.md](cursor_md/COVERAGE.md) for detailed coverage documentation.
 
 ## License
 

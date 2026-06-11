@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run Rust test coverage and generate reports
 
-set -e
+set -eo pipefail
 
 echo "🔍 Running Rust test coverage..."
 echo ""
@@ -9,16 +9,19 @@ echo ""
 # Create coverage directory
 mkdir -p coverage/rust
 
-# Run coverage
+# Run coverage once, producing terminal, LCOV, and XML reports in a single pass
+TARPAULIN_LOG=$(mktemp)
+trap 'rm -f "$TARPAULIN_LOG"' EXIT
 cargo tarpaulin \
     --package rustychickpeas-core \
+    --out Stdout \
     --out Lcov \
     --out Xml \
     --output-dir coverage/rust \
     --timeout 300 \
     --root . \
     --exclude-files 'rustychickpeas-python/*' \
-    --exclude-files 'tests/*'
+    --exclude-files 'tests/*' 2>&1 | tee "$TARPAULIN_LOG"
 
 # Move lcov.info to coverage/rust/ if it's in the root
 if [ -f lcov.info ]; then
@@ -37,7 +40,7 @@ echo ""
 echo "✅ Coverage report generated!"
 echo ""
 echo "📊 Coverage Summary:"
-cargo tarpaulin --package rustychickpeas-core --out Stdout --timeout 300 2>&1 | grep -A 20 "Coverage Results:" || true
+grep -A 20 "Coverage Results:" "$TARPAULIN_LOG" || true
 
 echo ""
 echo "📁 Reports:"

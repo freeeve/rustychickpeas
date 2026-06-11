@@ -172,13 +172,25 @@ impl Atoms {
 #[derive(Debug)]
 pub struct GraphSnapshot {
     // --- Core shape (CSR) ---
-    /// Number of nodes
+    /// Actual number of nodes in the graph (the count of distinct node IDs
+    /// that were added to the builder).
+    ///
+    /// Note: this is NOT necessarily the size of the CSR ID space. The CSR
+    /// offset arrays (`out_offsets`/`in_offsets`) are sized by
+    /// `max_node_id + 2` (one slot per ID in `0..=max_node_id`, plus the
+    /// trailing offset), so when node IDs are sparse (contain gaps),
+    /// `out_offsets.len() - 1` exceeds `n_nodes`. Use
+    /// `out_offsets.len() - 1` for the CSR ID space size; do not derive it
+    /// from `n_nodes`.
     pub n_nodes: u32,
     /// Number of relationships
     pub n_rels: u64,
 
     // CSR (outgoing relationships)
-    /// Outgoing offsets: len = n_nodes + 1
+    /// Outgoing offsets: len = max_node_id + 2, i.e. one entry per ID in
+    /// `0..=max_node_id` plus a trailing offset. This can exceed
+    /// `n_nodes + 1` when node IDs are sparse; IDs that were never added
+    /// simply have empty ranges.
     /// out_offsets[i] to out_offsets[i+1] gives the range in out_nbrs for node i
     pub out_offsets: Vec<u32>,
     /// Outgoing neighbors: len = n_rels
@@ -188,7 +200,8 @@ pub struct GraphSnapshot {
     /// Parallel to out_nbrs, contains relationship type for each edge
     pub out_types: Vec<RelationshipType>,
     // CSR (incoming relationships) - optional
-    /// Incoming offsets: len = n_nodes + 1
+    /// Incoming offsets: len = max_node_id + 2 (same sizing as `out_offsets`;
+    /// can exceed `n_nodes + 1` when node IDs are sparse)
     pub in_offsets: Vec<u32>,
     /// Incoming neighbors: len = n_rels
     /// Contains source node IDs
