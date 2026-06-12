@@ -78,7 +78,11 @@ jobs:
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
+      - name: Add x86_64 macOS Rust target
+        if: matrix.os == 'macos-latest' && matrix.arch == 'x86_64'
+        run: rustup target add x86_64-apple-darwin
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -92,17 +96,33 @@ jobs:
         run: |
           cp README.md rustychickpeas-python/README.md
       
-      - name: Build wheels and sdist
+      # macOS x86_64 must cross-compile explicitly: macos-latest runners are arm64,
+      # and without --target the leg produces an arm64 wheel whose filename collides
+      # with the real arm64 leg, corrupting the merged dist/ in the publish job
+      - name: Build wheels
+        shell: bash
         run: |
           cd rustychickpeas-python
-          maturin build --release --out dist --sdist
+          if [[ "${{ matrix.os }}" == "macos-latest" && "${{ matrix.arch }}" == "x86_64" ]]; then
+            maturin build --release --out dist --target x86_64-apple-darwin
+          else
+            maturin build --release --out dist
+          fi
         env:
           # Using native wheels for now. For better Linux compatibility, consider manylinux:
           # MATURIN_PEP517_ARGS: "--manylinux=2014" (for older Linux compatibility)
           MATURIN_PEP517_ARGS: "--manylinux=off"
           # PyO3 0.20.3 doesn't officially support Python 3.13/3.14 yet, use stable ABI
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: ${{ (matrix.python-version == '3.13' || matrix.python-version == '3.14') && '1' || '' }}
-      
+
+      # Build the sdist on a single leg only: every leg producing an identically
+      # named sdist makes merge-multiple in the publish job race and corrupt it
+      - name: Build sdist
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          cd rustychickpeas-python
+          maturin sdist --out dist
+
       - name: Generate SHA256 hashes
         shell: bash
         run: |
