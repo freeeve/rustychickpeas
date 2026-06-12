@@ -62,7 +62,7 @@ def get_git_version_tag() -> str:
                         if line.strip().startswith("version ="):
                             version = line.split("=")[1].strip().strip('"').strip("'")
                             return f"v{version}"
-        except:
+        except (OSError, IndexError):
             pass
         
         # Fallback to nearest tag if Cargo.toml not found
@@ -138,38 +138,21 @@ def extract_dhat_data(bench_dir: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def extract_estimates(estimates_path: Path, bench_dir: Path) -> Optional[Dict[str, Any]]:
-    """Extract time and allocation data from Criterion estimates.json."""
-    if not estimates_path.exists():
-        return None
-    
-    try:
-        with open(estimates_path) as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        return None
-    
-    result = {}
-    
-    # Extract time metrics (mean, median)
+def _extract_time_metrics(data: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """Extract mean/median point estimates and confidence intervals into result."""
     for metric in ["mean", "median"]:
         if metric in data:
             metric_data = data[metric]
             if "point_estimate" in metric_data:
                 result[f"{metric}_ns"] = metric_data["point_estimate"]
-                
-                # Confidence interval
                 if "confidence_interval" in metric_data:
                     ci = metric_data["confidence_interval"]
                     result[f"{metric}_ci_low_ns"] = ci.get("lower_bound", 0)
                     result[f"{metric}_ci_high_ns"] = ci.get("upper_bound", 0)
-    
-    # Try to extract allocation data from dhat output
-    dhat_data = extract_dhat_data(bench_dir)
-    if dhat_data:
-        result.update(dhat_data)
-    
-    # Also check for allocation data in estimates.json (if custom measurement was used)
+
+
+def _extract_allocation_metrics(data: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """Extract allocation and memory estimates from estimates.json into result."""
     if "allocation" in data:
         alloc_data = data["allocation"]
         if "point_estimate" in alloc_data:
@@ -178,109 +161,148 @@ def extract_estimates(estimates_path: Path, bench_dir: Path) -> Optional[Dict[st
                 ci = alloc_data["confidence_interval"]
                 result["allocs_ci_low"] = ci.get("lower_bound", 0)
                 result["allocs_ci_high"] = ci.get("upper_bound", 0)
-    
-    # Also check for memory-related metrics
+
     if "memory" in data:
         mem_data = data["memory"]
         if "point_estimate" in mem_data:
             result["memory_bytes"] = mem_data["point_estimate"]
-    
+
+
+def extract_estimates(estimates_path: Path, bench_dir: Path) -> Optional[Dict[str, Any]]:
+    """Extract time and allocation data from Criterion estimates.json."""
+    if not estimates_path.exists():
+        return None
+
+    try:
+        with open(estimates_path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return None
+
+    result = {}
+
+    _extract_time_metrics(data, result)
+
+    # dhat allocation data first; estimates.json allocation data takes precedence
+    dhat_data = extract_dhat_data(bench_dir)
+    if dhat_data:
+        result.update(dhat_data)
+
+    _extract_allocation_metrics(data, result)
+
     return result if result else None
+
+
+def _find_sized_benchmarks(entry: Path, bench_name: str) -> list:
+    """Find size-parameterized benchmarks (e.g. builder_add_nodes/10000/new/estimates.json)."""
+    found = []
+    for size_entry in entry.iterdir():
+        if not size_entry.is_dir():
+            continue
+
+        try:
+            size = int(size_entry.name)
+        except ValueError:
+            continue
+
+        size_estimates = size_entry / "new" / "estimates.json"
+        if size_estimates.exists():
+            found.append((bench_name, size, size_estimates, entry))
+    return found
 
 
 def find_benchmark_directories(criterion_dir: Path):
     """Find all benchmark directories and their estimates.json files."""
     benchmarks = []
-    
+
     if not criterion_dir.exists():
         return benchmarks
-    
+
     for entry in criterion_dir.iterdir():
         if not entry.is_dir():
             continue
-        
+
         bench_name = entry.name
-        
+
         # Check for direct estimates.json (for benchmarks without size parameters)
         direct_estimates = entry / "new" / "estimates.json"
         if direct_estimates.exists():
             benchmarks.append((bench_name, None, direct_estimates, entry))
-        
-        # Check for size-specific benchmarks (e.g., builder_add_nodes/10000/new/estimates.json)
-        for size_entry in entry.iterdir():
-            if not size_entry.is_dir():
-                continue
-            
-            # Try to parse as size
-            try:
-                size = int(size_entry.name)
-                size_estimates = size_entry / "new" / "estimates.json"
-                if size_estimates.exists():
-                    benchmarks.append((bench_name, size, size_estimates, entry))
-            except ValueError:
-                # Not a size directory, skip
-                continue
-    
+
+        benchmarks.extend(_find_sized_benchmarks(entry, bench_name))
+
     return benchmarks
+
+
+def _metric_row(
+    full_bench_name: str,
+    metric: str,
+    estimates: Dict[str, Any],
+    sha: str,
+    version_tag: str,
+    date: str,
+    rustc: str,
+    machine: str,
+) -> Dict[str, Any]:
+    """Build one CSV row for a single time metric of a benchmark."""
+    row = {
+        "commit": sha,
+        "version": version_tag,
+        "date": date,
+        "bench": full_bench_name,
+        "metric": metric,
+        "unit": "ns",
+        "value": estimates[f"{metric}_ns"],
+        "ci_low": estimates.get(f"{metric}_ci_low_ns", 0),
+        "ci_high": estimates.get(f"{metric}_ci_high_ns", 0),
+        "rustc": rustc,
+        "machine": machine,
+    }
+
+    if "allocs" in estimates:
+        row["allocs"] = estimates["allocs"]
+        row["allocs_ci_low"] = estimates.get("allocs_ci_low", 0)
+        row["allocs_ci_high"] = estimates.get("allocs_ci_high", 0)
+    else:
+        row["allocs"] = ""
+        row["allocs_ci_low"] = ""
+        row["allocs_ci_high"] = ""
+
+    return row
 
 
 def collect_benchmarks(criterion_dir: Path, machine: str) -> list:
     """Collect all benchmark results and format as CSV rows."""
     rows = []
-    
+
     sha = get_commit_sha()
     date = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     rustc = get_rust_version()
     version_tag = get_git_version_tag()
-    
+
     benchmarks = find_benchmark_directories(criterion_dir)
-    
+
     if not benchmarks:
         print(f"Warning: No benchmark results found in {criterion_dir}")
         return rows
-    
+
     for bench_name, size, estimates_path, bench_dir in benchmarks:
         estimates = extract_estimates(estimates_path, bench_dir)
         if not estimates:
             continue
-        
+
         # Format benchmark name with size if applicable
         full_bench_name = f"{bench_name}/{size}" if size is not None else bench_name
-        
-        # Extract time metrics (mean and median)
+
         for metric in ["mean", "median"]:
-            metric_key = f"{metric}_ns"
-            if metric_key in estimates:
-                value_ns = estimates[metric_key]
-                ci_low = estimates.get(f"{metric}_ci_low_ns", 0)
-                ci_hi = estimates.get(f"{metric}_ci_high_ns", 0)
-                
-                row = {
-                    "commit": sha,
-                    "version": version_tag,
-                    "date": date,
-                    "bench": full_bench_name,
-                    "metric": metric,
-                    "unit": "ns",
-                    "value": value_ns,
-                    "ci_low": ci_low,
-                    "ci_high": ci_hi,
-                    "rustc": rustc,
-                    "machine": machine,
-                }
-                
-                # Add allocations if available
-                if "allocs" in estimates:
-                    row["allocs"] = estimates["allocs"]
-                    row["allocs_ci_low"] = estimates.get("allocs_ci_low", 0)
-                    row["allocs_ci_high"] = estimates.get("allocs_ci_high", 0)
-                else:
-                    row["allocs"] = ""
-                    row["allocs_ci_low"] = ""
-                    row["allocs_ci_high"] = ""
-                
-                rows.append(row)
-    
+            if f"{metric}_ns" in estimates:
+                rows.append(
+                    _metric_row(
+                        full_bench_name, metric, estimates,
+                        sha, version_tag, date, rustc, machine,
+                    )
+                )
+
     return rows
 
 
@@ -392,11 +414,11 @@ def main():
     print(f"Appended to: {output_file}")
     
     # Show summary
-    benches = set(row["bench"] for row in rows)
+    benches = {row["bench"] for row in rows}
     print(f"Benchmarks: {len(benches)}")
     for bench in sorted(benches):
         bench_rows = [r for r in rows if r["bench"] == bench]
-        metrics = set(r["metric"] for r in bench_rows)
+        metrics = {r["metric"] for r in bench_rows}
         print(f"  {bench}: {', '.join(metrics)}")
 
 
