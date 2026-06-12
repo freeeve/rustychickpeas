@@ -144,7 +144,7 @@ class TestBfsWithCallbackAfterGilRelease:
         def node_filter(node_id):
             return node_id != 3
 
-        nodes, rels = snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
+        nodes, _ = snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
         assert 3 not in nodes
         assert 0 in nodes
 
@@ -166,7 +166,7 @@ class TestBfsWithCallbackAfterGilRelease:
         def rel_filter(from_node, to_node, rel_type, csr_pos):
             return rel_type == "KNOWS"
 
-        nodes, rels = snapshot.bidirectional_bfs(
+        nodes, _ = snapshot.bidirectional_bfs(
             [0], [4], Direction.Outgoing,
             node_filter=node_filter, rel_filter=rel_filter,
         )

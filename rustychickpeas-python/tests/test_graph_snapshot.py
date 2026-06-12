@@ -538,7 +538,7 @@ class TestBFS:
     
     def test_bfs_with_rel_types(self, bfs_snapshot):
         """Test BFS with relationship type filter"""
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, rel_types=["KNOWS"])
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, rel_types=["KNOWS"])
         
         # Should find nodes via KNOWS relationships only
         assert 0 in nodes
@@ -554,7 +554,7 @@ class TestBFS:
         def node_filter(node_id):
             return "Person" in bfs_snapshot.node_labels(node_id)
         
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
         
         # Should find Person nodes only
         assert 0 in nodes
@@ -568,7 +568,7 @@ class TestBFS:
     def test_bfs_with_max_depth(self, bfs_snapshot):
         """Test BFS with max depth limit"""
         # With depth 1, should only reach direct neighbors
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=1)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=1)
         
         assert 0 in nodes
         assert 1 in nodes
@@ -579,14 +579,14 @@ class TestBFS:
         assert 3 not in nodes
         
         # With depth 2, should reach nodes 2 and 3
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=2)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=2)
         
         assert 2 in nodes
         assert 3 in nodes
     
     def test_bfs_with_direction_incoming(self, bfs_snapshot):
         """Test BFS with incoming direction (reverse traversal)"""
-        nodes, rels = bfs_snapshot.bfs([3], Direction.Incoming)
+        nodes, _ = bfs_snapshot.bfs([3], Direction.Incoming)
         
         # Should find nodes reachable by following incoming edges
         assert 0 in nodes
@@ -597,7 +597,7 @@ class TestBFS:
     
     def test_bfs_with_direction_both(self, bfs_snapshot):
         """Test BFS with both directions"""
-        nodes, rels = bfs_snapshot.bfs([2], Direction.Both)
+        nodes, _ = bfs_snapshot.bfs([2], Direction.Both)
         
         # Should find nodes reachable in both directions
         assert 0 in nodes
@@ -608,7 +608,7 @@ class TestBFS:
     
     def test_bfs_multiple_start_nodes(self, bfs_snapshot):
         """Test BFS from multiple starting nodes"""
-        nodes, rels = bfs_snapshot.bfs([0, 2], Direction.Outgoing)
+        nodes, _ = bfs_snapshot.bfs([0, 2], Direction.Outgoing)
         
         # Should find nodes reachable from either start node
         assert 0 in nodes
@@ -619,14 +619,14 @@ class TestBFS:
     def test_bidirectional_bfs_no_path(self, path_snapshot):
         """Test bidirectional BFS when no path exists"""
         # No path from 3 to 0 (reverse direction)
-        nodes, rels = path_snapshot.bidirectional_bfs([3], [0], Direction.Outgoing)
+        nodes, _ = path_snapshot.bidirectional_bfs([3], [0], Direction.Outgoing)
         
         # Should not find a path
         assert len(nodes) == 0 or 0 not in nodes or 3 not in nodes
     
     def test_bidirectional_bfs_with_rel_types(self, path_snapshot):
         """Test bidirectional BFS with relationship type filter"""
-        nodes, rels = path_snapshot.bidirectional_bfs(
+        nodes, _ = path_snapshot.bidirectional_bfs(
             [0], [3], Direction.Outgoing,
             rel_types=["KNOWS"]
         )
@@ -641,7 +641,7 @@ class TestBFS:
             # Only allow Person nodes (all nodes in this test)
             return "Person" in path_snapshot.node_labels(node_id)
         
-        nodes, rels = path_snapshot.bidirectional_bfs(
+        nodes, _ = path_snapshot.bidirectional_bfs(
             [0], [3], Direction.Outgoing,
             node_filter=node_filter
         )
@@ -656,7 +656,7 @@ class TestBFS:
             # Only allow KNOWS relationships
             return rel_type == "KNOWS"
         
-        nodes, rels = path_snapshot.bidirectional_bfs(
+        nodes, _ = path_snapshot.bidirectional_bfs(
             [0], [3],
             rel_filter=rel_filter
         )
@@ -740,7 +740,7 @@ class TestBFS:
     
     def test_bfs_with_rel_types(self, bfs_snapshot):
         """Test BFS with relationship type filter"""
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, rel_types=["KNOWS"])
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, rel_types=["KNOWS"])
         
         # Should find nodes via KNOWS relationships only
         assert 0 in nodes
@@ -756,7 +756,7 @@ class TestBFS:
         def node_filter(node_id):
             return "Person" in bfs_snapshot.node_labels(node_id)
         
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
         
         # Should find Person nodes only
         assert 0 in nodes
@@ -770,7 +770,7 @@ class TestBFS:
     def test_bfs_with_max_depth(self, bfs_snapshot):
         """Test BFS with max depth limit"""
         # With depth 1, should only reach direct neighbors
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=1)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=1)
         
         assert 0 in nodes
         assert 1 in nodes
@@ -781,14 +781,14 @@ class TestBFS:
         assert 3 not in nodes
         
         # With depth 2, should reach nodes 2 and 3
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=2)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=2)
         
         assert 2 in nodes
         assert 3 in nodes
     
     def test_bfs_with_direction_incoming(self, bfs_snapshot):
         """Test BFS with incoming direction (reverse traversal)"""
-        nodes, rels = bfs_snapshot.bfs([3], Direction.Incoming)
+        nodes, _ = bfs_snapshot.bfs([3], Direction.Incoming)
         
         # Should find nodes reachable by following incoming edges
         assert 0 in nodes
@@ -799,7 +799,7 @@ class TestBFS:
     
     def test_bfs_with_direction_both(self, bfs_snapshot):
         """Test BFS with both directions"""
-        nodes, rels = bfs_snapshot.bfs([2], Direction.Both)
+        nodes, _ = bfs_snapshot.bfs([2], Direction.Both)
         
         # Should find nodes reachable in both directions
         assert 0 in nodes
@@ -810,7 +810,7 @@ class TestBFS:
     
     def test_bfs_multiple_start_nodes(self, bfs_snapshot):
         """Test BFS from multiple starting nodes"""
-        nodes, rels = bfs_snapshot.bfs([0, 2], Direction.Outgoing)
+        nodes, _ = bfs_snapshot.bfs([0, 2], Direction.Outgoing)
         
         # Should find nodes reachable from either start node
         assert 0 in nodes
@@ -821,7 +821,7 @@ class TestBFS:
     def test_bidirectional_bfs_overlapping_sources_targets(self, path_snapshot):
         """Test bidirectional BFS when source and target sets overlap"""
         # If source and target overlap, should return those nodes immediately
-        nodes, rels = path_snapshot.bidirectional_bfs(
+        nodes, _ = path_snapshot.bidirectional_bfs(
             [0, 1], [1, 2], Direction.Outgoing
         )
         
@@ -872,7 +872,7 @@ class TestBFS:
     
     def test_bfs_with_rel_types(self, bfs_snapshot):
         """Test BFS with relationship type filter"""
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, rel_types=["KNOWS"])
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, rel_types=["KNOWS"])
         
         # Should find nodes via KNOWS relationships only
         assert 0 in nodes
@@ -888,7 +888,7 @@ class TestBFS:
         def node_filter(node_id):
             return "Person" in bfs_snapshot.node_labels(node_id)
         
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, node_filter=node_filter)
         
         # Should find Person nodes only
         assert 0 in nodes
@@ -902,7 +902,7 @@ class TestBFS:
     def test_bfs_with_max_depth(self, bfs_snapshot):
         """Test BFS with max depth limit"""
         # With depth 1, should only reach direct neighbors
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=1)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=1)
         
         assert 0 in nodes
         assert 1 in nodes
@@ -913,14 +913,14 @@ class TestBFS:
         assert 3 not in nodes
         
         # With depth 2, should reach nodes 2 and 3
-        nodes, rels = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=2)
+        nodes, _ = bfs_snapshot.bfs([0], Direction.Outgoing, max_depth=2)
         
         assert 2 in nodes
         assert 3 in nodes
     
     def test_bfs_with_direction_incoming(self, bfs_snapshot):
         """Test BFS with incoming direction (reverse traversal)"""
-        nodes, rels = bfs_snapshot.bfs([3], Direction.Incoming)
+        nodes, _ = bfs_snapshot.bfs([3], Direction.Incoming)
         
         # Should find nodes reachable by following incoming edges
         assert 0 in nodes
@@ -931,7 +931,7 @@ class TestBFS:
     
     def test_bfs_with_direction_both(self, bfs_snapshot):
         """Test BFS with both directions"""
-        nodes, rels = bfs_snapshot.bfs([2], Direction.Both)
+        nodes, _ = bfs_snapshot.bfs([2], Direction.Both)
         
         # Should find nodes reachable in both directions
         assert 0 in nodes
@@ -942,7 +942,7 @@ class TestBFS:
     
     def test_bfs_multiple_start_nodes(self, bfs_snapshot):
         """Test BFS from multiple starting nodes"""
-        nodes, rels = bfs_snapshot.bfs([0, 2], Direction.Outgoing)
+        nodes, _ = bfs_snapshot.bfs([0, 2], Direction.Outgoing)
         
         # Should find nodes reachable from either start node
         assert 0 in nodes

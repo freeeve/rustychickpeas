@@ -251,8 +251,7 @@ class TestGraphSnapshotBuilderProperties:
         """Test update_property_f64 method"""
         builder.set_prop(0, "score", 95.5)
         builder.update_prop_f64(0, "score", 96.0)
-        
-        manager = RustyChickpeas()
+
         snapshot = builder.finalize()
         assert snapshot.node_property(0, "score") == pytest.approx(96.0)
     

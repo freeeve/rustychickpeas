@@ -15,9 +15,12 @@ class TestDirection:
     
     def test_direction_equality(self):
         """Test Direction enum equality"""
-        assert Direction.Outgoing == Direction.Outgoing
-        assert Direction.Incoming == Direction.Incoming
-        assert Direction.Both == Direction.Both
+        outgoing = Direction.Outgoing
+        incoming = Direction.Incoming
+        both = Direction.Both
+        assert outgoing == Direction.Outgoing
+        assert incoming == Direction.Incoming
+        assert both == Direction.Both
         assert Direction.Outgoing != Direction.Incoming
         assert Direction.Outgoing != Direction.Both
         assert Direction.Incoming != Direction.Both
@@ -41,8 +44,7 @@ class TestDirection:
         
         node0 = snapshot.node(0)
         node1 = snapshot.node(1)
-        node2 = snapshot.node(2)
-        
+
         # Test outgoing relationships
         outgoing_rels = node0.relationships(Direction.Outgoing)
         assert len(outgoing_rels) == 1

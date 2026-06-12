@@ -74,7 +74,7 @@ class TestNodeDeduplication:
             builder = manager.create_builder(version="test_v1")
             
             # Load first file
-            node_ids1 = builder.load_nodes_from_parquet(
+            _ = builder.load_nodes_from_parquet(
                 path=file1,
                 node_id_column="id",
                 label_columns=["label"],
@@ -83,7 +83,7 @@ class TestNodeDeduplication:
             )
             
             # Load second file (should deduplicate alice@example.com)
-            node_ids2 = builder.load_nodes_from_parquet(
+            _ = builder.load_nodes_from_parquet(
                 path=file2,
                 node_id_column="id",
                 label_columns=["label"],

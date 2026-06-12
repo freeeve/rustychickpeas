@@ -18,7 +18,7 @@ def get_memory_mb():
         process = psutil.Process(os.getpid())
         mem_info = process.memory_info()
         return mem_info.rss / (1024 * 1024)  # Convert to MB
-    except:
+    except Exception:
         return 0
 
 def log_memory(stage):
@@ -27,38 +27,16 @@ def log_memory(stage):
     print(f"[MEMORY] {stage}: {mem_mb:,.0f} MB ({mem_mb/1024:.2f} GB)")
     sys.stdout.flush()
 
-def create_parquet_with_deduplication(
-    num_nodes=1_000_000,
-    num_relationships=1_000_000,
-    duplicate_rate=0.1,  # 10% of nodes will be duplicates
-    num_properties=3,  # Number of properties per node
-):
-    """Create Parquet files with properties and intentional duplicates for deduplication testing"""
-    print(f"\n{'='*70}")
-    print(f"Creating Parquet Files with Deduplication Test Data")
-    print(f"{'='*70}")
-    print(f"Nodes: {num_nodes:,}")
-    print(f"Relationships: {num_relationships:,}")
-    print(f"Duplicate rate: {duplicate_rate*100:.1f}%")
-    print(f"Properties per node: {num_properties}")
-    print(f"{'='*70}\n")
-    
-    log_memory("Start - Before file creation")
-    temp_dir = tempfile.mkdtemp()
-    nodes_file = os.path.join(temp_dir, "nodes_dedup.parquet")
-    rels_file = os.path.join(temp_dir, "relationships_dedup.parquet")
-    
-    # Generate unique keys for deduplication
-    # We'll use email as the unique property
-    num_unique_nodes = int(num_nodes * (1 - duplicate_rate))
-    unique_emails = [f"user{i}@example.com" for i in range(num_unique_nodes)]
-    
-    # Create nodes file
-    print("Creating nodes file with duplicates...")
-    log_memory("Before nodes file creation")
-    start = time.time()
-    
-    batch_size = 100_000
+def _print_batch_progress(batch_index, processed, total, start, unit):
+    """Print loading throughput every 10th batch as a carriage-return progress line."""
+    if batch_index % 10 == 0:
+        elapsed = time.time() - start
+        rate = processed / elapsed if elapsed > 0 else 0
+        print(f"  Progress: {processed:,}/{total:,} {unit} ({processed*100/total:.1f}%) - {rate:,.0f} {unit}/sec", end='\r')
+
+
+def _write_nodes_with_duplicates(nodes_file, num_nodes, batch_size, duplicate_rate, unique_emails, start):
+    """Write the nodes Parquet file, reusing existing emails at duplicate_rate to create duplicate unique keys."""
     schema = pa.schema([
         pa.field("id", pa.int64()),
         pa.field("label", pa.string()),
@@ -68,14 +46,14 @@ def create_parquet_with_deduplication(
         pa.field("score", pa.float64()),
         pa.field("active", pa.bool_()),
     ])
-    
+
     writer = pq.ParquetWriter(nodes_file, schema)
-    
+
     node_id = 1
     for batch_start in range(0, num_nodes, batch_size):
         batch_end = min(batch_start + batch_size, num_nodes)
         batch_size_actual = batch_end - batch_start
-        
+
         ids = []
         labels = []
         emails = []
@@ -83,11 +61,11 @@ def create_parquet_with_deduplication(
         ages = []
         scores = []
         active_flags = []
-        
+
         for i in range(batch_size_actual):
             ids.append(node_id)
             labels.append("Person" if i % 2 == 0 else "Company")
-            
+
             # Create duplicates: reuse emails from earlier nodes
             if random.random() < duplicate_rate and len(unique_emails) > 0:
                 # This is a duplicate - reuse an existing email
@@ -96,15 +74,15 @@ def create_parquet_with_deduplication(
                 # New unique email
                 email = f"user{node_id}@example.com"
                 unique_emails.append(email)
-            
+
             emails.append(email)
             names.append(f"Entity{node_id}")
             ages.append(20 + (node_id % 50))
             scores.append(50.0 + (node_id % 50))
             active_flags.append(node_id % 2 == 0)
-            
+
             node_id += 1
-        
+
         arrays = [
             pa.array(ids, type=pa.int64()),
             pa.array(labels, type=pa.string()),
@@ -114,29 +92,16 @@ def create_parquet_with_deduplication(
             pa.array(scores, type=pa.float64()),
             pa.array(active_flags, type=pa.bool_()),
         ]
-        
+
         batch = pa.record_batch(arrays, schema=schema)
         writer.write_batch(batch)
-        
-        if (batch_start // batch_size) % 10 == 0:
-            elapsed = time.time() - start
-            rate = batch_end / elapsed if elapsed > 0 else 0
-            print(f"  Progress: {batch_end:,}/{num_nodes:,} nodes ({batch_end*100/num_nodes:.1f}%) - {rate:,.0f} nodes/sec", end='\r')
-    
+        _print_batch_progress(batch_start // batch_size, batch_end, num_nodes, start, "nodes")
+
     writer.close()
-    nodes_time = time.time() - start
-    log_memory("After nodes file creation")
-    print(f"\n  Nodes file created in {nodes_time:.2f}s ({num_nodes/nodes_time:,.0f} nodes/sec)")
-    
-    # Force garbage collection
-    gc.collect()
-    log_memory("After nodes file GC")
-    
-    # Create relationships file
-    print("Creating relationships file...")
-    log_memory("Before relationships file creation")
-    start = time.time()
-    
+
+
+def _write_relationships_file(rels_file, num_relationships, batch_size, num_unique_nodes, start):
+    """Write the relationships Parquet file with weight/since properties."""
     rel_schema = pa.schema([
         pa.field("from", pa.int64()),
         pa.field("to", pa.int64()),
@@ -144,26 +109,26 @@ def create_parquet_with_deduplication(
         pa.field("weight", pa.float64()),
         pa.field("since", pa.int64()),
     ])
-    
+
     writer = pq.ParquetWriter(rels_file, rel_schema)
-    
+
     for batch_start in range(0, num_relationships, batch_size):
         batch_end = min(batch_start + batch_size, num_relationships)
         batch_size_actual = batch_end - batch_start
-        
+
         from_ids = []
         to_ids = []
         types = []
         weights = []
         since_years = []
-        
+
         for i in range(batch_size_actual):
             from_ids.append((i % num_unique_nodes) + 1)
             to_ids.append(((i + 1) % num_unique_nodes) + 1)
             types.append("KNOWS" if i % 2 == 0 else "WORKS_FOR")
             weights.append(0.5 + (i % 100) / 100.0)
             since_years.append(2020 + (i % 5))
-        
+
         arrays = [
             pa.array(from_ids, type=pa.int64()),
             pa.array(to_ids, type=pa.int64()),
@@ -171,50 +136,93 @@ def create_parquet_with_deduplication(
             pa.array(weights, type=pa.float64()),
             pa.array(since_years, type=pa.int64()),
         ]
-        
+
         batch = pa.record_batch(arrays, schema=rel_schema)
         writer.write_batch(batch)
-        
-        if (batch_start // batch_size) % 10 == 0:
-            elapsed = time.time() - start
-            rate = batch_end / elapsed if elapsed > 0 else 0
-            print(f"  Progress: {batch_end:,}/{num_relationships:,} rels ({batch_end*100/num_relationships:.1f}%) - {rate:,.0f} rels/sec", end='\r')
-    
+        _print_batch_progress(batch_start // batch_size, batch_end, num_relationships, start, "rels")
+
     writer.close()
+
+
+def create_parquet_with_deduplication(
+    num_nodes=1_000_000,
+    num_relationships=1_000_000,
+    duplicate_rate=0.1,  # 10% of nodes will be duplicates
+    num_properties=3,  # Number of properties per node
+):
+    """Create Parquet files with properties and intentional duplicates for deduplication testing"""
+    print(f"\n{'='*70}")
+    print("Creating Parquet Files with Deduplication Test Data")
+    print(f"{'='*70}")
+    print(f"Nodes: {num_nodes:,}")
+    print(f"Relationships: {num_relationships:,}")
+    print(f"Duplicate rate: {duplicate_rate*100:.1f}%")
+    print(f"Properties per node: {num_properties}")
+    print(f"{'='*70}\n")
+
+    log_memory("Start - Before file creation")
+    temp_dir = tempfile.mkdtemp()
+    nodes_file = os.path.join(temp_dir, "nodes_dedup.parquet")
+    rels_file = os.path.join(temp_dir, "relationships_dedup.parquet")
+
+    # Generate unique keys for deduplication
+    # We'll use email as the unique property
+    num_unique_nodes = int(num_nodes * (1 - duplicate_rate))
+    unique_emails = [f"user{i}@example.com" for i in range(num_unique_nodes)]
+
+    # Create nodes file
+    print("Creating nodes file with duplicates...")
+    log_memory("Before nodes file creation")
+    start = time.time()
+
+    batch_size = 100_000
+    _write_nodes_with_duplicates(nodes_file, num_nodes, batch_size, duplicate_rate, unique_emails, start)
+    nodes_time = time.time() - start
+    log_memory("After nodes file creation")
+    print(f"\n  Nodes file created in {nodes_time:.2f}s ({num_nodes/nodes_time:,.0f} nodes/sec)")
+
+    # Force garbage collection
+    gc.collect()
+    log_memory("After nodes file GC")
+
+    # Create relationships file
+    print("Creating relationships file...")
+    log_memory("Before relationships file creation")
+    start = time.time()
+
+    _write_relationships_file(rels_file, num_relationships, batch_size, num_unique_nodes, start)
     rels_time = time.time() - start
     log_memory("After relationships file creation")
     print(f"\n  Relationships file created in {rels_time:.2f}s ({num_relationships/rels_time:,.0f} rels/sec)")
-    
+
     # Force garbage collection
     gc.collect()
     log_memory("After relationships file GC")
-    
+
     file_size_nodes = os.path.getsize(nodes_file) / (1024 * 1024)  # MB
     file_size_rels = os.path.getsize(rels_file) / (1024 * 1024)  # MB
-    
-    print(f"\nFile sizes:")
+
+    print("\nFile sizes:")
     print(f"  Nodes: {file_size_nodes:,.1f} MB")
     print(f"  Relationships: {file_size_rels:,.1f} MB")
     print(f"  Total: {file_size_nodes + file_size_rels:,.1f} MB")
-    
+
     log_memory("After file creation complete")
-    
+
     return nodes_file, rels_file, temp_dir, num_unique_nodes
 
 
 def benchmark_with_deduplication(nodes_file, rels_file, expected_unique_nodes):
     """Benchmark loading with node deduplication and relationship deduplication"""
     print(f"\n{'='*70}")
-    print(f"Benchmarking Load with Deduplication")
+    print("Benchmarking Load with Deduplication")
     print(f"{'='*70}\n")
-    
+
     log_memory("Before manager creation")
     manager = rcp.RustyChickpeas()
     log_memory("After manager creation")
-    
+
     # Estimate sizes from file metadata
-    nodes_meta = pq.read_metadata(nodes_file)
-    num_nodes_est = nodes_meta.num_rows
     rels_meta = pq.read_metadata(rels_file)
     num_rels_est = rels_meta.num_rows
     log_memory("After reading table metadata")
@@ -291,19 +299,19 @@ def benchmark_with_deduplication(nodes_file, rels_file, expected_unique_nodes):
     total_entities = len(node_ids) + len(rel_ids)
     
     print(f"\n{'='*70}")
-    print(f"Summary (WITH Deduplication)")
+    print("Summary (WITH Deduplication)")
     print(f"{'='*70}")
     print(f"Nodes in file: {len(node_ids):,}")
     print(f"Unique nodes in graph: {snapshot.node_count():,}")
     print(f"Expected unique nodes: ~{expected_unique_nodes:,}")
     print(f"Relationships in file: {len(rel_ids):,}")
     print(f"Unique relationships in graph: {snapshot.relationship_count():,}")
-    print(f"\nTiming:")
+    print("\nTiming:")
     print(f"  Node loading (with dedup): {nodes_load_time:.2f}s")
     print(f"  Relationship loading (with dedup): {rels_load_time:.2f}s")
     print(f"  Finalization: {finalize_time:.2f}s")
     print(f"  Total: {total_time:.2f}s")
-    print(f"\nThroughput:")
+    print("\nThroughput:")
     print(f"  Nodes: {len(node_ids) / nodes_load_time:,.0f} nodes/sec ({len(node_ids) / nodes_load_time / 1e6:.2f}M/sec)")
     print(f"  Relationships: {len(rel_ids) / rels_load_time:,.0f} rels/sec ({len(rel_ids) / rels_load_time / 1e6:.2f}M/sec)")
     print(f"  Combined: {total_entities / total_time:,.0f} entities/sec ({total_entities / total_time / 1e6:.2f}M/sec)")
@@ -315,7 +323,7 @@ def benchmark_with_deduplication(nodes_file, rels_file, expected_unique_nodes):
 def benchmark_without_deduplication(nodes_file, rels_file):
     """Benchmark loading WITHOUT deduplication for comparison"""
     print(f"\n{'='*70}")
-    print(f"Benchmarking Load WITHOUT Deduplication (Baseline)")
+    print("Benchmarking Load WITHOUT Deduplication (Baseline)")
     print(f"{'='*70}\n")
     
     log_memory("Before manager creation (baseline)")
@@ -400,18 +408,18 @@ def benchmark_without_deduplication(nodes_file, rels_file):
     total_entities = len(node_ids) + len(rel_ids)
     
     print(f"\n{'='*70}")
-    print(f"Summary (WITHOUT Deduplication - Baseline)")
+    print("Summary (WITHOUT Deduplication - Baseline)")
     print(f"{'='*70}")
     print(f"Nodes in file: {len(node_ids):,}")
     print(f"Nodes in graph: {snapshot.node_count():,}")
     print(f"Relationships in file: {len(rel_ids):,}")
     print(f"Relationships in graph: {snapshot.relationship_count():,}")
-    print(f"\nTiming:")
+    print("\nTiming:")
     print(f"  Node loading (no dedup): {nodes_load_time:.2f}s")
     print(f"  Relationship loading (no dedup): {rels_load_time:.2f}s")
     print(f"  Finalization: {finalize_time:.2f}s")
     print(f"  Total: {total_time:.2f}s")
-    print(f"\nThroughput:")
+    print("\nThroughput:")
     print(f"  Nodes: {len(node_ids) / nodes_load_time:,.0f} nodes/sec ({len(node_ids) / nodes_load_time / 1e6:.2f}M/sec)")
     print(f"  Relationships: {len(rel_ids) / rels_load_time:,.0f} rels/sec ({len(rel_ids) / rels_load_time / 1e6:.2f}M/sec)")
     print(f"  Combined: {total_entities / total_time:,.0f} entities/sec ({total_entities / total_time / 1e6:.2f}M/sec)")
@@ -464,15 +472,15 @@ def main():
             print("\n" + "="*70)
             print("COMPARISON")
             print("="*70)
-            print(f"Baseline (no dedup):")
+            print("Baseline (no dedup):")
             print(f"  Nodes: {baseline_snapshot.node_count():,}")
             print(f"  Relationships: {baseline_snapshot.relationship_count():,}")
             print(f"  Total time: {baseline_time:.2f}s")
-            print(f"\nWith deduplication:")
+            print("\nWith deduplication:")
             print(f"  Nodes: {dedup_snapshot.node_count():,}")
             print(f"  Relationships: {dedup_snapshot.relationship_count():,}")
             print(f"  Total time: {dedup_time:.2f}s")
-            print(f"\nDeduplication impact:")
+            print("\nDeduplication impact:")
             print(f"  Node reduction: {baseline_snapshot.node_count() - dedup_snapshot.node_count():,} nodes ({((baseline_snapshot.node_count() - dedup_snapshot.node_count()) / baseline_snapshot.node_count() * 100):.1f}%)")
             print(f"  Relationship reduction: {baseline_snapshot.relationship_count() - dedup_snapshot.relationship_count():,} rels ({((baseline_snapshot.relationship_count() - dedup_snapshot.relationship_count()) / baseline_snapshot.relationship_count() * 100):.1f}%)")
             print(f"  Time overhead: {dedup_time - baseline_time:.2f}s ({((dedup_time - baseline_time) / baseline_time * 100):.1f}%)")

@@ -20,7 +20,7 @@ def create_large_parquet_files(num_nodes=1000000, num_relationships=1000000):
     # Create nodes Parquet file
     # Optimize: build arrays directly with PyArrow for better performance
     t1 = time.time()
-    print(f"[TIMING] Building nodes arrays with PyArrow...")
+    print("[TIMING] Building nodes arrays with PyArrow...")
     sys.stdout.flush()
     
     # Use PyArrow arrays directly - much faster than Python lists for large datasets
@@ -36,7 +36,7 @@ def create_large_parquet_files(num_nodes=1000000, num_relationships=1000000):
     nodes_type = pa.array(type_list)
     
     # Name and email - build more efficiently
-    print(f"[TIMING] Building name/email arrays (this may take a moment for 1M+)...")
+    print("[TIMING] Building name/email arrays (this may take a moment for 1M+)...")
     sys.stdout.flush()
     # Use list comprehension but in chunks to show progress
     chunk_size = 100000
@@ -73,7 +73,7 @@ def create_large_parquet_files(num_nodes=1000000, num_relationships=1000000):
     
     # Relationships - build efficiently with PyArrow arrays
     t1 = time.time()
-    print(f"[TIMING] Building relationships arrays with PyArrow...")
+    print("[TIMING] Building relationships arrays with PyArrow...")
     sys.stdout.flush()
     
     rels_from = pa.array(range(1, num_relationships + 1), type=pa.int32())
@@ -87,7 +87,7 @@ def create_large_parquet_files(num_nodes=1000000, num_relationships=1000000):
     
     # Weight and since - build in chunks for large datasets
     if num_relationships > 500000:
-        print(f"[TIMING] Building weight/since arrays in chunks...")
+        print("[TIMING] Building weight/since arrays in chunks...")
         sys.stdout.flush()
         weight_list = []
         since_list = []
@@ -118,13 +118,13 @@ def create_large_parquet_files(num_nodes=1000000, num_relationships=1000000):
     rels_file = tempfile.NamedTemporaryFile(delete=False, suffix=".parquet")
     
     t1 = time.time()
-    print(f"[TIMING] Writing nodes Parquet file...")
+    print("[TIMING] Writing nodes Parquet file...")
     pq.write_table(nodes_table, nodes_file.name)
     nodes_write_time = time.time() - t1
     print(f"[TIMING] Nodes Parquet write: {nodes_write_time:.3f}s")
     
     t1 = time.time()
-    print(f"[TIMING] Writing relationships Parquet file...")
+    print("[TIMING] Writing relationships Parquet file...")
     pq.write_table(rels_table, rels_file.name)
     rels_write_time = time.time() - t1
     print(f"[TIMING] Relationships Parquet write: {rels_write_time:.3f}s")
@@ -145,7 +145,7 @@ def test_builder_bulk_load(num_nodes=1000000, num_relationships=1000000):
     
     try:
         print("\n" + "=" * 70)
-        print(f"GraphSnapshotBuilder Bulk Load Performance Test")
+        print("GraphSnapshotBuilder Bulk Load Performance Test")
         print(f"{num_nodes:,} nodes, {num_relationships:,} relationships")
         print("=" * 70)
         

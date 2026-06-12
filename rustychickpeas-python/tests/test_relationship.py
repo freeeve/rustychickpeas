@@ -89,8 +89,7 @@ class TestRelationshipNodes:
     def test_start_end_consistency(self, node_graph):
         """Test that start and end nodes are consistent"""
         node0 = node_graph.node(0)
-        node1 = node_graph.node(1)
-        
+
         # Get relationship from node 0 to node 1
         rels = node0.relationships(Direction.Outgoing)
         knows_rel = next(rel for rel in rels if rel.end_node().id() == 1)
@@ -216,7 +215,7 @@ class TestRelationshipProperties:
         rel = rels[0]
         # Note: salary was set as int, but might be stored differently
         salary = rel.get_property("salary")
-        assert salary == 100000 or salary == 100000.0
+        assert salary == pytest.approx(100000)
     
     def test_get_property_bool(self, property_graph):
         """Test getting boolean property from relationship"""

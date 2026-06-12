@@ -75,7 +75,7 @@ def test_bulk_load_nodes():
         snapshot = manager.graph_snapshot("test_v1")
         assert snapshot is not None, "Snapshot should be stored in manager"
         
-        print(f"\nSnapshot stored with version: test_v1")
+        print("\nSnapshot stored with version: test_v1")
         print(f"Total nodes in snapshot: {snapshot.node_count():,}")
         
         # Verify some nodes
@@ -143,7 +143,7 @@ def test_bulk_load_relationships():
         snapshot = manager.graph_snapshot("test_v2")
         assert snapshot is not None, "Snapshot should be stored in manager"
         
-        print(f"\nSnapshot stored with version: test_v2")
+        print("\nSnapshot stored with version: test_v2")
         print(f"Total nodes: {snapshot.node_count():,}")
         print(f"Total relationships: {snapshot.relationship_count():,}")
         

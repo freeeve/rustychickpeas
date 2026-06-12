@@ -48,7 +48,7 @@ def get_memory_mb():
         process = psutil.Process(os.getpid())
         mem_info = process.memory_info()
         return mem_info.rss / (1024 * 1024)  # Convert to MB
-    except:
+    except Exception:
         return 0
 
 def log_memory(stage):
@@ -68,7 +68,7 @@ def check_localstack():
                 data = json.loads(resp.read().decode())
                 s3_status = data.get("services", {}).get("s3", "")
                 return s3_status in ["running", "available"]
-    except:
+    except Exception:
         pass
     return False
 
@@ -104,9 +104,9 @@ def ensure_bucket_exists(bucket_name):
             try:
                 s3_client.create_bucket(Bucket=bucket_name)
                 print(f"  Created bucket '{bucket_name}'")
-            except ClientError as create_error:
+            except ClientError:
                 # For LocalStack, bucket might auto-create on first PUT
-                print(f"  Note: Bucket creation may have failed, but LocalStack may auto-create on PUT")
+                print("  Note: Bucket creation may have failed, but LocalStack may auto-create on PUT")
         else:
             raise
 
@@ -123,26 +123,16 @@ def upload_to_s3(local_file, bucket_name, s3_key):
     print(f"  Uploaded in {upload_time:.2f}s ({file_size_mb/upload_time:.1f} MB/s)")
     return f"s3://{bucket_name}/{s3_key}"
 
-def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
-    """Create Parquet files for nodes and relationships"""
-    print(f"\n{'='*70}")
-    print(f"Creating Parquet Files")
-    print(f"{'='*70}")
-    print(f"Nodes: {num_nodes:,}")
-    print(f"Relationships: {num_relationships:,}")
-    print(f"{'='*70}\n")
-    
-    log_memory("Start - Before file creation")
-    temp_dir = tempfile.mkdtemp()
-    nodes_file = os.path.join(temp_dir, "nodes_1m.parquet")
-    rels_file = os.path.join(temp_dir, "relationships_1m.parquet")
-    
-    # Create nodes file
-    print("Creating nodes file...")
-    log_memory("Before nodes file creation")
-    start = time.time()
-    
-    batch_size = 100_000
+def _print_batch_progress(batch_index, processed, total, start, unit):
+    """Print loading throughput every 10th batch as a carriage-return progress line."""
+    if batch_index % 10 == 0:
+        elapsed = time.time() - start
+        rate = processed / elapsed if elapsed > 0 else 0
+        print(f"  Progress: {processed:,}/{total:,} {unit} ({processed*100/total:.1f}%) - {rate:,.0f} {unit}/sec", end='\r')
+
+
+def _write_nodes_file(nodes_file, num_nodes, batch_size, start):
+    """Write the nodes Parquet file in batches with label/name/age/score/active columns."""
     schema = pa.schema([
         pa.field("id", pa.int64()),
         pa.field("label", pa.string()),
@@ -151,20 +141,20 @@ def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
         pa.field("score", pa.float64()),
         pa.field("active", pa.bool_()),
     ])
-    
+
     writer = pq.ParquetWriter(nodes_file, schema)
-    
+
     for batch_start in range(0, num_nodes, batch_size):
         batch_end = min(batch_start + batch_size, num_nodes)
         batch_size_actual = batch_end - batch_start
-        
+
         ids = list(range(batch_start + 1, batch_end + 1))
         labels = ["Person" if i % 2 == 0 else "Company" for i in range(batch_size_actual)]
         names = [f"Entity{i}" for i in range(batch_start + 1, batch_end + 1)]
         ages = [20 + (i % 50) for i in range(batch_start + 1, batch_end + 1)]
         scores = [50.0 + (i % 50) for i in range(batch_start + 1, batch_end + 1)]
         active = [i % 2 == 0 for i in range(batch_start + 1, batch_end + 1)]
-        
+
         arrays = [
             pa.array(ids, type=pa.int64()),
             pa.array(labels, type=pa.string()),
@@ -173,29 +163,16 @@ def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
             pa.array(scores, type=pa.float64()),
             pa.array(active, type=pa.bool_()),
         ]
-        
+
         batch = pa.record_batch(arrays, schema=schema)
         writer.write_batch(batch)
-        
-        if (batch_start // batch_size) % 10 == 0:
-            elapsed = time.time() - start
-            rate = batch_end / elapsed if elapsed > 0 else 0
-            print(f"  Progress: {batch_end:,}/{num_nodes:,} nodes ({batch_end*100/num_nodes:.1f}%) - {rate:,.0f} nodes/sec", end='\r')
-    
+        _print_batch_progress(batch_start // batch_size, batch_end, num_nodes, start, "nodes")
+
     writer.close()
-    nodes_time = time.time() - start
-    log_memory("After nodes file creation")
-    print(f"\n  Nodes file created in {nodes_time:.2f}s ({num_nodes/nodes_time:,.0f} nodes/sec)")
-    
-    # Force garbage collection
-    gc.collect()
-    log_memory("After nodes file GC")
-    
-    # Create relationships file
-    print("Creating relationships file...")
-    log_memory("Before relationships file creation")
-    start = time.time()
-    
+
+
+def _write_rels_file(rels_file, num_relationships, num_nodes, batch_size, start):
+    """Write the relationships Parquet file in batches with type/weight/since columns."""
     rel_schema = pa.schema([
         pa.field("from", pa.int64()),
         pa.field("to", pa.int64()),
@@ -203,19 +180,19 @@ def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
         pa.field("weight", pa.float64()),
         pa.field("since", pa.int64()),
     ])
-    
+
     writer = pq.ParquetWriter(rels_file, rel_schema)
-    
+
     for batch_start in range(0, num_relationships, batch_size):
         batch_end = min(batch_start + batch_size, num_relationships)
         batch_size_actual = batch_end - batch_start
-        
+
         from_ids = list(range(1, batch_size_actual + 1))
         to_ids = [(i % num_nodes) + 1 for i in range(batch_start, batch_end)]
         types = ["KNOWS" if i % 2 == 0 else "WORKS_FOR" for i in range(batch_size_actual)]
         weights = [0.5 + (i % 100) / 100.0 for i in range(batch_size_actual)]
         since_years = [2020 + (i % 5) for i in range(batch_size_actual)]
-        
+
         arrays = [
             pa.array(from_ids, type=pa.int64()),
             pa.array(to_ids, type=pa.int64()),
@@ -223,28 +200,61 @@ def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
             pa.array(weights, type=pa.float64()),
             pa.array(since_years, type=pa.int64()),
         ]
-        
+
         batch = pa.record_batch(arrays, schema=rel_schema)
         writer.write_batch(batch)
-        
-        if (batch_start // batch_size) % 10 == 0:
-            elapsed = time.time() - start
-            rate = batch_end / elapsed if elapsed > 0 else 0
-            print(f"  Progress: {batch_end:,}/{num_relationships:,} rels ({batch_end*100/num_relationships:.1f}%) - {rate:,.0f} rels/sec", end='\r')
-    
+        _print_batch_progress(batch_start // batch_size, batch_end, num_relationships, start, "rels")
+
     writer.close()
+
+
+def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
+    """Create Parquet files for nodes and relationships"""
+    print(f"\n{'='*70}")
+    print("Creating Parquet Files")
+    print(f"{'='*70}")
+    print(f"Nodes: {num_nodes:,}")
+    print(f"Relationships: {num_relationships:,}")
+    print(f"{'='*70}\n")
+
+    log_memory("Start - Before file creation")
+    temp_dir = tempfile.mkdtemp()
+    nodes_file = os.path.join(temp_dir, "nodes_1m.parquet")
+    rels_file = os.path.join(temp_dir, "relationships_1m.parquet")
+
+    # Create nodes file
+    print("Creating nodes file...")
+    log_memory("Before nodes file creation")
+    start = time.time()
+
+    batch_size = 100_000
+    _write_nodes_file(nodes_file, num_nodes, batch_size, start)
+    nodes_time = time.time() - start
+    log_memory("After nodes file creation")
+    print(f"\n  Nodes file created in {nodes_time:.2f}s ({num_nodes/nodes_time:,.0f} nodes/sec)")
+
+    # Force garbage collection
+    gc.collect()
+    log_memory("After nodes file GC")
+
+    # Create relationships file
+    print("Creating relationships file...")
+    log_memory("Before relationships file creation")
+    start = time.time()
+
+    _write_rels_file(rels_file, num_relationships, num_nodes, batch_size, start)
     rels_time = time.time() - start
     log_memory("After relationships file creation")
     print(f"\n  Relationships file created in {rels_time:.2f}s ({num_relationships/rels_time:,.0f} rels/sec)")
-    
+
     # Force garbage collection
     gc.collect()
     log_memory("After relationships file GC")
-    
+
     file_size_nodes = os.path.getsize(nodes_file) / (1024 * 1024)  # MB
     file_size_rels = os.path.getsize(rels_file) / (1024 * 1024)  # MB
-    
-    print(f"\nFile sizes:")
+
+    print("\nFile sizes:")
     print(f"  Nodes: {file_size_nodes:,.1f} MB")
     print(f"  Relationships: {file_size_rels:,.1f} MB")
     print(f"  Total: {file_size_nodes + file_size_rels:,.1f} MB")
@@ -257,7 +267,7 @@ def create_parquet_files(num_nodes=1_000_000, num_relationships=1_000_000):
 def benchmark_s3_load(nodes_s3_path, rels_s3_path):
     """Benchmark loading from S3 using Python API"""
     print(f"\n{'='*70}")
-    print(f"Benchmarking S3 Parquet Load (Python API)")
+    print("Benchmarking S3 Parquet Load (Python API)")
     print(f"{'='*70}\n")
     
     log_memory("Before manager creation")
@@ -266,7 +276,7 @@ def benchmark_s3_load(nodes_s3_path, rels_s3_path):
     
     # Get file metadata (estimate sizes)
     # Note: For S3, we can't easily read metadata without downloading, so we'll estimate
-    print(f"Loading from S3:")
+    print("Loading from S3:")
     print(f"  Nodes: {nodes_s3_path}")
     print(f"  Relationships: {rels_s3_path}")
     
@@ -336,17 +346,17 @@ def benchmark_s3_load(nodes_s3_path, rels_s3_path):
     total_entities = len(node_ids) + len(rel_ids)
     
     print(f"\n{'='*70}")
-    print(f"Summary (S3 Load)")
+    print("Summary (S3 Load)")
     print(f"{'='*70}")
     print(f"Total nodes: {snapshot.node_count():,}")
     print(f"Total relationships: {snapshot.relationship_count():,}")
     print(f"Total entities loaded: {total_entities:,}")
-    print(f"\nTiming:")
+    print("\nTiming:")
     print(f"  Node loading (S3): {nodes_load_time:.2f}s")
     print(f"  Relationship loading (S3): {rels_load_time:.2f}s")
     print(f"  Finalization: {finalize_time:.2f}s")
     print(f"  Total: {total_time:.2f}s")
-    print(f"\nThroughput:")
+    print("\nThroughput:")
     print(f"  Nodes: {len(node_ids) / nodes_load_time:,.0f} nodes/sec ({len(node_ids) / nodes_load_time / 1e6:.2f}M/sec)")
     print(f"  Relationships: {len(rel_ids) / rels_load_time:,.0f} rels/sec ({len(rel_ids) / rels_load_time / 1e6:.2f}M/sec)")
     print(f"  Combined: {total_entities / total_time:,.0f} entities/sec ({total_entities / total_time / 1e6:.2f}M/sec)")
@@ -355,7 +365,8 @@ def benchmark_s3_load(nodes_s3_path, rels_s3_path):
     return snapshot, total_time
 
 
-def main():
+def _parse_args():
+    """Parse benchmark command-line arguments."""
     import argparse
     parser = argparse.ArgumentParser(description="Benchmark loading 1M nodes/rels from S3 Parquet files")
     parser.add_argument("--nodes", type=int, default=1_000_000, help="Number of nodes")
@@ -367,70 +378,67 @@ def main():
     parser.add_argument("--skip-create", action="store_true", help="Skip file creation (use existing local files)")
     parser.add_argument("--nodes-file", type=str, help="Path to existing local nodes file")
     parser.add_argument("--rels-file", type=str, help="Path to existing local relationships file")
-    
-    args = parser.parse_args()
-    
-    # Check if using LocalStack
+    return parser.parse_args()
+
+
+def _set_env_default(key, value):
+    """Set an environment variable only if it is unset or empty."""
+    if not os.environ.get(key):
+        os.environ[key] = value
+
+
+def _configure_aws_env():
+    """Detect LocalStack and populate the AWS env vars the Rust S3 client expects before any load calls."""
     is_localstack = check_localstack()
     if is_localstack:
         print("✓ LocalStack detected")
-        if not os.environ.get("AWS_ENDPOINT_URL"):
-            os.environ["AWS_ENDPOINT_URL"] = "http://localhost:4566"
-        if not os.environ.get("AWS_ACCESS_KEY_ID"):
-            os.environ["AWS_ACCESS_KEY_ID"] = "test"
-        if not os.environ.get("AWS_SECRET_ACCESS_KEY"):
-            os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-        if not os.environ.get("AWS_REGION"):
-            os.environ["AWS_REGION"] = "us-east-1"
+        _set_env_default("AWS_ENDPOINT_URL", "http://localhost:4566")
     else:
         print("⚠ LocalStack not detected - using real AWS S3")
         print("  Make sure AWS credentials are configured (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.)")
-    
-    # Set environment variables for Rust code (needed for S3 client)
-    # These must be set before the Python API calls load_nodes_from_parquet
-    if not os.environ.get("AWS_ENDPOINT_URL") and is_localstack:
-        os.environ["AWS_ENDPOINT_URL"] = "http://localhost:4566"
-    if not os.environ.get("AWS_ACCESS_KEY_ID"):
-        os.environ["AWS_ACCESS_KEY_ID"] = os.environ.get("AWS_ACCESS_KEY_ID", "test")
-    if not os.environ.get("AWS_SECRET_ACCESS_KEY"):
-        os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ.get("AWS_SECRET_ACCESS_KEY", "test")
-    if not os.environ.get("AWS_REGION"):
-        os.environ["AWS_REGION"] = os.environ.get("AWS_REGION", "us-east-1")
+    _set_env_default("AWS_ACCESS_KEY_ID", "test")
+    _set_env_default("AWS_SECRET_ACCESS_KEY", "test")
+    _set_env_default("AWS_REGION", "us-east-1")
     os.environ["AWS_DISABLE_IMDSV1"] = "1"  # Disable metadata service
-    
-    # Create or use existing local files
+
+
+def _resolve_local_files(args):
+    """Return (nodes_file, rels_file, temp_dir), creating Parquet files unless existing ones were supplied."""
     if args.skip_create and args.nodes_file and args.rels_file:
-        nodes_file = args.nodes_file
-        rels_file = args.rels_file
-        temp_dir = None
-    else:
-        nodes_file, rels_file, temp_dir = create_parquet_files(args.nodes, args.relationships)
-    
-    # Upload to S3 or use existing S3 paths
+        return args.nodes_file, args.rels_file, None
+    return create_parquet_files(args.nodes, args.relationships)
+
+
+def _resolve_s3_paths(args, nodes_file, rels_file):
+    """Return (nodes_s3_path, rels_s3_path), uploading the local files unless S3 paths were supplied."""
     if args.skip_upload and args.nodes_s3 and args.rels_s3:
-        nodes_s3_path = args.nodes_s3
-        rels_s3_path = args.rels_s3
-    else:
-        # Ensure bucket exists
-        print(f"\nEnsuring S3 bucket '{args.bucket}' exists...")
-        ensure_bucket_exists(args.bucket)
-        
-        # Upload files
-        print(f"\nUploading files to S3...")
-        nodes_s3_path = upload_to_s3(nodes_file, args.bucket, "nodes_1m.parquet")
-        rels_s3_path = upload_to_s3(rels_file, args.bucket, "relationships_1m.parquet")
-    
+        return args.nodes_s3, args.rels_s3
+    print(f"\nEnsuring S3 bucket '{args.bucket}' exists...")
+    ensure_bucket_exists(args.bucket)
+    print("\nUploading files to S3...")
+    nodes_s3_path = upload_to_s3(nodes_file, args.bucket, "nodes_1m.parquet")
+    rels_s3_path = upload_to_s3(rels_file, args.bucket, "relationships_1m.parquet")
+    return nodes_s3_path, rels_s3_path
+
+
+def main():
+    args = _parse_args()
+    _configure_aws_env()
+
+    nodes_file, rels_file, temp_dir = _resolve_local_files(args)
+    nodes_s3_path, rels_s3_path = _resolve_s3_paths(args, nodes_file, rels_file)
+
     try:
         # Benchmark loading from S3
-        snapshot, total_time = benchmark_s3_load(nodes_s3_path, rels_s3_path)
-        
+        benchmark_s3_load(nodes_s3_path, rels_s3_path)
+
         # Cleanup local files
         if temp_dir:
             import shutil
             print(f"Cleaning up temporary files in {temp_dir}...")
             shutil.rmtree(temp_dir)
             print("Done!")
-        
+
     except Exception as e:
         print(f"Error: {e}")
         import traceback
