@@ -29,12 +29,12 @@ echo ""
 
 # Check for required tools
 if ! command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
-    echo "ERROR: Neither wget nor curl found. Please install one of them."
+    echo "ERROR: Neither wget nor curl found. Please install one of them." >&2
     exit 1
 fi
 
 if ! command -v zstd &> /dev/null && ! command -v unzstd &> /dev/null; then
-    echo "ERROR: zstd or unzstd not found. Please install zstd:"
+    echo "ERROR: zstd or unzstd not found. Please install zstd:" >&2
     echo "  macOS: brew install zstd"
     echo "  Linux: apt-get install zstd  (or yum install zstd)"
     exit 1
@@ -58,7 +58,7 @@ echo "  5. Once staged, copy the download URL"
 echo ""
 read -p "Enter the download URL for SF10 (or press Enter to skip download): " DOWNLOAD_URL
 
-if [ -z "$DOWNLOAD_URL" ]; then
+if [[ -z "$DOWNLOAD_URL" ]]; then
     echo ""
     echo "Skipping download. If you've already downloaded the file, place it as:"
     echo "  ${LDBC_DATA_DIR}/${ARCHIVE_NAME}"
@@ -75,8 +75,8 @@ else
         curl -L --progress-bar -o "${ARCHIVE_NAME}" "${DOWNLOAD_URL}"
     fi
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Download failed"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Download failed" >&2
         exit 1
     fi
     
@@ -84,9 +84,9 @@ else
 fi
 
 # Check if archive exists
-if [ ! -f "${ARCHIVE_NAME}" ]; then
+if [[ ! -f "${ARCHIVE_NAME}" ]]; then
     echo ""
-    echo "ERROR: Archive file not found: ${ARCHIVE_NAME}"
+    echo "ERROR: Archive file not found: ${ARCHIVE_NAME}" >&2
     echo "Please download it first or place it in ${LDBC_DATA_DIR}/"
     exit 1
 fi
@@ -102,18 +102,18 @@ if command -v zstd &> /dev/null; then
 elif command -v unzstd &> /dev/null; then
     tar -xvf "${ARCHIVE_NAME}" --use-compress-program=unzstd
 else
-    echo "ERROR: Cannot find zstd or unzstd for extraction"
+    echo "ERROR: Cannot find zstd or unzstd for extraction" >&2
     exit 1
 fi
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Extraction failed"
+if [[ $? -ne 0 ]]; then
+    echo "ERROR: Extraction failed" >&2
     exit 1
 fi
 
 echo ""
 echo "Step 3: Verify extraction"
-if [ -d "social-network-sf10-bi-parquet" ]; then
+if [[ -d "social-network-sf10-bi-parquet" ]]; then
     echo "✓ SF10 dataset extracted successfully!"
     echo ""
     echo "Dataset location: ${SF10_DIR}"

@@ -26,6 +26,9 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
+# Criterion's per-benchmark statistics file name
+ESTIMATES_JSON = "estimates.json"
+
 # Benchmark groups to track
 BENCHMARK_GROUPS = [
     "builder_add_nodes",
@@ -81,14 +84,14 @@ def extract_benchmark_data(
     search_paths = []
     if baseline_name:
         # Look for baseline-specific directory
-        search_paths.append(criterion_dir / benchmark_group / str(size) / baseline_name / "estimates.json")
+        search_paths.append(criterion_dir / benchmark_group / str(size) / baseline_name / ESTIMATES_JSON)
         # Also check if baseline is stored differently
-        search_paths.append(criterion_dir / benchmark_group / f"{baseline_name}" / str(size) / "new" / "estimates.json")
+        search_paths.append(criterion_dir / benchmark_group / f"{baseline_name}" / str(size) / "new" / ESTIMATES_JSON)
     else:
         # Default: check new (current run) and base (baseline comparison)
-        search_paths.append(criterion_dir / benchmark_group / str(size) / "new" / "estimates.json")
-        search_paths.append(criterion_dir / benchmark_group / str(size) / "base" / "estimates.json")
-    
+        search_paths.append(criterion_dir / benchmark_group / str(size) / "new" / ESTIMATES_JSON)
+        search_paths.append(criterion_dir / benchmark_group / str(size) / "base" / ESTIMATES_JSON)
+
     for json_path in search_paths:
         if json_path.exists():
             try:
@@ -99,10 +102,56 @@ def extract_benchmark_data(
                     if point_estimate:
                         # Convert to milliseconds
                         return point_estimate / 1_000_000
-            except (json.JSONDecodeError, KeyError) as e:
+            except (json.JSONDecodeError, KeyError):
                 continue
-    
+
     return None
+
+
+def collect_criterion_data(
+    criterion_dir: Path, baseline_name: Optional[str]
+) -> Dict[str, Dict[int, float]]:
+    """Collect mean times for all tracked benchmark groups and sizes from a Criterion directory."""
+    data = {}
+    for benchmark_group in BENCHMARK_GROUPS:
+        sizes = BENCHMARK_SIZES.get(benchmark_group, [])
+        group_data = {}
+        for size in sizes:
+            time_ms = extract_benchmark_data(criterion_dir, benchmark_group, size, baseline_name)
+            if time_ms:
+                group_data[size] = time_ms
+        if group_data:
+            data[benchmark_group] = group_data
+    return data
+
+
+def _collect_data_from_checkout(tag: str) -> Dict[str, Dict[int, float]]:
+    """Check out a tag, collect data from its Criterion directory, and restore the original branch."""
+    current_branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    data = {}
+    try:
+        subprocess.run(
+            ["git", "checkout", tag],
+            capture_output=True,
+            check=True,
+        )
+        data = collect_criterion_data(Path("target") / "criterion", None)
+        subprocess.run(
+            ["git", "checkout", current_branch],
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        # Try to return to original branch
+        try:
+            subprocess.run(["git", "checkout", current_branch], capture_output=True)
+        except (subprocess.SubprocessError, OSError):
+            pass
+    return data
 
 
 def collect_data_for_tag(
@@ -110,64 +159,14 @@ def collect_data_for_tag(
 ) -> Dict[str, Dict[int, float]]:
     """
     Collect benchmark data for a specific tag.
-    
+
     If extract_from_tag is True, will checkout the tag and look for existing data,
     or optionally run benchmarks (not implemented yet).
     """
-    data = {}
-    
     if extract_from_tag:
-        # Save current state
-        current_branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        
-        try:
-            # Checkout tag
-            subprocess.run(
-                ["git", "checkout", tag],
-                capture_output=True,
-                check=True,
-            )
-            
-            # Try to extract from this tag's criterion directory
-            tag_criterion_dir = Path("target") / "criterion"
-            for benchmark_group in BENCHMARK_GROUPS:
-                sizes = BENCHMARK_SIZES.get(benchmark_group, [])
-                group_data = {}
-                for size in sizes:
-                    time_ms = extract_benchmark_data(tag_criterion_dir, benchmark_group, size, None)
-                    if time_ms:
-                        group_data[size] = time_ms
-                if group_data:
-                    data[benchmark_group] = group_data
-            
-            # Return to original branch
-            subprocess.run(
-                ["git", "checkout", current_branch],
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            # Try to return to original branch
-            try:
-                subprocess.run(["git", "checkout", current_branch], capture_output=True)
-            except:
-                pass
-    else:
-        # Extract from current criterion directory using tag as baseline name
-        for benchmark_group in BENCHMARK_GROUPS:
-            sizes = BENCHMARK_SIZES.get(benchmark_group, [])
-            group_data = {}
-            for size in sizes:
-                time_ms = extract_benchmark_data(criterion_dir, benchmark_group, size, tag)
-                if time_ms:
-                    group_data[size] = time_ms
-            if group_data:
-                data[benchmark_group] = group_data
-    
-    return data
+        return _collect_data_from_checkout(tag)
+    # Extract from current criterion directory using tag as baseline name
+    return collect_criterion_data(criterion_dir, tag)
 
 
 def format_time_ms(time_ms: float) -> str:
@@ -240,8 +239,8 @@ def generate_mermaid_chart(
         return ""
     
     lines = [
-        f"```mermaid",
-        f"xychart-beta",
+        "```mermaid",
+        "xychart-beta",
         f'    title "{benchmark_group} Performance Over Time"',
         f'    x-axis ["{", ".join(str(s) for s in sizes)}"]',
         f'    y-axis "Time (ms)" 0 --> {max_time * 1.1:.0f}',
@@ -257,6 +256,52 @@ def generate_mermaid_chart(
     lines.append("```")
     lines.append("")
     return "\n".join(lines)
+
+
+def _collect_all_data(
+    criterion_dir: Path, tags: List[str], extract_from_tags: bool
+) -> Dict[str, Dict[str, Dict[int, float]]]:
+    """Collect benchmark data for the current run and the most recent tags."""
+    all_data: Dict[str, Dict[str, Dict[int, float]]] = {}
+
+    # First, try to get current data (from "new" directories)
+    current_data = collect_criterion_data(criterion_dir, None)
+    if current_data:
+        all_data["current"] = current_data
+
+    # Collect data for each tag
+    # When benchmarks are run with BENCHMARK_BASELINE=tag, Criterion saves
+    # the baseline data. We'll try to extract it using the tag name.
+    print(f"Extracting data for {len(tags)} tags...")
+    for tag in tags[:10]:  # Limit to last 10 tags to avoid too much data
+        tag_data = collect_data_for_tag(criterion_dir, tag, extract_from_tags)
+        if tag_data:
+            all_data[tag] = tag_data
+            print(f"  Found data for {tag}")
+
+    return all_data
+
+
+def _generate_benchmark_sections(all_data: Dict[str, Dict[str, Dict[int, float]]]) -> List[str]:
+    """Generate table and chart markdown sections for each benchmark group."""
+    lines = []
+    for benchmark_group in BENCHMARK_GROUPS:
+        sizes = BENCHMARK_SIZES.get(benchmark_group, [])
+        if not sizes:
+            continue
+
+        # Collect data for this group across all tags
+        data_by_tag: Dict[str, Dict[int, float]] = {}
+        for tag, tag_data in all_data.items():
+            if benchmark_group in tag_data:
+                data_by_tag[tag] = tag_data[benchmark_group]
+
+        if data_by_tag:
+            lines.append(generate_markdown_table(benchmark_group, sizes, data_by_tag))
+            # Add chart if we have multiple data points
+            if len(data_by_tag) > 1:
+                lines.append(generate_mermaid_chart(benchmark_group, sizes, data_by_tag))
+    return lines
 
 
 def generate_performance_readme(
@@ -290,35 +335,9 @@ def generate_performance_readme(
         "---",
         "",
     ]
-    
-    # Collect data for all tags
-    all_data: Dict[str, Dict[str, Dict[int, float]]] = {}
-    
-    # First, try to get current data (from "new" directories)
-    current_data = {}
-    for benchmark_group in BENCHMARK_GROUPS:
-        sizes = BENCHMARK_SIZES.get(benchmark_group, [])
-        group_data = {}
-        for size in sizes:
-            time_ms = extract_benchmark_data(criterion_dir, benchmark_group, size, None)
-            if time_ms:
-                group_data[size] = time_ms
-        if group_data:
-            current_data[benchmark_group] = group_data
-    
-    if current_data:
-        all_data["current"] = current_data
-    
-    # Collect data for each tag
-    # When benchmarks are run with BENCHMARK_BASELINE=tag, Criterion saves
-    # the baseline data. We'll try to extract it using the tag name.
-    print(f"Extracting data for {len(tags)} tags...")
-    for tag in tags[:10]:  # Limit to last 10 tags to avoid too much data
-        tag_data = collect_data_for_tag(criterion_dir, tag, extract_from_tags)
-        if tag_data:
-            all_data[tag] = tag_data
-            print(f"  Found data for {tag}")
-    
+
+    all_data = _collect_all_data(criterion_dir, tags, extract_from_tags)
+
     if not all_data:
         lines.extend([
             "## No Benchmark Data Available",
@@ -335,25 +354,8 @@ def generate_performance_readme(
             "",
         ])
     else:
-        # Generate tables and charts for each benchmark group
-        for benchmark_group in BENCHMARK_GROUPS:
-            sizes = BENCHMARK_SIZES.get(benchmark_group, [])
-            if not sizes:
-                continue
-            
-            # Collect data for this group across all tags
-            data_by_tag: Dict[str, Dict[int, float]] = {}
-            for tag, tag_data in all_data.items():
-                if benchmark_group in tag_data:
-                    data_by_tag[tag] = tag_data[benchmark_group]
-            
-            if data_by_tag:
-                lines.append(generate_markdown_table(benchmark_group, sizes, data_by_tag))
-                # Add chart if we have multiple data points
-                if len(data_by_tag) > 1:
-                    lines.append(generate_mermaid_chart(benchmark_group, sizes, data_by_tag))
-    
-    # Write output
+        lines.extend(_generate_benchmark_sections(all_data))
+
     output_path.write_text("\n".join(lines))
     print(f"Generated performance README: {output_path}")
 

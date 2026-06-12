@@ -18,7 +18,7 @@ echo ""
 
 # Check output directory
 OUT_DIR="/Users/efreeman/rustychickpeas/ldbc_snb_datagen_spark/out"
-if [ -d "$OUT_DIR" ]; then
+if [[ -d "$OUT_DIR" ]]; then
     echo "✓ Output directory exists: $OUT_DIR"
     
     # Count files generated
@@ -46,7 +46,7 @@ echo ""
 
 # Check log file
 LOG_FILE="/tmp/ldbc_gen_output.log"
-if [ -f "$LOG_FILE" ]; then
+if [[ -f "$LOG_FILE" ]]; then
     echo "✓ Log file: $LOG_FILE"
     LOG_SIZE=$(du -h "$LOG_FILE" | cut -f1)
     echo "  Log size: $LOG_SIZE"

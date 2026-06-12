@@ -29,12 +29,12 @@ echo ""
 
 # Check for required tools
 if ! command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
-    echo "ERROR: Neither wget nor curl found. Please install one of them."
+    echo "ERROR: Neither wget nor curl found. Please install one of them." >&2
     exit 1
 fi
 
 if ! command -v zstd &> /dev/null && ! command -v unzstd &> /dev/null; then
-    echo "ERROR: zstd or unzstd not found. Please install zstd:"
+    echo "ERROR: zstd or unzstd not found. Please install zstd:" >&2
     echo "  macOS: brew install zstd"
     echo "  Linux: apt-get install zstd  (or yum install zstd)"
     exit 1
@@ -45,10 +45,10 @@ mkdir -p "${LDBC_DATA_DIR}"
 cd "${LDBC_DATA_DIR}"
 
 # Check if already downloaded
-if [ -f "${ARCHIVE_NAME}" ]; then
+if [[ -f "${ARCHIVE_NAME}" ]]; then
     echo "Archive already exists: ${ARCHIVE_NAME}"
     read -p "Re-download? (y/N): " REDOWNLOAD
-    if [ "$REDOWNLOAD" != "y" ] && [ "$REDOWNLOAD" != "Y" ]; then
+    if [[ "$REDOWNLOAD" != "y" ]] && [[ "$REDOWNLOAD" != "Y" ]]; then
         echo "Skipping download, using existing file."
     else
         rm -f "${ARCHIVE_NAME}"
@@ -56,11 +56,11 @@ if [ -f "${ARCHIVE_NAME}" ]; then
 fi
 
 # Check if already extracted
-if [ -d "social-network-sf1-bi-parquet" ]; then
+if [[ -d "social-network-sf1-bi-parquet" ]]; then
     echo ""
     echo "Dataset already extracted at: social-network-sf1-bi-parquet"
     read -p "Re-extract? (y/N): " REEXTRACT
-    if [ "$REEXTRACT" != "y" ] && [ "$REEXTRACT" != "Y" ]; then
+    if [[ "$REEXTRACT" != "y" ]] && [[ "$REEXTRACT" != "Y" ]]; then
         echo "Skipping extraction."
         echo ""
         echo "Dataset location: ${SF1_DIR}"
@@ -73,7 +73,7 @@ if [ -d "social-network-sf1-bi-parquet" ]; then
 fi
 
 # Download if needed
-if [ ! -f "${ARCHIVE_NAME}" ]; then
+if [[ ! -f "${ARCHIVE_NAME}" ]]; then
     echo "Step 1: Downloading SF1 dataset from SURF repository..."
     echo "URL: ${DOWNLOAD_URL}"
     echo ""
@@ -88,12 +88,12 @@ if [ ! -f "${ARCHIVE_NAME}" ]; then
         
         # Check if file needs staging and handle it (same logic as official LDBC script)
         while curl --silent --head "${DOWNLOAD_URL}" | grep -q 'HTTP/1.1 409 Conflict'; do
-            if [ "$STAGING_INITIATED" = false ]; then
+            if [[ "$STAGING_INITIATED" = false ]]; then
                 echo "Data set is not staged, attempting to stage..."
                 # Extract staging URL using the same pattern as official script
                 STAGING_URL=$(curl --silent "${DOWNLOAD_URL}" | grep -Eo 'https:\\/\\/repository.surfsara.nl\\/api\\/objects\\/cwi\\/[A-Za-z0-9_-]+\\/stage\\/[0-9]+' | sed 's#\\##g' | head -1)
                 
-                if [ -z "${STAGING_URL}" ]; then
+                if [[ -z "${STAGING_URL}" ]]; then
                     echo "Could not retrieve staging URL, exiting..."
                     echo ""
                     echo "Please manually stage the dataset by visiting:"
@@ -121,10 +121,10 @@ if [ ! -f "${ARCHIVE_NAME}" ]; then
         wget --progress=bar:force -O "${ARCHIVE_NAME}" "${DOWNLOAD_URL}"
     fi
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Download failed"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: Download failed" >&2
         echo ""
-        echo "If you got a 409 Conflict error, the dataset needs to be staged."
+        echo "If you got a 409 Conflict error, the dataset needs to be staged." >&2
         echo "Please visit: ${DOWNLOAD_URL}"
         echo "and click 'Request' to stage it, then run this script again."
         exit 1
@@ -144,24 +144,24 @@ if command -v zstd &> /dev/null; then
 elif command -v unzstd &> /dev/null; then
     tar -xvf "${ARCHIVE_NAME}" --use-compress-program=unzstd
 else
-    echo "ERROR: Cannot find zstd or unzstd for extraction"
+    echo "ERROR: Cannot find zstd or unzstd for extraction" >&2
     exit 1
 fi
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Extraction failed"
+if [[ $? -ne 0 ]]; then
+    echo "ERROR: Extraction failed" >&2
     exit 1
 fi
 
 echo ""
 echo "Step 3: Verify extraction"
 # The extracted directory name may vary, check for common patterns
-if [ -d "social-network-sf1-bi-parquet" ]; then
+if [[ -d "social-network-sf1-bi-parquet" ]]; then
     EXTRACTED_DIR="social-network-sf1-bi-parquet"
-elif [ -d "bi-sf1-composite-merged-fk" ]; then
+elif [[ -d "bi-sf1-composite-merged-fk" ]]; then
     EXTRACTED_DIR="bi-sf1-composite-merged-fk"
     # Check if we need to look inside for the actual data
-    if [ -d "${EXTRACTED_DIR}/graphs" ]; then
+    if [[ -d "${EXTRACTED_DIR}/graphs" ]]; then
         echo "Found graphs directory inside ${EXTRACTED_DIR}"
     fi
 else
@@ -173,7 +173,7 @@ else
     EXTRACTED_DIR=""
 fi
 
-if [ -n "$EXTRACTED_DIR" ]; then
+if [[ -n "$EXTRACTED_DIR" ]]; then
     echo "✓ SF1 dataset extracted successfully!"
     echo ""
     echo "Dataset location: ${LDBC_DATA_DIR}/${EXTRACTED_DIR}"

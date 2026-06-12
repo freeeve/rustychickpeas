@@ -12,7 +12,7 @@ echo ""
 
 # Step 1: Run benchmarks
 echo "Step 1: Running benchmarks..."
-if [ -n "$VERSION_TAG" ]; then
+if [[ -n "$VERSION_TAG" ]]; then
     echo "  Using version tag: $VERSION_TAG"
     export BENCHMARK_BASELINE="$VERSION_TAG"
 fi

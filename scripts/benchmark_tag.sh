@@ -5,7 +5,7 @@
 
 set -e
 
-if [ -z "$1" ]; then
+if [[ -z "$1" ]]; then
     echo "Usage: $0 <tag_name>"
     echo "Example: $0 v0.4.0"
     exit 1
@@ -17,7 +17,7 @@ echo "Running benchmarks for tag: $TAG"
 
 # Check if tag exists
 if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-    echo "Error: Tag $TAG does not exist"
+    echo "Error: Tag $TAG does not exist" >&2
     exit 1
 fi
 

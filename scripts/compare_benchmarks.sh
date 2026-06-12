@@ -5,7 +5,7 @@
 
 set -e
 
-if [ -z "$1" ] || [ -z "$2" ]; then
+if [[ -z "$1" ]] || [[ -z "$2" ]]; then
     echo "Usage: $0 <baseline_tag> <current_tag>"
     echo "Example: $0 v0.3.0 v0.4.0"
     exit 1
@@ -18,12 +18,12 @@ echo "Comparing benchmarks: $BASELINE_TAG (baseline) vs $CURRENT_TAG (current)"
 
 # Check if tags exist
 if ! git rev-parse "$BASELINE_TAG" >/dev/null 2>&1; then
-    echo "Error: Tag $BASELINE_TAG does not exist"
+    echo "Error: Tag $BASELINE_TAG does not exist" >&2
     exit 1
 fi
 
 if ! git rev-parse "$CURRENT_TAG" >/dev/null 2>&1; then
-    echo "Error: Tag $CURRENT_TAG does not exist"
+    echo "Error: Tag $CURRENT_TAG does not exist" >&2
     exit 1
 fi
 

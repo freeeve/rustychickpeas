@@ -48,6 +48,10 @@ BENCHMARK_GROUPS = [
     "snapshot_get_nodes_with_property",
 ]
 
+# Markdown code-fence fragments used in the generated README
+BASH_FENCE = "   ```bash"
+CODE_FENCE = "   ```"
+
 # Sizes to track for each benchmark
 BENCHMARK_SIZES = {
     "builder_add_nodes": [10000, 100000],
@@ -170,8 +174,8 @@ def generate_mermaid_chart(
         return ""
     
     lines = [
-        f"```mermaid",
-        f"xychart-beta",
+        "```mermaid",
+        "xychart-beta",
         f'    title "{benchmark_group} Performance Over Time"',
         f'    x-axis ["{", ".join(str(s) for s in sizes)}"]',
         f'    y-axis "Time (ms)" 0 --> {max_time * 1.1:.0f}',
@@ -199,7 +203,7 @@ def create_comparison_chart_png(
     if not HAS_MATPLOTLIB or not data_by_version or len(data_by_version) < 2:
         return None
     
-    fig, ax = plt.subplots(figsize=(12, 6))
+    _, ax = plt.subplots(figsize=(12, 6))
     
     sorted_versions = sorted(data_by_version.keys(), key=parse_version)
     
@@ -231,40 +235,70 @@ def create_comparison_chart_png(
     return output_path
 
 
+def _extract_group_sizes(group_metrics: Dict) -> Dict[int, float]:
+    """Extract size -> time mapping for one benchmark group, preferring mean_ms over median_ms."""
+    group_data = {}
+    for size_str, metrics in group_metrics.items():
+        try:
+            size = int(size_str)
+            time_ms = metrics.get("mean_ms") or metrics.get("median_ms")
+            if time_ms:
+                group_data[size] = time_ms
+        except (ValueError, KeyError):
+            continue
+    return group_data
+
+
+def _extract_version_data(benchmarks: Dict) -> Dict[str, Dict[int, float]]:
+    """Extract per-group benchmark data for a single version's JSON payload."""
+    version_data = {}
+    for benchmark_group in BENCHMARK_GROUPS:
+        if benchmark_group not in benchmarks:
+            continue
+        group_data = _extract_group_sizes(benchmarks[benchmark_group])
+        if group_data:
+            version_data[benchmark_group] = group_data
+    return version_data
+
+
 def collect_data_from_files(benchmark_files: List[Tuple[str, Path]]) -> Dict[str, Dict[str, Dict[int, float]]]:
     """Collect benchmark data from all JSON files."""
     all_data = {}
-    
     for version, file_path in benchmark_files:
         data = load_benchmark_file(file_path)
         if not data or "benchmarks" not in data:
             continue
-        
-        version_data = {}
-        benchmarks = data["benchmarks"]
-        
-        for benchmark_group in BENCHMARK_GROUPS:
-            if benchmark_group not in benchmarks:
-                continue
-            
-            group_data = {}
-            for size_str, metrics in benchmarks[benchmark_group].items():
-                try:
-                    size = int(size_str)
-                    # Use mean_ms if available, fall back to median_ms
-                    time_ms = metrics.get("mean_ms") or metrics.get("median_ms")
-                    if time_ms:
-                        group_data[size] = time_ms
-                except (ValueError, KeyError):
-                    continue
-            
-            if group_data:
-                version_data[benchmark_group] = group_data
-        
+        version_data = _extract_version_data(data["benchmarks"])
         if version_data:
             all_data[version] = version_data
-    
     return all_data
+
+
+def _collect_group_across_versions(
+    all_data: Dict[str, Dict[str, Dict[int, float]]],
+    benchmark_group: str,
+) -> Dict[str, Dict[int, float]]:
+    """Collect one benchmark group's data across all versions."""
+    data_by_version: Dict[str, Dict[int, float]] = {}
+    for version, version_data in all_data.items():
+        if benchmark_group in version_data:
+            data_by_version[version] = version_data[benchmark_group]
+    return data_by_version
+
+
+def _generate_benchmark_sections(all_data: Dict[str, Dict[str, Dict[int, float]]]) -> List[str]:
+    """Generate table and chart markdown sections for each benchmark group."""
+    lines = []
+    for benchmark_group in BENCHMARK_GROUPS:
+        sizes = BENCHMARK_SIZES.get(benchmark_group, [])
+        if not sizes:
+            continue
+        data_by_version = _collect_group_across_versions(all_data, benchmark_group)
+        if data_by_version:
+            lines.append(generate_markdown_table(benchmark_group, sizes, data_by_version))
+            if len(data_by_version) > 1:
+                lines.append(generate_mermaid_chart(benchmark_group, sizes, data_by_version))
+    return lines
 
 
 def generate_performance_readme(
@@ -285,24 +319,24 @@ def generate_performance_readme(
         "## How to Update",
         "",
         "1. Run benchmarks:",
-        "   ```bash",
+        BASH_FENCE,
         "   cargo bench",
-        "   ```",
+        CODE_FENCE,
         "",
         "2. Save results to JSON:",
-        "   ```bash",
+        BASH_FENCE,
         "   ./scripts/save_benchmark_results.py",
-        "   ```",
+        CODE_FENCE,
         "",
         "3. Generate this README and charts:",
-        "   ```bash",
+        BASH_FENCE,
         "   ./scripts/generate_benchmark_charts.py --update-readme",
-        "   ```",
+        CODE_FENCE,
         "",
         "---",
         "",
     ]
-    
+
     if not all_data:
         lines.extend([
             "## No Benchmark Data Available",
@@ -315,27 +349,35 @@ def generate_performance_readme(
             "",
         ])
     else:
-        # Generate tables and charts for each benchmark group
-        for benchmark_group in BENCHMARK_GROUPS:
-            sizes = BENCHMARK_SIZES.get(benchmark_group, [])
-            if not sizes:
-                continue
-            
-            # Collect data for this group across all versions
-            data_by_version: Dict[str, Dict[int, float]] = {}
-            for version, version_data in all_data.items():
-                if benchmark_group in version_data:
-                    data_by_version[version] = version_data[benchmark_group]
-            
-            if data_by_version:
-                lines.append(generate_markdown_table(benchmark_group, sizes, data_by_version))
-                # Add chart if we have multiple data points
-                if len(data_by_version) > 1:
-                    lines.append(generate_mermaid_chart(benchmark_group, sizes, data_by_version))
-    
-    # Write output
+        lines.extend(_generate_benchmark_sections(all_data))
+
     output_path.write_text("\n".join(lines))
     print(f"Generated performance README: {output_path}")
+
+
+def _generate_png_charts(
+    all_data: Dict[str, Dict[str, Dict[int, float]]],
+    output_dir: Path,
+) -> None:
+    """Generate PNG comparison charts for all benchmark groups with multi-version data."""
+    if not HAS_MATPLOTLIB:
+        print("\nSkipping PNG chart generation (matplotlib not available)")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print("\nGenerating comparison charts...")
+
+    for benchmark_group in BENCHMARK_GROUPS:
+        sizes = BENCHMARK_SIZES.get(benchmark_group, [])
+        if not sizes:
+            continue
+        data_by_version = _collect_group_across_versions(all_data, benchmark_group)
+        if len(data_by_version) > 1:
+            chart_path = create_comparison_chart_png(
+                benchmark_group, sizes, data_by_version, output_dir
+            )
+            if chart_path:
+                print(f"  Created: {chart_path}")
 
 
 def main():
@@ -397,30 +439,7 @@ def main():
         generate_performance_readme(all_data, readme_path)
     
     if args.compare or args.update_readme:
-        # Generate PNG charts for all versions
-        if HAS_MATPLOTLIB:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            print(f"\nGenerating comparison charts...")
-            
-            for benchmark_group in BENCHMARK_GROUPS:
-                sizes = BENCHMARK_SIZES.get(benchmark_group, [])
-                if not sizes:
-                    continue
-                
-                # Collect data for this group
-                data_by_version: Dict[str, Dict[int, float]] = {}
-                for version, version_data in all_data.items():
-                    if benchmark_group in version_data:
-                        data_by_version[version] = version_data[benchmark_group]
-                
-                if len(data_by_version) > 1:
-                    chart_path = create_comparison_chart_png(
-                        benchmark_group, sizes, data_by_version, output_dir
-                    )
-                    if chart_path:
-                        print(f"  Created: {chart_path}")
-        else:
-            print("\nSkipping PNG chart generation (matplotlib not available)")
+        _generate_png_charts(all_data, output_dir)
 
 
 if __name__ == "__main__":

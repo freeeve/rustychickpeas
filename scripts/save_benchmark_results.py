@@ -18,6 +18,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
+# Criterion's per-benchmark statistics file name
+ESTIMATES_JSON = "estimates.json"
+
 # Benchmark groups to track
 BENCHMARK_GROUPS = [
     "builder_add_nodes",
@@ -100,10 +103,49 @@ def get_system_info() -> Dict[str, str]:
                         if "model name" in line:
                             info["cpu"] = line.split(":")[1].strip()
                             break
-        except:
+        except (subprocess.CalledProcessError, OSError, IndexError):
             pass
     
     return info
+
+
+def _estimate_search_paths(
+    criterion_dir: Path, benchmark_group: str, size: int, baseline_name: Optional[str]
+) -> List[Path]:
+    """Build the candidate estimates.json paths for a benchmark, preferring baseline-specific locations."""
+    if baseline_name:
+        return [
+            criterion_dir / benchmark_group / str(size) / baseline_name / ESTIMATES_JSON,
+            criterion_dir / benchmark_group / baseline_name / str(size) / "new" / ESTIMATES_JSON,
+        ]
+    return [
+        criterion_dir / benchmark_group / str(size) / "new" / ESTIMATES_JSON,
+        criterion_dir / benchmark_group / str(size) / "base" / ESTIMATES_JSON,
+    ]
+
+
+def _parse_estimates(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Convert Criterion estimates JSON (nanoseconds) into millisecond statistics."""
+    mean = data.get("mean", {})
+    median = data.get("median", {})
+    std_dev = data.get("std_dev", {})
+
+    result = {}
+
+    if "point_estimate" in mean:
+        result["mean_ms"] = mean["point_estimate"] / 1_000_000
+        if "confidence_interval" in mean:
+            ci = mean["confidence_interval"]
+            result["mean_ci_lower_ms"] = ci.get("lower_bound", 0) / 1_000_000
+            result["mean_ci_upper_ms"] = ci.get("upper_bound", 0) / 1_000_000
+
+    if "point_estimate" in median:
+        result["median_ms"] = median["point_estimate"] / 1_000_000
+
+    if "point_estimate" in std_dev:
+        result["std_dev_ms"] = std_dev["point_estimate"] / 1_000_000
+
+    return result if result else None
 
 
 def extract_benchmark_data(
@@ -111,81 +153,50 @@ def extract_benchmark_data(
 ) -> Optional[Dict[str, Any]]:
     """
     Extract benchmark data from Criterion JSON file.
-    
+
     Returns a dict with mean, median, and other statistics in milliseconds.
     """
-    search_paths = []
-    if baseline_name:
-        # Look for baseline-specific directory
-        search_paths.append(criterion_dir / benchmark_group / str(size) / baseline_name / "estimates.json")
-        search_paths.append(criterion_dir / benchmark_group / f"{baseline_name}" / str(size) / "new" / "estimates.json")
-    else:
-        # Default: check new (current run) and base (baseline comparison)
-        search_paths.append(criterion_dir / benchmark_group / str(size) / "new" / "estimates.json")
-        search_paths.append(criterion_dir / benchmark_group / str(size) / "base" / "estimates.json")
-    
-    for json_path in search_paths:
+    for json_path in _estimate_search_paths(criterion_dir, benchmark_group, size, baseline_name):
         if json_path.exists():
             try:
                 with open(json_path) as f:
-                    data = json.load(f)
-                    
-                    # Extract statistics
-                    mean = data.get("mean", {})
-                    median = data.get("median", {})
-                    std_dev = data.get("std_dev", {})
-                    
-                    result = {}
-                    
-                    if "point_estimate" in mean:
-                        result["mean_ms"] = mean["point_estimate"] / 1_000_000
-                        if "confidence_interval" in mean:
-                            ci = mean["confidence_interval"]
-                            result["mean_ci_lower_ms"] = ci.get("lower_bound", 0) / 1_000_000
-                            result["mean_ci_upper_ms"] = ci.get("upper_bound", 0) / 1_000_000
-                    
-                    if "point_estimate" in median:
-                        result["median_ms"] = median["point_estimate"] / 1_000_000
-                    
-                    if "point_estimate" in std_dev:
-                        result["std_dev_ms"] = std_dev["point_estimate"] / 1_000_000
-                    
-                    return result if result else None
-            except (json.JSONDecodeError, KeyError) as e:
+                    return _parse_estimates(json.load(f))
+            except (json.JSONDecodeError, KeyError):
                 continue
-    
+
     return None
+
+
+def _collect_group_data(criterion_dir: Path, benchmark_group: str) -> Dict[int, Dict[str, Any]]:
+    """Collect benchmark data for every size directory in a benchmark group, preferring "new" over "base"."""
+    group_data = {}
+    for size_dir in (criterion_dir / benchmark_group).iterdir():
+        if not size_dir.is_dir():
+            continue
+
+        try:
+            size = int(size_dir.name)
+        except ValueError:
+            continue
+
+        benchmark_data = extract_benchmark_data(criterion_dir, benchmark_group, size, None)
+        if benchmark_data:
+            group_data[size] = benchmark_data
+    return group_data
 
 
 def collect_all_benchmark_data(criterion_dir: Path) -> Dict[str, Dict[int, Dict[str, Any]]]:
     """Collect all benchmark data from Criterion directory."""
     data = {}
-    
+
     for benchmark_group in BENCHMARK_GROUPS:
-        group_dir = criterion_dir / benchmark_group
-        if not group_dir.exists():
+        if not (criterion_dir / benchmark_group).exists():
             continue
-        
-        group_data = {}
-        
-        # Look for size directories
-        for size_dir in group_dir.iterdir():
-            if not size_dir.is_dir():
-                continue
-            
-            try:
-                size = int(size_dir.name)
-            except ValueError:
-                continue
-            
-            # Try to extract data (prefer "new" over "base")
-            benchmark_data = extract_benchmark_data(criterion_dir, benchmark_group, size, None)
-            if benchmark_data:
-                group_data[size] = benchmark_data
-        
+
+        group_data = _collect_group_data(criterion_dir, benchmark_group)
         if group_data:
             data[benchmark_group] = group_data
-    
+
     return data
 
 
@@ -194,8 +205,8 @@ def save_benchmark_results(
     criterion_dir: Path,
     output_dir: Path,
     system_info: Dict[str, str],
-) -> Path:
-    """Save benchmark results to a versioned JSON file."""
+) -> Optional[Path]:
+    """Save benchmark results to a versioned JSON file, or return None when no data is found."""
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Collect all benchmark data
@@ -265,10 +276,10 @@ def main():
     output_file = save_benchmark_results(version, criterion_dir, output_dir, system_info)
     
     if output_file:
-        print(f"\nTo generate charts, run:")
+        print("\nTo generate charts, run:")
         print(f"  ./scripts/generate_benchmark_charts.py --version {version}")
-        print(f"\nOr to compare across versions:")
-        print(f"  ./scripts/generate_benchmark_charts.py --compare")
+        print("\nOr to compare across versions:")
+        print("  ./scripts/generate_benchmark_charts.py --compare")
 
 
 if __name__ == "__main__":

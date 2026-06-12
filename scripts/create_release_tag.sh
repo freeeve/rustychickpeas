@@ -13,8 +13,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Check if version is provided
-if [ -z "$1" ]; then
-    echo -e "${RED}Error: Version is required${NC}"
+if [[ -z "$1" ]]; then
+    echo -e "${RED}Error: Version is required${NC}" >&2
     echo "Usage: $0 <version> [message]"
     echo "Example: $0 v0.1.0 \"Release version 0.1.0\""
     exit 1
@@ -35,7 +35,7 @@ fi
 
 # Check if tag already exists
 if git rev-parse "$VERSION" >/dev/null 2>&1; then
-    echo -e "${RED}Error: Tag '$VERSION' already exists${NC}"
+    echo -e "${RED}Error: Tag '$VERSION' already exists${NC}" >&2
     echo "To delete and recreate:"
     echo "  git tag -d $VERSION"
     echo "  git push origin :refs/tags/$VERSION"
@@ -89,7 +89,7 @@ else
 fi
 
 # Verify the tag
-if [ -n "$SIGN_FLAG" ]; then
+if [[ -n "$SIGN_FLAG" ]]; then
     echo -e "${GREEN}Verifying tag signature...${NC}"
     if git tag -v "$VERSION" >/dev/null 2>&1; then
         echo -e "${GREEN}✓ Tag signature verified${NC}"

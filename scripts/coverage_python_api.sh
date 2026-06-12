@@ -106,16 +106,14 @@ cargo tarpaulin \
 }
 
 # Move lcov.info if it's in the root
-if [ -f lcov.info ]; then
-    if [ ! -f coverage/python-api/lcov.info ]; then
-        mv lcov.info coverage/python-api/lcov.info
-    fi
+if [[ -f lcov.info && ! -f coverage/python-api/lcov.info ]]; then
+    mv lcov.info coverage/python-api/lcov.info
 fi
 
 # Filter LCOV file to ensure it's valid
-if [ -f coverage/python-api/lcov.info ]; then
+if [[ -f coverage/python-api/lcov.info ]]; then
     grep -E '^(SF:|TN:|FNF:|FNH:|FNDA:|DA:|LF:|LH:|BRDA:|BRF:|BRH:|end_of_record)' coverage/python-api/lcov.info > coverage/python-api/lcov.info.tmp || true
-    if [ -s coverage/python-api/lcov.info.tmp ]; then
+    if [[ -s coverage/python-api/lcov.info.tmp ]]; then
         mv coverage/python-api/lcov.info.tmp coverage/python-api/lcov.info
     fi
 fi

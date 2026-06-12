@@ -43,15 +43,15 @@ echo ""
 cd rustychickpeas-python
 
 # Check if venv exists, create if not
-if [ ! -d ".venv" ]; then
+if [[ ! -d ".venv" ]]; then
     echo "Creating Python virtual environment..."
     python -m venv .venv
 fi
 
 # Activate venv
-if [ -f ".venv/bin/activate" ]; then
+if [[ -f ".venv/bin/activate" ]]; then
     source .venv/bin/activate
-elif [ -f ".venv/Scripts/activate" ]; then
+elif [[ -f ".venv/Scripts/activate" ]]; then
     source .venv/Scripts/activate
 else
     echo "⚠️  Warning: Could not find venv activation script"
@@ -83,7 +83,7 @@ else
     echo ""
     echo "📊 Test Summary:"
     echo ""
-    if [ "$RUST_TESTS_PASSED" = true ]; then
+    if [[ "$RUST_TESTS_PASSED" = true ]]; then
         echo "  ✅ Rust tests: PASSED"
     else
         echo "  ❌ Rust tests: FAILED"
@@ -118,13 +118,13 @@ echo ""
 echo "📊 Test Summary:"
 echo ""
 
-if [ "$RUST_TESTS_PASSED" = true ]; then
+if [[ "$RUST_TESTS_PASSED" = true ]]; then
     echo "  ✅ Rust tests: PASSED"
 else
     echo "  ❌ Rust tests: FAILED"
 fi
 
-if [ "$PYTHON_TESTS_PASSED" = true ]; then
+if [[ "$PYTHON_TESTS_PASSED" = true ]]; then
     echo "  ✅ Python tests: PASSED"
 else
     echo "  ❌ Python tests: FAILED"
@@ -132,7 +132,7 @@ fi
 
 echo ""
 
-if [ "$RUST_TESTS_PASSED" = true ] && [ "$PYTHON_TESTS_PASSED" = true ]; then
+if [[ "$RUST_TESTS_PASSED" = true ]] && [[ "$PYTHON_TESTS_PASSED" = true ]]; then
     echo "🎉 All tests passed!"
     exit 0
 else

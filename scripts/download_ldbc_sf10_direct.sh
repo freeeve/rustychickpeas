@@ -12,14 +12,14 @@ echo "=== LDBC SNB SF10 Direct Download ==="
 echo ""
 
 # Check if already extracted
-if [ -d "${TARGET_DIR}" ]; then
+if [[ -d "${TARGET_DIR}" ]]; then
     echo "✓ SF10 dataset already exists at: ${TARGET_DIR}"
     echo "Skipping download."
     exit 0
 fi
 
 # Check if archive already exists
-if [ -f "${LDBC_DATA_DIR}/${ARCHIVE_NAME}" ]; then
+if [[ -f "${LDBC_DATA_DIR}/${ARCHIVE_NAME}" ]]; then
     echo "Archive found: ${LDBC_DATA_DIR}/${ARCHIVE_NAME}"
     echo "Extracting..."
     cd "${LDBC_DATA_DIR}"
@@ -42,20 +42,20 @@ echo ""
 echo "Or if you have the URL now, provide it:"
 read -p "Download URL (or press Enter to skip): " DOWNLOAD_URL
 
-if [ -n "$DOWNLOAD_URL" ]; then
+if [[ -n "$DOWNLOAD_URL" ]]; then
     echo ""
     echo "Downloading SF10 dataset (this may take hours for 20GB)..."
     mkdir -p "${LDBC_DATA_DIR}"
     cd "${LDBC_DATA_DIR}"
     
     curl -L --progress-bar -o "${ARCHIVE_NAME}" "${DOWNLOAD_URL}" || {
-        echo "ERROR: Download failed"
+        echo "ERROR: Download failed" >&2
         exit 1
     }
     
     echo "Download complete! Extracting..."
     tar -xvf "${ARCHIVE_NAME}" --use-compress-program=zstd || {
-        echo "ERROR: Extraction failed"
+        echo "ERROR: Extraction failed" >&2
         exit 1
     }
     

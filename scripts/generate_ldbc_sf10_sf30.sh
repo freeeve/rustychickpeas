@@ -12,12 +12,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LDBC_DATA_DIR="${LDBC_DATA_DIR:-${PROJECT_ROOT}/ldbc_data}"
 DATAGEN_DIR="${PROJECT_ROOT}/ldbc_snb_datagen_spark"
+SEPARATOR="=========================================="
 
 # Set up Java PATH
-if [ -d "/opt/homebrew/opt/openjdk@11" ]; then
+if [[ -d "/opt/homebrew/opt/openjdk@11" ]]; then
     export PATH="/opt/homebrew/opt/openjdk@11/bin:$PATH"
     export JAVA_HOME="/opt/homebrew/opt/openjdk@11"
-elif [ -d "/opt/homebrew/opt/openjdk" ]; then
+elif [[ -d "/opt/homebrew/opt/openjdk" ]]; then
     export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
     export JAVA_HOME="/opt/homebrew/opt/openjdk"
 fi
@@ -44,8 +45,8 @@ cd "${DATAGEN_DIR}"
 # Set JAR path
 export LDBC_SNB_DATAGEN_JAR="${DATAGEN_DIR}/target/ldbc_snb_datagen_2.12_spark3.2-0.5.1+23-1d60a657-jar-with-dependencies.jar"
 
-if [ ! -f "${LDBC_SNB_DATAGEN_JAR}" ]; then
-    echo "ERROR: JAR file not found. Please build first:"
+if [[ ! -f "${LDBC_SNB_DATAGEN_JAR}" ]]; then
+    echo "ERROR: JAR file not found. Please build first:" >&2
     echo "  cd ${DATAGEN_DIR}"
     echo "  ./scripts/build.sh"
     exit 1
@@ -53,43 +54,43 @@ fi
 
 # Function to generate and move data
 generate_and_move() {
-    local SCALE_FACTOR=$1
-    local OUTPUT_DIR="${LDBC_DATA_DIR}/social-network-sf${SCALE_FACTOR}-bi-parquet"
+    local scale_factor=$1
+    local output_dir="${LDBC_DATA_DIR}/social-network-sf${scale_factor}-bi-parquet"
     
     echo ""
-    echo "=========================================="
-    echo "Generating SF${SCALE_FACTOR}..."
-    echo "=========================================="
+    echo "${SEPARATOR}"
+    echo "Generating SF${scale_factor}..."
+    echo "${SEPARATOR}"
     echo ""
     
     # Check if already exists
-    if [ -d "${OUTPUT_DIR}" ]; then
-        echo "SF${SCALE_FACTOR} already exists at: ${OUTPUT_DIR}"
+    if [[ -d "${output_dir}" ]]; then
+        echo "SF${scale_factor} already exists at: ${output_dir}"
         read -p "Regenerate? (y/N): " REGEN
-        if [ "$REGEN" != "y" ] && [ "$REGEN" != "Y" ]; then
-            echo "Skipping SF${SCALE_FACTOR}"
+        if [[ "$REGEN" != "y" ]] && [[ "$REGEN" != "Y" ]]; then
+            echo "Skipping SF${scale_factor}"
             return 0
         fi
-        rm -rf "${OUTPUT_DIR}"
+        rm -rf "${output_dir}"
     fi
     
     # Generate
     echo "Starting generation (this will take a while)..."
-    python3 tools/run.py -y -- --format parquet --scale-factor "${SCALE_FACTOR}" --mode bi
+    python3 tools/run.py -y -- --format parquet --scale-factor "${scale_factor}" --mode bi
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: SF${SCALE_FACTOR} generation failed"
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: SF${scale_factor} generation failed" >&2
         return 1
     fi
     
     # Move to expected location
-    if [ -d "out/graphs" ]; then
+    if [[ -d "out/graphs" ]]; then
         mkdir -p "${LDBC_DATA_DIR}"
-        mv "out/graphs" "${OUTPUT_DIR}/graphs"
-        echo "✓ SF${SCALE_FACTOR} data moved to: ${OUTPUT_DIR}"
+        mv "out/graphs" "${output_dir}/graphs"
+        echo "✓ SF${scale_factor} data moved to: ${output_dir}"
         
         # Show size
-        SIZE=$(du -sh "${OUTPUT_DIR}" | cut -f1)
+        SIZE=$(du -sh "${output_dir}" | cut -f1)
         echo "  Size: ${SIZE}"
     else
         echo "WARNING: Could not find output directory"
@@ -103,9 +104,9 @@ generate_and_move 10
 generate_and_move 30
 
 echo ""
-echo "=========================================="
+echo "${SEPARATOR}"
 echo "Generation Complete!"
-echo "=========================================="
+echo "${SEPARATOR}"
 echo ""
 echo "Generated datasets:"
 echo "  - SF10: ${LDBC_DATA_DIR}/social-network-sf10-bi-parquet"

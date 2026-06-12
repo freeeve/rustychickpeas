@@ -9,7 +9,7 @@ echo ""
 
 # Check if cargo is available
 if ! command -v cargo &> /dev/null; then
-    echo "Error: Cargo is not installed or not in PATH"
+    echo "Error: Cargo is not installed or not in PATH" >&2
     echo ""
     echo "To install Rust and Cargo:"
     echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
@@ -22,8 +22,8 @@ echo "Cargo version: $(cargo --version)"
 echo ""
 
 # Check if we're in the right directory
-if [ ! -f "Cargo.toml" ]; then
-    echo "Error: Cargo.toml not found. Please run from project root."
+if [[ ! -f "Cargo.toml" ]]; then
+    echo "Error: Cargo.toml not found. Please run from project root." >&2
     exit 1
 fi
 

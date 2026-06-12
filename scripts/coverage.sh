@@ -24,14 +24,14 @@ cargo tarpaulin \
     --exclude-files 'tests/*' 2>&1 | tee "$TARPAULIN_LOG"
 
 # Move lcov.info to coverage/rust/ if it's in the root
-if [ -f lcov.info ]; then
+if [[ -f lcov.info ]]; then
     mv lcov.info coverage/rust/lcov.info
 fi
 
 # Filter LCOV file to ensure it's valid
-if [ -f coverage/rust/lcov.info ]; then
+if [[ -f coverage/rust/lcov.info ]]; then
     grep -E '^(SF:|TN:|FNF:|FNH:|FNDA:|DA:|LF:|LH:|BRDA:|BRF:|BRH:|end_of_record)' coverage/rust/lcov.info > coverage/rust/lcov.info.tmp || true
-    if [ -s coverage/rust/lcov.info.tmp ]; then
+    if [[ -s coverage/rust/lcov.info.tmp ]]; then
         mv coverage/rust/lcov.info.tmp coverage/rust/lcov.info
     fi
 fi

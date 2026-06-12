@@ -14,7 +14,7 @@ if pgrep -f "run.py.*scale-factor 10" > /dev/null; then
     
     # Check for Spark processes
     SPARK_COUNT=$(pgrep -f "spark-submit" | wc -l | tr -d ' ')
-    if [ "$SPARK_COUNT" -gt 0 ]; then
+    if [[ "$SPARK_COUNT" -gt 0 ]]; then
         echo "  Spark processes: $SPARK_COUNT"
     fi
 else
@@ -25,7 +25,7 @@ echo ""
 
 # Check output directory
 OUT_DIR="/Users/efreeman/rustychickpeas/ldbc_snb_datagen_spark/out"
-if [ -d "$OUT_DIR/graphs" ]; then
+if [[ -d "$OUT_DIR/graphs" ]]; then
     echo "✓ Output directory exists: $OUT_DIR/graphs"
     
     # Count files generated
@@ -37,7 +37,7 @@ if [ -d "$OUT_DIR/graphs" ]; then
     echo "  Total size: $TOTAL_SIZE"
     
     # Check for initial_snapshot
-    if [ -d "$OUT_DIR/graphs/parquet/bi/composite-merged-fk/initial_snapshot" ]; then
+    if [[ -d "$OUT_DIR/graphs/parquet/bi/composite-merged-fk/initial_snapshot" ]]; then
         SNAPSHOT_SIZE=$(du -sh "$OUT_DIR/graphs/parquet/bi/composite-merged-fk/initial_snapshot" 2>/dev/null | cut -f1)
         echo "  Initial snapshot size: $SNAPSHOT_SIZE"
     fi
@@ -49,7 +49,7 @@ echo ""
 
 # Check log file
 LOG_FILE="/tmp/ldbc_sf10_gen.log"
-if [ -f "$LOG_FILE" ]; then
+if [[ -f "$LOG_FILE" ]]; then
     echo "✓ Log file: $LOG_FILE"
     LOG_SIZE=$(du -h "$LOG_FILE" | cut -f1)
     echo "  Log size: $LOG_SIZE"
