@@ -100,20 +100,29 @@ jobs:
           # rustychickpeas-core/Cargo.toml.
           cargo install iai-callgrind-runner --version 0.16.1 --locked || true
 
-      # On pull requests: record the base commit as a baseline, then compare the
-      # PR head against it and fail if instructions (Ir) regress by more than 5%.
-      - name: Baseline (PR base)
+      # On pull requests: baseline the PR base commit, then compare the head
+      # against it and fail if instructions (Ir) regress by more than 5%. When
+      # the bench itself is new in the PR (absent on the base), there is nothing
+      # to gate against yet, so we only record; the gate activates on later PRs
+      # once instruction_counts has landed on the base branch.
+      - name: Instruction-count regression (PR)
         if: github.event_name == 'pull_request'
         run: |
-          git checkout --force ${{ github.event.pull_request.base.sha }}
-          cargo bench -p rustychickpeas-core --bench instruction_counts -- --save-baseline=base
-
-      - name: Compare PR head vs base (gated)
-        if: github.event_name == 'pull_request'
-        run: |
-          git checkout --force ${{ github.sha }}
-          cargo bench -p rustychickpeas-core --bench instruction_counts -- \
-            --baseline=base --callgrind-limits='ir=5.0%'
+          set -euo pipefail
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.sha }}'
+          git checkout --force "$base"
+          if cargo metadata --no-deps --format-version=1 \
+               | python3 -c "import json,sys; m=json.load(sys.stdin); names={t['name'] for p in m['packages'] for t in p['targets']}; sys.exit(0 if 'instruction_counts' in names else 1)"; then
+            cargo bench -p rustychickpeas-core --bench instruction_counts -- --save-baseline=base
+            git checkout --force "$head"
+            cargo bench -p rustychickpeas-core --bench instruction_counts -- \
+              --baseline=base --callgrind-limits='ir=5.0%'
+          else
+            echo "::notice::instruction_counts bench is new in this PR; recording counts only. The regression gate activates once it lands on the base branch."
+            git checkout --force "$head"
+            cargo bench -p rustychickpeas-core --bench instruction_counts
+          fi
 
       # On pushes: just record counts (no baseline to gate against).
       - name: Record (push)
