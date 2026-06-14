@@ -3,7 +3,9 @@
 //! Tests the performance of building graphs using GraphBuilder,
 //! including adding nodes, relationships, and properties.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
+};
 use rustychickpeas_core::GraphBuilder;
 use std::env;
 
@@ -23,6 +25,7 @@ fn builder_add_nodes_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_add_nodes");
 
     for size in [100, 1000, 10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
@@ -42,6 +45,7 @@ fn builder_add_nodes_with_labels_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_add_nodes_with_labels");
 
     for size in [100, 1000, 10000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
@@ -64,6 +68,7 @@ fn builder_add_relationships_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_add_relationships");
 
     for size in [100, 1000, 10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
@@ -88,6 +93,7 @@ fn builder_add_properties_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_add_properties");
 
     for size in [100, 1000, 10000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
@@ -114,31 +120,29 @@ fn builder_finalize_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_finalize");
 
     for size in [100, 1000, 10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            // Setup: create a graph with nodes and relationships
-            let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
-            for i in 0..size {
-                builder.add_node(Some(i as u32), &["Person"]).unwrap();
-            }
-            for i in 0..size {
-                let from = i as u32;
-                let to = ((i + 1) % size) as u32;
-                builder.add_rel(from, to, "KNOWS").unwrap();
-            }
-
-            b.iter(|| {
-                let mut builder_clone = GraphBuilder::new(Some(size), Some(size * 2));
-                for i in 0..size {
-                    builder_clone.add_node(Some(i as u32), &["Person"]).unwrap();
-                }
-                for i in 0..size {
-                    let from = i as u32;
-                    let to = ((i + 1) % size) as u32;
-                    builder_clone.add_rel(from, to, "KNOWS").unwrap();
-                }
-                let snapshot = builder_clone.finalize(None);
-                black_box(snapshot);
-            });
+            // Build a fresh populated builder per iteration in the (unmeasured) setup
+            // closure so the measured routine times finalize() alone, not construction.
+            b.iter_batched(
+                || {
+                    let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
+                    for i in 0..size {
+                        builder.add_node(Some(i as u32), &["Person"]).unwrap();
+                    }
+                    for i in 0..size {
+                        let from = i as u32;
+                        let to = ((i + 1) % size) as u32;
+                        builder.add_rel(from, to, "KNOWS").unwrap();
+                    }
+                    builder
+                },
+                |builder| {
+                    let snapshot = builder.finalize(None);
+                    black_box(snapshot);
+                },
+                BatchSize::SmallInput,
+            );
         });
     }
     group.finish();
@@ -148,6 +152,7 @@ fn builder_node_deduplication_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_node_deduplication");
 
     for size in [1000, 10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
@@ -174,6 +179,7 @@ fn builder_node_deduplication_multi_key_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_node_deduplication_multi_key");
 
     for size in [1000, 10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
                 let mut builder = GraphBuilder::new(Some(size), Some(size * 2));
@@ -204,6 +210,7 @@ fn builder_relationship_deduplication_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_relationship_deduplication");
 
     for size in [1000, 10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         // Benchmark: CreateUniqueByRelType (default for relationships)
         group.bench_with_input(BenchmarkId::new("by_type", *size), size, |b, &size| {
             b.iter(|| {
@@ -229,6 +236,7 @@ fn builder_deduplication_vs_no_dedup_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder_deduplication_overhead");
 
     for size in [10000, 100000].iter() {
+        group.throughput(Throughput::Elements(*size as u64));
         // Without deduplication
         group.bench_with_input(BenchmarkId::new("no_dedup", *size), size, |b, &size| {
             b.iter(|| {
