@@ -35,7 +35,7 @@ jobs:
       
       - name: Run benchmarks
         run: |
-          cargo bench --bench graph_builder --bench graph_snapshot
+          cargo bench --bench graph_builder --bench graph_snapshot --bench ldbc_snb_bi
         continue-on-error: true  # Don't fail CI if benchmarks are slow
       
       - name: Collect results
@@ -64,4 +64,59 @@ jobs:
             git push origin HEAD:${{ github.ref_name }} || echo "Push failed"
           fi
         continue-on-error: true
+
+  # Instruction-count regression gate. Callgrind counts are deterministic, so
+  # unlike the wall-clock job above this one can fail a PR on a real regression
+  # without being fooled by shared-runner noise.
+  iai:
+    name: Instruction-count regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need base + head commits for baseline comparison
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Cache Cargo + iai runner
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/iai-callgrind-runner
+            target/
+          key: ${{ runner.os }}-iai-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-iai-
+
+      - name: Install iai-callgrind-runner
+        run: |
+          # Version must match the iai-callgrind dev-dependency in
+          # rustychickpeas-core/Cargo.toml.
+          cargo install iai-callgrind-runner --version 0.16.1 --locked || true
+
+      # On pull requests: record the base commit as a baseline, then compare the
+      # PR head against it and fail if instructions (Ir) regress by more than 5%.
+      - name: Baseline (PR base)
+        if: github.event_name == 'pull_request'
+        run: |
+          git checkout --force ${{ github.event.pull_request.base.sha }}
+          cargo bench -p rustychickpeas-core --bench instruction_counts -- --save-baseline=base
+
+      - name: Compare PR head vs base (gated)
+        if: github.event_name == 'pull_request'
+        run: |
+          git checkout --force ${{ github.sha }}
+          cargo bench -p rustychickpeas-core --bench instruction_counts -- \
+            --baseline=base --callgrind-limits='ir=5.0%'
+
+      # On pushes: just record counts (no baseline to gate against).
+      - name: Record (push)
+        if: github.event_name != 'pull_request'
+        run: cargo bench -p rustychickpeas-core --bench instruction_counts
 
