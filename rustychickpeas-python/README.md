@@ -82,8 +82,8 @@ builder.add_node(["Person"], node_id=2)
 builder.add_node(["Company"], node_id=3)
 
 # Add relationships (node IDs are required)
-builder.add_rel(1, 2, "KNOWS")
-builder.add_rel(1, 3, "WORKS_FOR")
+builder.add_relationship(1, 2, "KNOWS")
+builder.add_relationship(1, 3, "WORKS_FOR")
 
 # Set properties (automatic type detection)
 builder.set_prop(1, "name", "Alice")
@@ -129,7 +129,7 @@ builder = rcp.GraphSnapshotBuilder(version="v1.0")
 # Add nodes and relationships
 builder.add_node(["Person"], node_id=1)
 builder.add_node(["Person"], node_id=2)
-builder.add_rel(1, 2, "KNOWS")
+builder.add_relationship(1, 2, "KNOWS")
 
 # Finalize into a snapshot
 graph = builder.finalize()
@@ -181,7 +181,7 @@ let mut builder = manager.create_builder(Some("v1.0"), None, None);
 // Add nodes and relationships
 builder.add_node(Some(1), &["Person"]);
 builder.add_node(Some(2), &["Person"]);
-builder.add_rel(1, 2, "KNOWS");
+builder.add_relationship(1, 2, "KNOWS");
 
 // Finalize the builder
 let snapshot = builder.finalize(None);
@@ -193,7 +193,7 @@ manager.add_snapshot(snapshot);
 let snapshot = manager.get_graph_snapshot("v1.0").unwrap();
 
 // Query the snapshot
-let neighbors = snapshot.get_out_neighbors(0);
+let neighbors = snapshot.neighbors(0, Direction::Outgoing);
 println!("Node 0 neighbors: {:?}", neighbors);
 ```
 

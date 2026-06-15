@@ -144,10 +144,10 @@ impl GraphSnapshotBuilder {
     /// * `u` - Start node ID (must be u32)
     /// * `v` - End node ID (must be u32)
     /// * `rel_type` - Relationship type string
-    fn add_rel(&mut self, u: u32, v: u32, rel_type: String) -> PyResult<()> {
+    fn add_relationship(&mut self, u: u32, v: u32, rel_type: String) -> PyResult<()> {
         self.check_not_finalized()?;
         self.builder
-            .add_rel(u, v, &rel_type)
+            .add_relationship(u, v, &rel_type)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         Ok(())
     }
@@ -272,7 +272,7 @@ impl GraphSnapshotBuilder {
 
     /// Set string property on a relationship
     /// Finds the relationship by (u, v, rel_type) and sets the property
-    fn set_rel_prop_str(
+    fn set_relationship_prop_str(
         &mut self,
         u: u32,
         v: u32,
@@ -281,12 +281,13 @@ impl GraphSnapshotBuilder {
         value: String,
     ) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_rel_prop_str(u, v, &rel_type, &key, &value);
+        self.builder
+            .set_relationship_prop_str(u, v, &rel_type, &key, &value);
         Ok(())
     }
 
     /// Set i64 property on a relationship
-    fn set_rel_prop_i64(
+    fn set_relationship_prop_i64(
         &mut self,
         u: u32,
         v: u32,
@@ -295,12 +296,13 @@ impl GraphSnapshotBuilder {
         value: i64,
     ) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_rel_prop_i64(u, v, &rel_type, &key, value);
+        self.builder
+            .set_relationship_prop_i64(u, v, &rel_type, &key, value);
         Ok(())
     }
 
     /// Set f64 property on a relationship
-    fn set_rel_prop_f64(
+    fn set_relationship_prop_f64(
         &mut self,
         u: u32,
         v: u32,
@@ -309,12 +311,13 @@ impl GraphSnapshotBuilder {
         value: f64,
     ) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_rel_prop_f64(u, v, &rel_type, &key, value);
+        self.builder
+            .set_relationship_prop_f64(u, v, &rel_type, &key, value);
         Ok(())
     }
 
     /// Set boolean property on a relationship
-    fn set_rel_prop_bool(
+    fn set_relationship_prop_bool(
         &mut self,
         u: u32,
         v: u32,
@@ -323,12 +326,13 @@ impl GraphSnapshotBuilder {
         value: bool,
     ) -> PyResult<()> {
         self.check_not_finalized()?;
-        self.builder.set_rel_prop_bool(u, v, &rel_type, &key, value);
+        self.builder
+            .set_relationship_prop_bool(u, v, &rel_type, &key, value);
         Ok(())
     }
 
     /// Set property on a relationship with automatic type detection
-    fn set_rel_prop(
+    fn set_relationship_prop(
         &mut self,
         u: u32,
         v: u32,
@@ -339,13 +343,17 @@ impl GraphSnapshotBuilder {
         self.check_not_finalized()?;
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
-            self.builder.set_rel_prop_bool(u, v, &rel_type, &key, b);
+            self.builder
+                .set_relationship_prop_bool(u, v, &rel_type, &key, b);
         } else if let Ok(s) = value.extract::<String>() {
-            self.builder.set_rel_prop_str(u, v, &rel_type, &key, &s);
+            self.builder
+                .set_relationship_prop_str(u, v, &rel_type, &key, &s);
         } else if let Ok(i) = value.extract::<i64>() {
-            self.builder.set_rel_prop_i64(u, v, &rel_type, &key, i);
+            self.builder
+                .set_relationship_prop_i64(u, v, &rel_type, &key, i);
         } else if let Ok(f) = value.extract::<f64>() {
-            self.builder.set_rel_prop_f64(u, v, &rel_type, &key, f);
+            self.builder
+                .set_relationship_prop_f64(u, v, &rel_type, &key, f);
         } else {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Property value must be str, int, float, or bool",
@@ -356,7 +364,7 @@ impl GraphSnapshotBuilder {
 
     /// Set multiple properties on a single relationship
     ///
-    /// More efficient than multiple set_rel_prop() calls for the same relationship.
+    /// More efficient than multiple set_relationship_prop() calls for the same relationship.
     ///
     /// Args:
     ///     u: Start node ID (u32)
@@ -365,8 +373,8 @@ impl GraphSnapshotBuilder {
     ///     properties: Dict of property key -> value (str, int, float, or bool)
     ///
     /// Example:
-    ///     builder.set_rel_props(1, 2, "KNOWS", {"since": "2020", "weight": 5})
-    fn set_rel_props(
+    ///     builder.set_relationship_props(1, 2, "KNOWS", {"since": "2020", "weight": 5})
+    fn set_relationship_props(
         &mut self,
         u: u32,
         v: u32,
@@ -380,13 +388,17 @@ impl GraphSnapshotBuilder {
 
             // Check bool first, as True/False can be extracted as int
             if let Ok(b) = value.extract::<bool>() {
-                self.builder.set_rel_prop_bool(u, v, &rel_type, &key, b);
+                self.builder
+                    .set_relationship_prop_bool(u, v, &rel_type, &key, b);
             } else if let Ok(s) = value.extract::<String>() {
-                self.builder.set_rel_prop_str(u, v, &rel_type, &key, &s);
+                self.builder
+                    .set_relationship_prop_str(u, v, &rel_type, &key, &s);
             } else if let Ok(i) = value.extract::<i64>() {
-                self.builder.set_rel_prop_i64(u, v, &rel_type, &key, i);
+                self.builder
+                    .set_relationship_prop_i64(u, v, &rel_type, &key, i);
             } else if let Ok(f) = value.extract::<f64>() {
-                self.builder.set_rel_prop_f64(u, v, &rel_type, &key, f);
+                self.builder
+                    .set_relationship_prop_f64(u, v, &rel_type, &key, f);
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
                     "Property value for key '{}' must be str, int, float, or bool",
@@ -413,12 +425,12 @@ impl GraphSnapshotBuilder {
     ///     Number of relationships that were found and had properties set
     ///
     /// Example:
-    ///     builder.set_rel_props_bulk([
+    ///     builder.set_relationship_props_bulk([
     ///         (1, 2, "KNOWS", {"since": "2020", "weight": 5}),
     ///         (2, 3, "FOLLOWS", {"since": "2021", "active": True}),
     ///     ])
     #[allow(clippy::type_complexity)]
-    fn set_rel_props_bulk(
+    fn set_relationship_props_bulk(
         &mut self,
         rel_props: Vec<(u32, u32, String, &PyDict)>,
     ) -> PyResult<usize> {
@@ -451,7 +463,7 @@ impl GraphSnapshotBuilder {
             })
             .collect();
 
-        Ok(self.builder.set_rel_props(&converted))
+        Ok(self.builder.set_relationship_props(&converted))
     }
 
     /// Load nodes from a Parquet file into the builder

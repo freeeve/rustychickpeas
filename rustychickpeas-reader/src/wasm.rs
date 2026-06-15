@@ -40,50 +40,38 @@ impl WasmGraph {
         Ok(WasmGraph { inner })
     }
 
-    #[wasm_bindgen(js_name = nNodes)]
-    pub fn n_nodes(&self) -> u32 {
-        self.inner.n_nodes()
+    #[wasm_bindgen(js_name = nodeCount)]
+    pub fn node_count(&self) -> u32 {
+        self.inner.node_count()
     }
 
-    #[wasm_bindgen(js_name = nRels)]
-    pub fn n_rels(&self) -> f64 {
-        self.inner.n_rels() as f64
+    #[wasm_bindgen(js_name = relationshipCount)]
+    pub fn relationship_count(&self) -> f64 {
+        self.inner.relationship_count() as f64
     }
 
-    #[wasm_bindgen(js_name = idSpace)]
-    pub fn id_space(&self) -> u32 {
+    #[wasm_bindgen(js_name = csrIdSpace)]
+    pub fn csr_id_space(&self) -> u32 {
         self.inner.csr_id_space()
     }
 
-    #[wasm_bindgen(js_name = outNeighbors)]
-    pub fn out_neighbors(&self, node_id: u32) -> Vec<u32> {
-        self.inner.out_neighbors(node_id).to_vec()
+    /// Neighbors of `nodeId` in `direction` (0 = outgoing, 1 = incoming,
+    /// 2 = both).
+    pub fn neighbors(&self, node_id: u32, direction: u8) -> Vec<u32> {
+        self.inner.neighbors(node_id, dir_from_u8(direction))
     }
 
-    #[wasm_bindgen(js_name = inNeighbors)]
-    pub fn in_neighbors(&self, node_id: u32) -> Vec<u32> {
-        self.inner.in_neighbors(node_id).to_vec()
-    }
-
-    #[wasm_bindgen(js_name = outNeighborsByType)]
-    pub fn out_neighbors_by_type(&self, node_id: u32, rel_type: &str) -> Vec<u32> {
-        self.inner.out_neighbors_by_type(node_id, rel_type)
-    }
-
-    #[wasm_bindgen(js_name = inNeighborsByType)]
-    pub fn in_neighbors_by_type(&self, node_id: u32, rel_type: &str) -> Vec<u32> {
-        self.inner.in_neighbors_by_type(node_id, rel_type)
+    /// Neighbors of `nodeId` in `direction` reached via a relationship type.
+    #[wasm_bindgen(js_name = neighborsByType)]
+    pub fn neighbors_by_type(&self, node_id: u32, direction: u8, rel_type: &str) -> Vec<u32> {
+        self.inner
+            .neighbors_by_type(node_id, dir_from_u8(direction), rel_type)
     }
 
     /// BFS from `start` up to `maxDepth` hops. `direction`: 0 = outgoing,
     /// 1 = incoming, 2 = both. Returns visited IDs in BFS order.
     pub fn bfs(&self, start: u32, max_depth: u32, direction: u8) -> Vec<u32> {
-        let dir = match direction {
-            0 => Direction::Outgoing,
-            1 => Direction::Incoming,
-            _ => Direction::Both,
-        };
-        self.inner.bfs(start, max_depth, dir)
+        self.inner.bfs(start, max_depth, dir_from_u8(direction))
     }
 
     #[wasm_bindgen(js_name = nodeLabels)]
@@ -122,6 +110,15 @@ impl WasmGraph {
 
     pub fn atom(&self, id: u32) -> Option<String> {
         self.inner.atom(id).map(str::to_string)
+    }
+}
+
+/// Map a JS direction code (0 = outgoing, 1 = incoming, 2 = both) to [`Direction`].
+fn dir_from_u8(direction: u8) -> Direction {
+    match direction {
+        0 => Direction::Outgoing,
+        1 => Direction::Incoming,
+        _ => Direction::Both,
     }
 }
 

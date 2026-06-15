@@ -640,9 +640,22 @@ impl GraphSnapshot {
         }
     }
 
-    /// Get outgoing neighbors of a node (CSR format)
+    /// The number of nodes in the graph.
     #[inline]
-    pub fn out_neighbors(&self, node_id: NodeId) -> &[NodeId] {
+    pub fn node_count(&self) -> u32 {
+        self.n_nodes
+    }
+
+    /// The number of relationships in the graph.
+    #[inline]
+    pub fn relationship_count(&self) -> u64 {
+        self.n_rels
+    }
+
+    /// Zero-copy slice of a node's outgoing neighbors in CSR order (internal; the
+    /// public accessor is [`neighbors`](Self::neighbors)).
+    #[inline]
+    fn out_neighbors_slice(&self, node_id: NodeId) -> &[NodeId] {
         if node_id as usize >= self.out_offsets.len().saturating_sub(1) {
             return &[];
         }
@@ -651,9 +664,10 @@ impl GraphSnapshot {
         &self.out_nbrs[start..end]
     }
 
-    /// Get incoming neighbors of a node (CSR format)
+    /// Zero-copy slice of a node's incoming neighbors in CSR order (internal; the
+    /// public accessor is [`neighbors`](Self::neighbors)).
     #[inline]
-    pub fn in_neighbors(&self, node_id: NodeId) -> &[NodeId] {
+    fn in_neighbors_slice(&self, node_id: NodeId) -> &[NodeId] {
         if node_id as usize >= self.in_offsets.len().saturating_sub(1) {
             return &[];
         }
@@ -662,33 +676,62 @@ impl GraphSnapshot {
         &self.in_nbrs[start..end]
     }
 
-    /// Get outgoing neighbors filtered by relationship types
-    /// Returns only neighbors connected via relationships of the specified types
+    /// Get the neighbors of a node in the given direction.
+    ///
+    /// Returns the node IDs reachable from `node_id` by following relationships
+    /// in `direction`; [`Direction::Both`] returns outgoing neighbors followed
+    /// by incoming ones. For per-relationship type or property access during a
+    /// traversal, use [`relationships`](Self::relationships) instead.
+    pub fn neighbors(&self, node_id: NodeId, direction: Direction) -> Vec<NodeId> {
+        match direction {
+            Direction::Outgoing => self.out_neighbors_slice(node_id).to_vec(),
+            Direction::Incoming => self.in_neighbors_slice(node_id).to_vec(),
+            Direction::Both => {
+                let mut neighbors = self.out_neighbors_slice(node_id).to_vec();
+                neighbors.extend_from_slice(self.in_neighbors_slice(node_id));
+                neighbors
+            }
+        }
+    }
+
+    /// Get the neighbors of a node in the given direction, restricted to
+    /// relationships of the given types (an empty `rel_types` matches all types).
+    ///
+    /// [`Direction::Both`] returns matching outgoing neighbors followed by
+    /// matching incoming ones.
     ///
     /// # Arguments
     /// * `node_id` - The node ID
+    /// * `direction` - Which relationships to follow ([`Direction::Outgoing`],
+    ///   [`Direction::Incoming`], or [`Direction::Both`])
     /// * `rel_types` - Relationship type names (e.g., `&["KNOWS", "WORKS_WITH"]`)
     ///
     /// # Examples
     /// ```
     /// use rustychickpeas_core::GraphBuilder;
+    /// use rustychickpeas_core::types::Direction;
     ///
     /// // Create a graph
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(0), &["Person"]).unwrap();
     /// builder.add_node(Some(1), &["Person"]).unwrap();
     /// builder.add_node(Some(2), &["Company"]).unwrap();
-    /// builder.add_rel(0, 1, "KNOWS").unwrap();
-    /// builder.add_rel(0, 2, "WORKS_FOR").unwrap();
+    /// builder.add_relationship(0, 1, "KNOWS").unwrap();
+    /// builder.add_relationship(0, 2, "WORKS_FOR").unwrap();
     /// let snapshot = builder.finalize(None);
     ///
-    /// // Get neighbors connected via "KNOWS" relationships
-    /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS"]);
+    /// // Get outgoing neighbors connected via "KNOWS" relationships
+    /// let neighbors = snapshot.neighbors_by_type(0, Direction::Outgoing, &["KNOWS"]);
     ///
     /// // Get neighbors connected via multiple relationship types
-    /// let neighbors = snapshot.out_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
+    /// let neighbors = snapshot.neighbors_by_type(0, Direction::Outgoing, &["KNOWS", "WORKS_FOR"]);
     /// ```
-    pub fn out_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
+    pub fn neighbors_by_type(
+        &self,
+        node_id: NodeId,
+        direction: Direction,
+        rel_types: &[&str],
+    ) -> Vec<NodeId> {
         let ids: Vec<RelationshipType> = rel_types
             .iter()
             .filter_map(|s| self.relationship_type_from_str(s))
@@ -698,21 +741,34 @@ impl GraphSnapshot {
         } else {
             Some(ids.into_iter().collect())
         };
-        Self::neighbors_by_type_from_csr(
-            &self.out_offsets,
-            &self.out_nbrs,
-            &self.out_types,
-            node_id,
-            allowed.as_ref(),
-        )
+        let mut neighbors = Vec::new();
+        if matches!(direction, Direction::Outgoing | Direction::Both) {
+            neighbors.extend(Self::neighbors_by_type_from_csr(
+                &self.out_offsets,
+                &self.out_nbrs,
+                &self.out_types,
+                node_id,
+                allowed.as_ref(),
+            ));
+        }
+        if matches!(direction, Direction::Incoming | Direction::Both) {
+            neighbors.extend(Self::neighbors_by_type_from_csr(
+                &self.in_offsets,
+                &self.in_nbrs,
+                &self.in_types,
+                node_id,
+                allowed.as_ref(),
+            ));
+        }
+        neighbors
     }
 
     /// Get the relationships incident to a node in the given direction,
     /// optionally filtered by relationship type (an empty `rel_types` matches
     /// all types).
     ///
-    /// Unlike [`out_neighbors`](Self::out_neighbors)/[`in_neighbors`](Self::in_neighbors),
-    /// which yield only node IDs, each [`RelationshipRef`] carries the
+    /// Unlike [`neighbors`](Self::neighbors), which yields only node IDs in a
+    /// direction, each [`RelationshipRef`] carries the
     /// [`pos`](RelationshipRef::pos) needed to read the relationship's
     /// properties via [`relationship_property`](Self::relationship_property) —
     /// for incoming relationships as well as outgoing (the incoming position is
@@ -831,51 +887,6 @@ impl GraphSnapshot {
         ShortestPaths { source, dist, prev }
     }
 
-    /// Get incoming neighbors filtered by relationship types
-    /// Returns only neighbors connected via relationships of the specified types
-    ///
-    /// # Arguments
-    /// * `node_id` - The node ID
-    /// * `rel_types` - Relationship type names (e.g., `&["KNOWS", "WORKS_WITH"]`)
-    ///
-    /// # Examples
-    /// ```
-    /// use rustychickpeas_core::GraphBuilder;
-    ///
-    /// // Create a graph
-    /// let mut builder = GraphBuilder::new(Some(10), Some(10));
-    /// builder.add_node(Some(0), &["Person"]).unwrap();
-    /// builder.add_node(Some(1), &["Person"]).unwrap();
-    /// builder.add_node(Some(2), &["Company"]).unwrap();
-    /// builder.add_rel(1, 0, "KNOWS").unwrap();
-    /// builder.add_rel(2, 0, "WORKS_FOR").unwrap();
-    /// let snapshot = builder.finalize(None);
-    ///
-    /// // Get neighbors connected via "KNOWS" relationships
-    /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS"]);
-    ///
-    /// // Get neighbors connected via multiple relationship types
-    /// let neighbors = snapshot.in_neighbors_by_type(0, &["KNOWS", "WORKS_FOR"]);
-    /// ```
-    pub fn in_neighbors_by_type(&self, node_id: NodeId, rel_types: &[&str]) -> Vec<NodeId> {
-        let ids: Vec<RelationshipType> = rel_types
-            .iter()
-            .filter_map(|s| self.relationship_type_from_str(s))
-            .collect();
-        let allowed: Option<std::collections::HashSet<RelationshipType>> = if ids.is_empty() {
-            None
-        } else {
-            Some(ids.into_iter().collect())
-        };
-        Self::neighbors_by_type_from_csr(
-            &self.in_offsets,
-            &self.in_nbrs,
-            &self.in_types,
-            node_id,
-            allowed.as_ref(),
-        )
-    }
-
     /// Check if one node can reach another via traversal
     ///
     /// Uses breadth-first search (BFS) to efficiently determine reachability.
@@ -900,7 +911,7 @@ impl GraphSnapshot {
     /// let mut builder = GraphBuilder::new(Some(10), Some(10));
     /// builder.add_node(Some(5), &["Person"]).unwrap();
     /// builder.add_node(Some(10), &["Person"]).unwrap();
-    /// builder.add_rel(5, 10, "KNOWS").unwrap();
+    /// builder.add_relationship(5, 10, "KNOWS").unwrap();
     /// let snapshot = builder.finalize(None);
     ///
     /// // Check if node 5 can reach node 10 via outgoing relationships
@@ -996,8 +1007,8 @@ impl GraphSnapshot {
     /// builder.add_node(Some(1), &["Person"]).unwrap();
     /// builder.add_node(Some(10), &["Person"]).unwrap();
     /// builder.add_node(Some(11), &["Person"]).unwrap();
-    /// builder.add_rel(0, 10, "KNOWS").unwrap();
-    /// builder.add_rel(1, 11, "WORKS_WITH").unwrap();
+    /// builder.add_relationship(0, 10, "KNOWS").unwrap();
+    /// builder.add_relationship(1, 11, "WORKS_WITH").unwrap();
     /// let snapshot = builder.finalize(None);
     ///
     /// // Simple bidirectional search (default: Outgoing for forward, Incoming for backward)
@@ -1200,8 +1211,8 @@ impl GraphSnapshot {
     /// builder.add_node(Some(0), &["Person"]).unwrap();
     /// builder.add_node(Some(1), &["Person"]).unwrap();
     /// builder.add_node(Some(2), &["Company"]).unwrap();
-    /// builder.add_rel(0, 1, "KNOWS").unwrap();
-    /// builder.add_rel(0, 2, "WORKS_FOR").unwrap();
+    /// builder.add_relationship(0, 1, "KNOWS").unwrap();
+    /// builder.add_relationship(0, 2, "WORKS_FOR").unwrap();
     /// let snapshot = builder.finalize(None);
     ///
     /// // Simple BFS from a single node
@@ -1508,8 +1519,8 @@ mod tests {
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Company"]).unwrap();
-        builder.add_rel(0, 1, "KNOWS").unwrap();
-        builder.add_rel(1, 2, "WORKS_FOR").unwrap();
+        builder.add_relationship(0, 1, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "WORKS_FOR").unwrap();
         builder.set_prop_str(0, "name", "Alice").unwrap();
         builder.set_prop_i64(0, "age", 30).unwrap();
 
@@ -1677,46 +1688,46 @@ mod tests {
     }
 
     #[test]
-    fn test_get_out_neighbors() {
+    fn test_get_neighbors_outgoing() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.out_neighbors(0);
+        let neighbors = snapshot.neighbors(0, Direction::Outgoing);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 1);
 
-        let neighbors = snapshot.out_neighbors(1);
+        let neighbors = snapshot.neighbors(1, Direction::Outgoing);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 2);
 
-        let neighbors = snapshot.out_neighbors(2);
+        let neighbors = snapshot.neighbors(2, Direction::Outgoing);
         assert_eq!(neighbors.len(), 0);
     }
 
     #[test]
-    fn test_get_in_neighbors() {
+    fn test_get_neighbors_incoming() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.in_neighbors(0);
+        let neighbors = snapshot.neighbors(0, Direction::Incoming);
         assert_eq!(neighbors.len(), 0);
 
-        let neighbors = snapshot.in_neighbors(1);
+        let neighbors = snapshot.neighbors(1, Direction::Incoming);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 0);
 
-        let neighbors = snapshot.in_neighbors(2);
+        let neighbors = snapshot.neighbors(2, Direction::Incoming);
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 1);
     }
 
     #[test]
-    fn test_get_out_neighbors_invalid() {
+    fn test_get_neighbors_outgoing_invalid() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.out_neighbors(999);
+        let neighbors = snapshot.neighbors(999, Direction::Outgoing);
         assert_eq!(neighbors.len(), 0);
     }
 
     #[test]
-    fn test_get_in_neighbors_invalid() {
+    fn test_get_neighbors_incoming_invalid() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.in_neighbors(999);
+        let neighbors = snapshot.neighbors(999, Direction::Incoming);
         assert_eq!(neighbors.len(), 0);
     }
 
@@ -2254,11 +2265,11 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
         builder.add_node(Some(4), &["Person"]).unwrap();
-        builder.add_rel(0, 1, "KNOWS").unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(2, 3, "KNOWS").unwrap();
-        builder.add_rel(0, 4, "KNOWS").unwrap();
-        builder.add_rel(4, 3, "KNOWS").unwrap();
+        builder.add_relationship(0, 1, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(2, 3, "KNOWS").unwrap();
+        builder.add_relationship(0, 4, "KNOWS").unwrap();
+        builder.add_relationship(4, 3, "KNOWS").unwrap();
         builder.finalize(None)
     }
 
@@ -2470,12 +2481,12 @@ mod tests {
         builder.add_node(Some(3), &["Person"]).unwrap();
         builder.add_node(Some(4), &["Person"]).unwrap();
         builder.add_node(Some(5), &["Company"]).unwrap();
-        builder.add_rel(0, 1, "KNOWS").unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(2, 3, "KNOWS").unwrap();
-        builder.add_rel(0, 4, "KNOWS").unwrap();
-        builder.add_rel(4, 3, "KNOWS").unwrap();
-        builder.add_rel(0, 5, "WORKS_FOR").unwrap();
+        builder.add_relationship(0, 1, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(2, 3, "KNOWS").unwrap();
+        builder.add_relationship(0, 4, "KNOWS").unwrap();
+        builder.add_relationship(4, 3, "KNOWS").unwrap();
+        builder.add_relationship(0, 5, "WORKS_FOR").unwrap();
         builder.finalize(None)
     }
 

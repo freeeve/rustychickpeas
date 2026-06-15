@@ -345,7 +345,7 @@ fn test_load_relationships_from_s3() {
 
     assert_eq!(rel_ids.len(), 4);
     assert_eq!(rel_ids, vec![(1, 2), (2, 3), (3, 4), (4, 5)]);
-    assert_eq!(builder.rel_count(), 4);
+    assert_eq!(builder.relationship_count(), 4);
 
     // Verify relationship properties were loaded by finalizing and checking the snapshot
     let snapshot = builder.finalize(None);
@@ -401,7 +401,7 @@ fn test_load_relationships_from_s3_with_deduplication() {
         .expect("Failed to load relationships from S3");
 
     assert_eq!(rel_ids.len(), 4);
-    assert_eq!(builder.rel_count(), 4);
+    assert_eq!(builder.relationship_count(), 4);
 }
 
 #[test]
@@ -494,5 +494,5 @@ fn test_load_nodes_and_relationships_from_s3() {
 
     assert_eq!(rel_ids.len(), 4);
     assert_eq!(builder.node_count(), 5);
-    assert_eq!(builder.rel_count(), 4);
+    assert_eq!(builder.relationship_count(), 4);
 }

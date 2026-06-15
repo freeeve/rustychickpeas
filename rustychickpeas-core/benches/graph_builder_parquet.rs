@@ -466,7 +466,7 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
         for i in 0..*size {
             let from = (i % (*size / 10).max(1)) as u32;
             let to = ((i + 1) % (*size / 10).max(1)) as u32;
-            setup_builder.add_rel(from, to, "KNOWS").unwrap();
+            setup_builder.add_relationship(from, to, "KNOWS").unwrap();
         }
 
         // Benchmark: Finalize with deduplication
@@ -482,7 +482,7 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
                 for i in 0..size {
                     let from = (i % (size / 10).max(1)) as u32;
                     let to = ((i + 1) % (size / 10).max(1)) as u32;
-                    builder.add_rel(from, to, "KNOWS").unwrap();
+                    builder.add_relationship(from, to, "KNOWS").unwrap();
                 }
                 let snapshot = builder.finalize(None);
                 black_box(snapshot);
@@ -501,7 +501,7 @@ fn finalize_with_deduplication_benchmark(c: &mut Criterion) {
                 for i in 0..size {
                     let from = (i % (size / 10).max(1)) as u32;
                     let to = ((i + 1) % (size / 10).max(1)) as u32;
-                    builder.add_rel(from, to, "KNOWS").unwrap();
+                    builder.add_relationship(from, to, "KNOWS").unwrap();
                 }
                 let snapshot = builder.finalize(None);
                 black_box(snapshot);

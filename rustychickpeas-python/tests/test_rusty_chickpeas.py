@@ -162,8 +162,8 @@ class TestRustyChickpeasWorkflow:
         builder.add_node(["Company"], node_id=2)
         builder.set_prop(0, "name", "Alice")
         builder.set_prop(1, "name", "Bob")
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
         
         builder.set_version("workflow_test")
         builder.finalize_into(manager)
@@ -191,7 +191,7 @@ class TestRustyChickpeasWorkflow:
         builder2 = manager.create_builder()
         builder2.add_node(["Person"], node_id=0)
         builder2.add_node(["Person"], node_id=1)
-        builder2.add_rel(0, 1, "KNOWS")
+        builder2.add_relationship(0, 1, "KNOWS")
         builder2.set_version("v2.0")
         builder2.finalize_into(manager)
         
@@ -228,8 +228,8 @@ class TestRustyChickpeasWorkflow:
         
         # v1.0 doesn't have age property, should raise ValueError
         with pytest.raises(ValueError, match="Property key 'age' not found"):
-            snapshot1.node_property(0, "age")
-        assert snapshot2.node_property(0, "age") == 30
+            snapshot1.get_property(0, "age")
+        assert snapshot2.get_property(0, "age") == 30
 
 
 class TestRustyChickpeasEdgeCases:
@@ -298,8 +298,8 @@ class TestRustyChickpeasEdgeCases:
         snapshot1 = manager.graph_snapshot("v1")
         snapshot2 = manager.graph_snapshot("v2")
         
-        assert snapshot1.node_property(0, "name") == "Alice"
-        assert snapshot2.node_property(0, "name") == "Bob"
+        assert snapshot1.get_property(0, "name") == "Alice"
+        assert snapshot2.get_property(0, "name") == "Bob"
     
     def test_remove_and_recreate(self):
         """Test removing and recreating snapshot with same version"""

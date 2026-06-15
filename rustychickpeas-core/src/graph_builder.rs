@@ -254,7 +254,12 @@ impl GraphBuilder {
     ///
     /// # Returns
     /// The index of the newly added relationship in the internal rels vector
-    pub fn add_rel(&mut self, u: NodeId, v: NodeId, rel_type: &str) -> Result<usize, GraphError> {
+    pub fn add_relationship(
+        &mut self,
+        u: NodeId,
+        v: NodeId,
+        rel_type: &str,
+    ) -> Result<usize, GraphError> {
         let max_id = u.max(v);
         self.ensure_capacity(max_id)?;
 
@@ -335,7 +340,14 @@ impl GraphBuilder {
 
     /// Set string property on a relationship
     /// Finds the relationship by (u, v, rel_type) and sets the property
-    pub fn set_rel_prop_str(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: &str) {
+    pub fn set_relationship_prop_str(
+        &mut self,
+        u: NodeId,
+        v: NodeId,
+        rel_type: &str,
+        key: &str,
+        val: &str,
+    ) {
         if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
             let k = self.interner.get_or_intern(key);
             let v = self.interner.get_or_intern(val);
@@ -344,7 +356,14 @@ impl GraphBuilder {
     }
 
     /// Set i64 property on a relationship
-    pub fn set_rel_prop_i64(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: i64) {
+    pub fn set_relationship_prop_i64(
+        &mut self,
+        u: NodeId,
+        v: NodeId,
+        rel_type: &str,
+        key: &str,
+        val: i64,
+    ) {
         if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
             let k = self.interner.get_or_intern(key);
             self.rel_col_i64.entry(k).or_default().push((rel_idx, val));
@@ -352,7 +371,14 @@ impl GraphBuilder {
     }
 
     /// Set f64 property on a relationship
-    pub fn set_rel_prop_f64(&mut self, u: NodeId, v: NodeId, rel_type: &str, key: &str, val: f64) {
+    pub fn set_relationship_prop_f64(
+        &mut self,
+        u: NodeId,
+        v: NodeId,
+        rel_type: &str,
+        key: &str,
+        val: f64,
+    ) {
         if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
             let k = self.interner.get_or_intern(key);
             self.rel_col_f64.entry(k).or_default().push((rel_idx, val));
@@ -360,7 +386,7 @@ impl GraphBuilder {
     }
 
     /// Set boolean property on a relationship
-    pub fn set_rel_prop_bool(
+    pub fn set_relationship_prop_bool(
         &mut self,
         u: NodeId,
         v: NodeId,
@@ -375,12 +401,12 @@ impl GraphBuilder {
     }
 
     /// Set multiple properties on a single relationship by index
-    /// More efficient than individual set_rel_prop_* calls when setting many properties
+    /// More efficient than individual set_relationship_prop_* calls when setting many properties
     ///
     /// # Arguments
-    /// * `rel_idx` - The relationship index (from add_rel return or find_rel_index)
+    /// * `rel_idx` - The relationship index (from add_relationship return or find_rel_index)
     /// * `props` - Slice of (key, value) pairs where value is a PropertyValue
-    pub fn set_rel_props_by_index(
+    pub fn set_relationship_props_by_index(
         &mut self,
         rel_idx: usize,
         props: &[(&str, crate::types::PropertyValue)],
@@ -417,7 +443,7 @@ impl GraphBuilder {
     /// # Returns
     /// Number of relationships that were found and had properties set
     #[allow(clippy::type_complexity)]
-    pub fn set_rel_props(
+    pub fn set_relationship_props(
         &mut self,
         rel_props: &[(
             NodeId,
@@ -440,7 +466,7 @@ impl GraphBuilder {
         for (u, v, rel_type, props) in rel_props {
             if let Some(type_id) = self.interner.get(rel_type) {
                 if let Some(&rel_idx) = rel_index_map.get(&(*u, *v, type_id)) {
-                    self.set_rel_props_by_index(rel_idx, props);
+                    self.set_relationship_props_by_index(rel_idx, props);
                     count += 1;
                 }
             }
@@ -553,7 +579,7 @@ impl GraphBuilder {
     }
 
     /// Get the number of relationships added so far
-    pub fn rel_count(&self) -> usize {
+    pub fn relationship_count(&self) -> usize {
         self.rels.len()
     }
 
@@ -1180,7 +1206,7 @@ mod tests {
     fn test_builder_new() {
         let builder = GraphBuilder::new(None, None);
         assert_eq!(builder.node_count(), 0);
-        assert_eq!(builder.rel_count(), 0);
+        assert_eq!(builder.relationship_count(), 0);
     }
 
     #[test]
@@ -1215,8 +1241,8 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        assert_eq!(builder.rel_count(), 1);
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        assert_eq!(builder.relationship_count(), 1);
     }
 
     #[test]
@@ -1293,8 +1319,8 @@ mod tests {
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(3, 1, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(3, 1, "KNOWS").unwrap();
 
         let (outgoing, incoming) = builder.neighbor_ids(1);
         assert_eq!(outgoing.len(), 1);
@@ -1355,9 +1381,9 @@ mod tests {
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(1, 3, "KNOWS").unwrap();
-        assert_eq!(builder.rel_count(), 2);
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 3, "KNOWS").unwrap();
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     #[test]
@@ -1444,7 +1470,7 @@ mod tests {
         let mut builder = GraphBuilder::new(Some(10), Some(10));
         builder.add_node(Some(0), &["Person"]).unwrap();
         builder.add_node(Some(1), &["Person"]).unwrap();
-        builder.add_rel(0, 1, "KNOWS").unwrap();
+        builder.add_relationship(0, 1, "KNOWS").unwrap();
 
         let snapshot = builder.finalize(None);
         assert_eq!(snapshot.n_nodes, 2);
@@ -1927,9 +1953,9 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
 
         // Verify property was set by checking the internal storage
         let since_key = builder.interner.get_or_intern("since");
@@ -1947,9 +1973,9 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
+        builder.set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5);
 
         // Verify property was set
         let weight_key = builder.interner.get_or_intern("weight");
@@ -1963,9 +1989,9 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_rel_prop_f64(1, 2, "KNOWS", "score", 0.85);
+        builder.set_relationship_prop_f64(1, 2, "KNOWS", "score", 0.85);
 
         // Verify property was set
         let score_key = builder.interner.get_or_intern("score");
@@ -1981,9 +2007,9 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_rel_prop_bool(1, 2, "KNOWS", "verified", true);
+        builder.set_relationship_prop_bool(1, 2, "KNOWS", "verified", true);
 
         // Verify property was set
         let verified_key = builder.interner.get_or_intern("verified");
@@ -1997,12 +2023,12 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
-        builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
-        builder.set_rel_prop_f64(1, 2, "KNOWS", "score", 0.85);
-        builder.set_rel_prop_bool(1, 2, "KNOWS", "verified", true);
+        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5);
+        builder.set_relationship_prop_f64(1, 2, "KNOWS", "score", 0.85);
+        builder.set_relationship_prop_bool(1, 2, "KNOWS", "verified", true);
 
         // Verify all properties were set
         let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
@@ -2049,7 +2075,7 @@ mod tests {
         // Don't add the relationship
 
         // Setting property on non-existent relationship should not panic
-        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
 
         // Property should not be set
         let since_key = builder.interner.get_or_intern("since");
@@ -2064,11 +2090,11 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(1, 2, "LIKES").unwrap(); // Different type
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "LIKES").unwrap(); // Different type
 
         // Set property on KNOWS relationship
-        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
 
         // Verify property is only on KNOWS, not LIKES
         let since_key = builder.interner.get_or_intern("since");
@@ -2085,18 +2111,18 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_rel_prop_str(1, 2, "KNOWS", "since", "2020");
-        builder.set_rel_prop_i64(1, 2, "KNOWS", "weight", 5);
+        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder.set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5);
 
         let snapshot = builder.finalize(None);
 
         // Verify relationship properties are in the snapshot
         // We need to find the CSR position for the relationship
-        let out_neighbors = snapshot.out_neighbors(1);
-        assert_eq!(out_neighbors.len(), 1);
-        assert_eq!(out_neighbors[0], 2);
+        let neighbors = snapshot.neighbors(1, crate::types::Direction::Outgoing);
+        assert_eq!(neighbors.len(), 1);
+        assert_eq!(neighbors[0], 2);
 
         // Get the CSR position (should be 0 for first relationship)
         let csr_pos = 0u32;
@@ -2121,12 +2147,12 @@ mod tests {
         for id in 1..=4 {
             builder.add_node(Some(id), &["Person"]).unwrap();
         }
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(1, 3, "KNOWS").unwrap();
-        builder.add_rel(4, 2, "KNOWS").unwrap();
-        builder.set_rel_prop_i64(1, 2, "KNOWS", "since", 2020);
-        builder.set_rel_prop_i64(1, 3, "KNOWS", "since", 2021);
-        builder.set_rel_prop_i64(4, 2, "KNOWS", "since", 2019);
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 3, "KNOWS").unwrap();
+        builder.add_relationship(4, 2, "KNOWS").unwrap();
+        builder.set_relationship_prop_i64(1, 2, "KNOWS", "since", 2020);
+        builder.set_relationship_prop_i64(1, 3, "KNOWS", "since", 2021);
+        builder.set_relationship_prop_i64(4, 2, "KNOWS", "since", 2019);
         let g = builder.finalize(None);
 
         // Outgoing from 1.
@@ -2165,10 +2191,10 @@ mod tests {
         for id in 1..=3 {
             builder.add_node(Some(id), &["Person"]).unwrap();
         }
-        builder.add_rel(1, 3, "KNOWS").unwrap();
-        builder.add_rel(2, 3, "KNOWS").unwrap();
-        builder.set_rel_prop_i64(1, 3, "KNOWS", "since", 2020);
-        builder.set_rel_prop_i64(2, 3, "KNOWS", "since", 2018);
+        builder.add_relationship(1, 3, "KNOWS").unwrap();
+        builder.add_relationship(2, 3, "KNOWS").unwrap();
+        builder.set_relationship_prop_i64(1, 3, "KNOWS", "since", 2020);
+        builder.set_relationship_prop_i64(2, 3, "KNOWS", "since", 2018);
         let restored = GraphSnapshot::from_graph_section(builder.finalize(None).to_graph_section());
 
         let mut inc = std::collections::HashMap::new();
@@ -2189,8 +2215,8 @@ mod tests {
             b.add_node(Some(id), &["N"]).unwrap();
         }
         for &(u, v, w) in &[(1, 2, 1), (1, 3, 5), (2, 3, 1), (3, 4, 2), (2, 4, 10)] {
-            b.add_rel(u, v, "E").unwrap();
-            b.set_rel_prop_i64(u, v, "E", "w", w);
+            b.add_relationship(u, v, "E").unwrap();
+            b.set_relationship_prop_i64(u, v, "E", "w", w);
         }
         let g = b.finalize(None);
         let cost = |_from: NodeId, rel: &crate::RelationshipRef| match g
@@ -2220,12 +2246,12 @@ mod tests {
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_node(Some(3), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
-        builder.add_rel(2, 3, "FOLLOWS").unwrap();
-        builder.add_rel(1, 3, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(2, 3, "FOLLOWS").unwrap();
+        builder.add_relationship(1, 3, "KNOWS").unwrap();
 
         // Bulk set properties
-        let count = builder.set_rel_props(&[
+        let count = builder.set_relationship_props(&[
             (
                 1,
                 2,
@@ -2322,12 +2348,12 @@ mod tests {
         let mut builder = GraphBuilder::new(None, None);
         builder.add_node(Some(1), &["Person"]).unwrap();
         builder.add_node(Some(2), &["Person"]).unwrap();
-        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_relationship(1, 2, "KNOWS").unwrap();
 
         let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
 
         // Set multiple properties by index
-        builder.set_rel_props_by_index(
+        builder.set_relationship_props_by_index(
             rel_idx,
             &[
                 ("since", PropertyValue::String("2020".to_string())),

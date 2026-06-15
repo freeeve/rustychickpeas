@@ -32,9 +32,9 @@ class TestNodeBasic:
         builder.set_prop(2, "founded", 1990)
         
         # Add relationships
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
-        builder.add_rel(1, 2, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.add_relationship(1, 2, "WORKS_FOR")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -199,10 +199,10 @@ class TestNodeRelationships:
         builder.add_node(["Company"], node_id=3)
         
         # 0 -> 1, 0 -> 2, 1 -> 2, 3 -> 0
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
-        builder.add_rel(3, 0, "EMPLOYS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
+        builder.add_relationship(3, 0, "EMPLOYS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -244,28 +244,28 @@ class TestNodeRelationships:
     def test_get_rel_ids_outgoing(self, relationship_graph):
         """Test getting outgoing relationship IDs"""
         node = relationship_graph.node(0)
-        rel_ids = node.relationship_ids(Direction.Outgoing)
+        rel_ids = node.neighbor_ids(Direction.Outgoing)
         assert set(rel_ids) == {1, 2}
     
     def test_get_rel_ids_incoming(self, relationship_graph):
         """Test getting incoming relationship IDs"""
         node = relationship_graph.node(0)
-        rel_ids = node.relationship_ids(Direction.Incoming)
+        rel_ids = node.neighbor_ids(Direction.Incoming)
         assert rel_ids == [3]
     
     def test_get_rel_ids_both(self, relationship_graph):
         """Test getting relationship IDs in both directions"""
         node = relationship_graph.node(0)
-        rel_ids = node.relationship_ids(Direction.Both)
+        rel_ids = node.neighbor_ids(Direction.Both)
         assert set(rel_ids) == {1, 2, 3}
     
     def test_get_rel_ids_with_type_filter(self, relationship_graph):
         """Test getting relationship IDs with type filter"""
         node = relationship_graph.node(0)
-        knows_ids = node.relationship_ids(Direction.Outgoing, ["KNOWS"])
+        knows_ids = node.neighbor_ids(Direction.Outgoing, ["KNOWS"])
         assert set(knows_ids) == {1, 2}
         
-        employs_ids = node.relationship_ids(Direction.Incoming, ["EMPLOYS"])
+        employs_ids = node.neighbor_ids(Direction.Incoming, ["EMPLOYS"])
         assert employs_ids == [3]
     
     def test_get_degree_outgoing(self, relationship_graph):

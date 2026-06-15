@@ -200,50 +200,16 @@ impl Node {
         direction: Direction,
         rel_types: Option<Vec<String>>,
     ) -> PyResult<Vec<u32>> {
-        // Convert Vec<String> to Vec<&str> for the Rust API
-        let rel_type_strs: Option<Vec<&str>> = rel_types
-            .as_ref()
-            .map(|types| types.iter().map(|s| s.as_str()).collect());
-
-        let neighbor_ids = match direction {
-            Direction::Outgoing => {
-                if let Some(type_strs) = rel_type_strs.as_ref() {
-                    self.snapshot.out_neighbors_by_type(self.node_id, type_strs)
-                } else {
-                    self.snapshot.out_neighbors(self.node_id).to_vec()
-                }
+        let neighbor_ids = match rel_types {
+            Some(types) => {
+                let type_strs: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
+                self.snapshot
+                    .neighbors_by_type(self.node_id, direction.into(), &type_strs)
             }
-            Direction::Incoming => {
-                if let Some(type_strs) = rel_type_strs.as_ref() {
-                    self.snapshot.in_neighbors_by_type(self.node_id, type_strs)
-                } else {
-                    self.snapshot.in_neighbors(self.node_id).to_vec()
-                }
-            }
-            Direction::Both => {
-                let mut neighbors = Vec::new();
-                if let Some(type_strs) = rel_type_strs.as_ref() {
-                    neighbors.extend(self.snapshot.out_neighbors_by_type(self.node_id, type_strs));
-                    neighbors.extend(self.snapshot.in_neighbors_by_type(self.node_id, type_strs));
-                } else {
-                    neighbors.extend_from_slice(self.snapshot.out_neighbors(self.node_id));
-                    neighbors.extend_from_slice(self.snapshot.in_neighbors(self.node_id));
-                }
-                neighbors
-            }
+            None => self.snapshot.neighbors(self.node_id, direction.into()),
         };
 
         Ok(neighbor_ids)
-    }
-
-    /// Deprecated: use neighbor_ids instead
-    #[pyo3(name = "relationship_ids", signature = (direction, rel_types=None))]
-    fn relationship_ids_deprecated(
-        &self,
-        direction: Direction,
-        rel_types: Option<Vec<String>>,
-    ) -> PyResult<Vec<u32>> {
-        self.neighbor_ids(direction, rel_types)
     }
 
     /// Get labels for this node
@@ -261,12 +227,10 @@ impl Node {
 
     /// Get degree (number of relationships) for this node
     fn degree(&self, direction: Direction) -> PyResult<usize> {
-        match direction {
-            Direction::Outgoing => Ok(self.snapshot.out_neighbors(self.node_id).len()),
-            Direction::Incoming => Ok(self.snapshot.in_neighbors(self.node_id).len()),
-            Direction::Both => Ok(self.snapshot.out_neighbors(self.node_id).len()
-                + self.snapshot.in_neighbors(self.node_id).len()),
-        }
+        Ok(self
+            .snapshot
+            .neighbors(self.node_id, direction.into())
+            .len())
     }
 
     /// Get the internal node ID

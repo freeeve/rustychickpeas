@@ -35,7 +35,7 @@ fn build_ring_builder(n: usize) -> GraphBuilder {
     }
     for i in 0..n {
         let to = ((i + 1) % n) as u32;
-        builder.add_rel(i as u32, to, "KNOWS").unwrap();
+        builder.add_relationship(i as u32, to, "KNOWS").unwrap();
     }
     builder
 }
@@ -63,10 +63,10 @@ fn finalize(builder: GraphBuilder) -> GraphSnapshot {
 // Read path: scan out-neighbors of every node; graph built in setup.
 #[library_benchmark]
 #[bench::ring(args = (N), setup = build_ring_graph)]
-fn out_neighbors_scan(graph: GraphSnapshot) -> usize {
+fn neighbors_scan(graph: GraphSnapshot) -> usize {
     let mut count = 0usize;
     for i in 0..N as u32 {
-        count += black_box(graph.out_neighbors(black_box(i))).len();
+        count += black_box(graph.neighbors(black_box(i), Direction::Outgoing)).len();
     }
     black_box(count)
 }
@@ -93,6 +93,6 @@ library_benchmark_group!(
 );
 library_benchmark_group!(
     name = queries;
-    benchmarks = out_neighbors_scan, bfs_traversal
+    benchmarks = neighbors_scan, bfs_traversal
 );
 main!(library_benchmark_groups = builder, queries);

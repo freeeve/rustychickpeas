@@ -42,7 +42,7 @@ class TestGraphSnapshotBasic:
         
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
-        builder.add_rel(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -156,16 +156,16 @@ class TestGraphSnapshotProperties:
     
     def test_get_node_property(self, property_snapshot):
         """Test getting a node property"""
-        name = property_snapshot.node_property(0, "name")
+        name = property_snapshot.get_property(0, "name")
         assert name == "Alice"
         
-        age = property_snapshot.node_property(0, "age")
+        age = property_snapshot.get_property(0, "age")
         assert age == 30
     
     def test_get_node_property_nonexistent(self, property_snapshot):
         """Test getting nonexistent property"""
         with pytest.raises(ValueError, match="Property key 'nonexistent' not found"):
-            property_snapshot.node_property(0, "nonexistent")
+            property_snapshot.get_property(0, "nonexistent")
     
     def test_get_nodes_with_property(self, property_snapshot):
         """Test getting nodes with a specific property value (label-scoped)"""
@@ -203,9 +203,9 @@ class TestGraphSnapshotRelationships:
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Person"], node_id=2)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -251,9 +251,9 @@ class TestGraphSnapshotRelationships:
         rels = relationship_snapshot.neighbor_ids(0, Direction.Outgoing)
         assert set(rels) == {1, 2}
     
-    def test_get_relationships_by_type(self, relationship_snapshot):
+    def test_get_relationships_with_type(self, relationship_snapshot):
         """Test getting all relationships of a specific type"""
-        knows_rels = relationship_snapshot.relationships_by_type("KNOWS")
+        knows_rels = relationship_snapshot.relationships_with_type("KNOWS")
         assert len(knows_rels) == 3  # All three relationships are KNOWS
         
         for rel in knows_rels:
@@ -445,7 +445,7 @@ class TestGraphSnapshotEdgeCases:
         builder = manager.create_builder()
         
         builder.add_node(["Person"], node_id=0)
-        builder.add_rel(0, 0, "SELF_REF")
+        builder.add_relationship(0, 0, "SELF_REF")
         
         builder.set_version("self_loop")
         builder.finalize_into(manager)
@@ -473,11 +473,11 @@ class TestBidirectionalBFS:
         builder.add_node(["Person"], node_id=3)
         builder.add_node(["Person"], node_id=4)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
-        builder.add_rel(2, 3, "KNOWS")
-        builder.add_rel(0, 4, "KNOWS")
-        builder.add_rel(4, 3, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
+        builder.add_relationship(2, 3, "KNOWS")
+        builder.add_relationship(0, 4, "KNOWS")
+        builder.add_relationship(4, 3, "KNOWS")
         
         builder.set_version("path_test")
         builder.finalize_into(manager)
@@ -512,12 +512,12 @@ class TestBFS:
         builder.add_node(["Person"], node_id=4)
         builder.add_node(["Company"], node_id=5)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
-        builder.add_rel(2, 3, "KNOWS")
-        builder.add_rel(0, 4, "KNOWS")
-        builder.add_rel(4, 3, "KNOWS")
-        builder.add_rel(0, 5, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
+        builder.add_relationship(2, 3, "KNOWS")
+        builder.add_relationship(0, 4, "KNOWS")
+        builder.add_relationship(4, 3, "KNOWS")
+        builder.add_relationship(0, 5, "WORKS_FOR")
         
         builder.set_version("bfs_test")
         builder.finalize_into(manager)
@@ -714,12 +714,12 @@ class TestBFS:
         builder.add_node(["Person"], node_id=4)
         builder.add_node(["Company"], node_id=5)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
-        builder.add_rel(2, 3, "KNOWS")
-        builder.add_rel(0, 4, "KNOWS")
-        builder.add_rel(4, 3, "KNOWS")
-        builder.add_rel(0, 5, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
+        builder.add_relationship(2, 3, "KNOWS")
+        builder.add_relationship(0, 4, "KNOWS")
+        builder.add_relationship(4, 3, "KNOWS")
+        builder.add_relationship(0, 5, "WORKS_FOR")
         
         builder.set_version("bfs_test")
         builder.finalize_into(manager)
@@ -846,12 +846,12 @@ class TestBFS:
         builder.add_node(["Person"], node_id=4)
         builder.add_node(["Company"], node_id=5)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
-        builder.add_rel(2, 3, "KNOWS")
-        builder.add_rel(0, 4, "KNOWS")
-        builder.add_rel(4, 3, "KNOWS")
-        builder.add_rel(0, 5, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
+        builder.add_relationship(2, 3, "KNOWS")
+        builder.add_relationship(0, 4, "KNOWS")
+        builder.add_relationship(4, 3, "KNOWS")
+        builder.add_relationship(0, 5, "WORKS_FOR")
         
         builder.set_version("bfs_test")
         builder.finalize_into(manager)

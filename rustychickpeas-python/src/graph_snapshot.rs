@@ -275,16 +275,7 @@ impl GraphSnapshot {
     /// Get neighbor node IDs of a node
     /// Returns a list of node IDs for neighbors in the specified direction
     fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
-        match direction {
-            Direction::Outgoing => Ok(self.snapshot.out_neighbors(node_id).to_vec()),
-            Direction::Incoming => Ok(self.snapshot.in_neighbors(node_id).to_vec()),
-            Direction::Both => {
-                let mut neighbors = Vec::new();
-                neighbors.extend_from_slice(self.snapshot.out_neighbors(node_id));
-                neighbors.extend_from_slice(self.snapshot.in_neighbors(node_id));
-                Ok(neighbors)
-            }
-        }
+        Ok(self.snapshot.neighbors(node_id, direction.into()))
     }
 
     /// Get neighbors of a node as Node objects
@@ -326,17 +317,12 @@ impl GraphSnapshot {
 
     /// Get degree of a node
     fn degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
-        match direction {
-            Direction::Outgoing => Ok(self.snapshot.out_neighbors(node_id).len()),
-            Direction::Incoming => Ok(self.snapshot.in_neighbors(node_id).len()),
-            Direction::Both => Ok(self.snapshot.out_neighbors(node_id).len()
-                + self.snapshot.in_neighbors(node_id).len()),
-        }
+        Ok(self.snapshot.neighbors(node_id, direction.into()).len())
     }
 
     /// Get relationships by type using the type_index bitmap for O(1) lookup
     /// Returns Relationship objects for all relationships of the specified type
-    fn relationships_by_type(&self, rel_type: String) -> PyResult<Vec<Relationship>> {
+    fn relationships_with_type(&self, rel_type: String) -> PyResult<Vec<Relationship>> {
         let rel_type_id = self.rel_type_from_str(&rel_type).ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Relationship type '{}' not found",
@@ -507,7 +493,7 @@ impl GraphSnapshot {
     }
 
     /// Get property value for a node
-    fn node_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
+    fn get_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
         let key_id = self.property_key_from_str(&key);
         if key_id.is_none() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(

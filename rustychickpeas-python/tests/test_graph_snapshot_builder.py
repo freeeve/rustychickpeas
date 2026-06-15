@@ -89,7 +89,7 @@ class TestGraphSnapshotBuilderRelationships:
     
     def test_add_rel(self, builder):
         """Test adding a relationship"""
-        builder.add_rel(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -98,9 +98,9 @@ class TestGraphSnapshotBuilderRelationships:
     
     def test_add_multiple_rels(self, builder):
         """Test adding multiple relationships"""
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
-        builder.add_rel(1, 2, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.add_relationship(1, 2, "WORKS_FOR")
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -109,7 +109,7 @@ class TestGraphSnapshotBuilderRelationships:
     
     def test_add_rel_self_loop(self, builder):
         """Test adding self-loop relationship"""
-        builder.add_rel(0, 0, "SELF_REF")
+        builder.add_relationship(0, 0, "SELF_REF")
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -134,7 +134,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "name") == "Alice"
+        assert snapshot.get_property(0, "name") == "Alice"
     
     def test_set_prop_integer(self, builder):
         """Test setting integer property"""
@@ -143,7 +143,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "age") == 30
+        assert snapshot.get_property(0, "age") == 30
     
     def test_set_prop_float(self, builder):
         """Test setting float property"""
@@ -152,7 +152,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "score") == pytest.approx(95.5)
+        assert snapshot.get_property(0, "score") == pytest.approx(95.5)
     
     def test_set_prop_bool(self, builder):
         """Test setting boolean property"""
@@ -161,7 +161,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "active") is True
+        assert snapshot.get_property(0, "active") is True
     
     def test_set_props_batch(self, builder):
         """Test setting multiple properties at once"""
@@ -170,9 +170,9 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "name") == "Alice"
-        assert snapshot.node_property(0, "age") == 30
-        assert snapshot.node_property(0, "active") is True
+        assert snapshot.get_property(0, "name") == "Alice"
+        assert snapshot.get_property(0, "age") == 30
+        assert snapshot.get_property(0, "active") is True
     
     def test_set_prop_str(self, builder):
         """Test set_prop_str method"""
@@ -181,7 +181,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "name") == "Alice"
+        assert snapshot.get_property(0, "name") == "Alice"
     
     def test_set_prop_i64(self, builder):
         """Test set_prop_i64 method"""
@@ -190,7 +190,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "age") == 30
+        assert snapshot.get_property(0, "age") == 30
     
     def test_set_prop_f64(self, builder):
         """Test set_prop_f64 method"""
@@ -199,7 +199,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "score") == pytest.approx(95.5)
+        assert snapshot.get_property(0, "score") == pytest.approx(95.5)
     
     def test_set_prop_bool_method(self, builder):
         """Test set_prop_bool method"""
@@ -208,7 +208,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "active") is True
+        assert snapshot.get_property(0, "active") is True
     
     def test_get_property(self, builder):
         """Test getting property from builder"""
@@ -225,7 +225,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "name") == "Bob"
+        assert snapshot.get_property(0, "name") == "Bob"
     
     def test_update_property_str(self, builder):
         """Test update_property_str method"""
@@ -235,7 +235,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "name") == "Bob"
+        assert snapshot.get_property(0, "name") == "Bob"
     
     def test_update_property_i64(self, builder):
         """Test update_property_i64 method"""
@@ -245,7 +245,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "age") == 31
+        assert snapshot.get_property(0, "age") == 31
     
     def test_update_property_f64(self, builder):
         """Test update_property_f64 method"""
@@ -253,7 +253,7 @@ class TestGraphSnapshotBuilderProperties:
         builder.update_prop_f64(0, "score", 96.0)
 
         snapshot = builder.finalize()
-        assert snapshot.node_property(0, "score") == pytest.approx(96.0)
+        assert snapshot.get_property(0, "score") == pytest.approx(96.0)
     
     def test_update_property_bool(self, builder):
         """Test update_property_bool method"""
@@ -263,7 +263,7 @@ class TestGraphSnapshotBuilderProperties:
         manager = RustyChickpeas()
         builder.finalize_into(manager)
         snapshot = manager.graph_snapshot(manager.versions()[0])
-        assert snapshot.node_property(0, "active") is False
+        assert snapshot.get_property(0, "active") is False
 
 
 class TestGraphSnapshotBuilderRelationshipProperties:
@@ -275,12 +275,12 @@ class TestGraphSnapshotBuilderRelationshipProperties:
         builder = GraphSnapshotBuilder()
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
-        builder.add_rel(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
         return builder
     
     def test_set_rel_prop_string(self, builder):
         """Test setting string property on relationship"""
-        builder.set_rel_prop(0, 1, "KNOWS", "since", "2020")
+        builder.set_relationship_prop(0, 1, "KNOWS", "since", "2020")
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -292,7 +292,7 @@ class TestGraphSnapshotBuilderRelationshipProperties:
     
     def test_set_rel_prop_integer(self, builder):
         """Test setting integer property on relationship"""
-        builder.set_rel_prop(0, 1, "KNOWS", "strength", 8)
+        builder.set_relationship_prop(0, 1, "KNOWS", "strength", 8)
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -303,8 +303,8 @@ class TestGraphSnapshotBuilderRelationshipProperties:
         assert rels[0].get_property("strength") == 8
     
     def test_set_rel_prop_str(self, builder):
-        """Test set_rel_prop_str method"""
-        builder.set_rel_prop_str(0, 1, "KNOWS", "since", "2020")
+        """Test set_relationship_prop_str method"""
+        builder.set_relationship_prop_str(0, 1, "KNOWS", "since", "2020")
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -314,8 +314,8 @@ class TestGraphSnapshotBuilderRelationshipProperties:
         assert rels[0].get_property("since") == "2020"
     
     def test_set_rel_prop_i64(self, builder):
-        """Test set_rel_prop_i64 method"""
-        builder.set_rel_prop_i64(0, 1, "KNOWS", "strength", 8)
+        """Test set_relationship_prop_i64 method"""
+        builder.set_relationship_prop_i64(0, 1, "KNOWS", "strength", 8)
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -325,8 +325,8 @@ class TestGraphSnapshotBuilderRelationshipProperties:
         assert rels[0].get_property("strength") == 8
     
     def test_set_rel_prop_f64(self, builder):
-        """Test set_rel_prop_f64 method"""
-        builder.set_rel_prop_f64(0, 1, "KNOWS", "weight", 0.85)
+        """Test set_relationship_prop_f64 method"""
+        builder.set_relationship_prop_f64(0, 1, "KNOWS", "weight", 0.85)
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -336,8 +336,8 @@ class TestGraphSnapshotBuilderRelationshipProperties:
         assert rels[0].get_property("weight") == pytest.approx(0.85)
     
     def test_set_rel_prop_bool(self, builder):
-        """Test set_rel_prop_bool method"""
-        builder.set_rel_prop_bool(0, 1, "KNOWS", "verified", True)
+        """Test set_relationship_prop_bool method"""
+        builder.set_relationship_prop_bool(0, 1, "KNOWS", "verified", True)
         
         manager = RustyChickpeas()
         builder.finalize_into(manager)
@@ -369,8 +369,8 @@ class TestGraphSnapshotBuilderQueries:
     
     def test_get_neighbor_ids(self, builder):
         """Test getting neighbor IDs from builder"""
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "KNOWS")
         
         outgoing, incoming = builder.neighbor_ids(0)
         assert set(outgoing) == {1, 2}
@@ -462,7 +462,7 @@ class TestGraphSnapshotBuilderFinalization:
         builder = GraphSnapshotBuilder()
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
-        builder.add_rel(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
         
         snapshot = builder.finalize()
         assert snapshot.node_count() >= 2

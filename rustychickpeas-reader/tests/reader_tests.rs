@@ -15,10 +15,10 @@ fn demo_graph_bytes() -> Vec<u8> {
     builder.add_node(Some(2), &["Company"]).unwrap();
     builder.add_node(Some(7), &["Company"]).unwrap(); // sparse gap 3..=6
     builder.set_prop_str(0, "name", "alice").unwrap(); // exercises column sections
-    builder.add_rel(0, 1, "KNOWS").unwrap();
-    builder.add_rel(1, 2, "WORKS_FOR").unwrap();
-    builder.add_rel(0, 2, "WORKS_FOR").unwrap();
-    builder.add_rel(2, 7, "PARENT_OF").unwrap();
+    builder.add_relationship(0, 1, "KNOWS").unwrap();
+    builder.add_relationship(1, 2, "WORKS_FOR").unwrap();
+    builder.add_relationship(0, 2, "WORKS_FOR").unwrap();
+    builder.add_relationship(2, 7, "PARENT_OF").unwrap();
     let snapshot = builder.finalize(None);
     let mut bytes = Vec::new();
     snapshot.write_rcpg(&mut bytes).unwrap();
@@ -30,16 +30,25 @@ fn reader_traversal_matches_core() {
     let bytes = demo_graph_bytes();
     let reader = GraphReader::from_rcpg_bytes(&bytes).unwrap();
 
-    assert_eq!(reader.n_nodes(), 4);
-    assert_eq!(reader.n_rels(), 4);
+    assert_eq!(reader.node_count(), 4);
+    assert_eq!(reader.relationship_count(), 4);
     assert_eq!(reader.csr_id_space(), 8); // sparse IDs: space is max_id + 1
 
-    assert_eq!(reader.out_neighbors(0), &[1, 2]);
-    assert_eq!(reader.in_neighbors(2), &[1, 0]);
-    assert_eq!(reader.out_neighbors(5), &[] as &[u32]); // gap ID
-    assert_eq!(reader.out_neighbors_by_type(0, "WORKS_FOR"), vec![2]);
-    assert_eq!(reader.out_neighbors_by_type(0, "NOPE"), Vec::<u32>::new());
-    assert_eq!(reader.in_neighbors_by_type(2, "WORKS_FOR"), vec![1, 0]);
+    assert_eq!(reader.neighbors(0, Direction::Outgoing), vec![1, 2]);
+    assert_eq!(reader.neighbors(2, Direction::Incoming), vec![1, 0]);
+    assert_eq!(reader.neighbors(5, Direction::Outgoing), Vec::<u32>::new()); // gap ID
+    assert_eq!(
+        reader.neighbors_by_type(0, Direction::Outgoing, "WORKS_FOR"),
+        vec![2]
+    );
+    assert_eq!(
+        reader.neighbors_by_type(0, Direction::Outgoing, "NOPE"),
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        reader.neighbors_by_type(2, Direction::Incoming, "WORKS_FOR"),
+        vec![1, 0]
+    );
 
     assert_eq!(reader.node_labels(0), vec!["Person"]);
     assert_eq!(reader.node_labels(7), vec!["Company"]);
@@ -80,8 +89,11 @@ fn topology_only_reader_traverses_without_columns() {
     let reader = GraphReader::topology_only(&bytes).unwrap();
     assert!(reader.graph().node_columns.is_empty());
     assert!(reader.graph().rel_columns.is_empty());
-    assert_eq!(reader.out_neighbors(0), &[1, 2]);
-    assert_eq!(reader.out_neighbors_by_type(0, "WORKS_FOR"), vec![2]);
+    assert_eq!(reader.neighbors(0, Direction::Outgoing), vec![1, 2]);
+    assert_eq!(
+        reader.neighbors_by_type(0, Direction::Outgoing, "WORKS_FOR"),
+        vec![2]
+    );
     assert_eq!(reader.bfs(0, 3, Direction::Outgoing), vec![1, 2, 7]);
     assert_eq!(reader.node_labels(7), vec!["Company"]);
 }

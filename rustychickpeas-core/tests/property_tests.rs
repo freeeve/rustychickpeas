@@ -11,6 +11,7 @@ use roaring::RoaringBitmap;
 use rustychickpeas_core::bitmap::NodeSet;
 use rustychickpeas_core::graph_builder::GraphBuilder;
 use rustychickpeas_core::graph_snapshot::ValueId;
+use rustychickpeas_core::types::Direction;
 
 // ---------------------------------------------------------------------------
 // NodeSet: adaptive Roaring/Bitset representations must agree with a
@@ -113,7 +114,7 @@ proptest! {
         let mut edge_count = 0u64;
         for (u, v, t) in edges {
             let (u, v) = (u % n, v % n);
-            builder.add_rel(u, v, REL_TYPES[t]).unwrap();
+            builder.add_relationship(u, v, REL_TYPES[t]).unwrap();
             out_model.entry(u).or_default().push(v);
             in_model.entry(v).or_default().push(u);
             edge_count += 1;
@@ -124,17 +125,17 @@ proptest! {
         prop_assert_eq!(snapshot.n_rels, edge_count);
 
         for id in 0..n {
-            let mut out: Vec<u32> = snapshot.out_neighbors(id).to_vec();
+            let mut out: Vec<u32> = snapshot.neighbors(id, Direction::Outgoing).to_vec();
             out.sort_unstable();
             let mut expected_out = out_model.remove(&id).unwrap_or_default();
             expected_out.sort_unstable();
-            prop_assert_eq!(out, expected_out, "out_neighbors({})", id);
+            prop_assert_eq!(out, expected_out, "neighbors({}, Outgoing)", id);
 
-            let mut inn: Vec<u32> = snapshot.in_neighbors(id).to_vec();
+            let mut inn: Vec<u32> = snapshot.neighbors(id, Direction::Incoming).to_vec();
             inn.sort_unstable();
             let mut expected_in = in_model.remove(&id).unwrap_or_default();
             expected_in.sort_unstable();
-            prop_assert_eq!(inn, expected_in, "in_neighbors({})", id);
+            prop_assert_eq!(inn, expected_in, "neighbors({}, Incoming)", id);
         }
 
         for (label, ids) in label_model {

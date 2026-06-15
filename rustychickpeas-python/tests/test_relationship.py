@@ -18,9 +18,9 @@ class TestRelationshipBasic:
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Company"], node_id=2)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
-        builder.add_rel(1, 2, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.add_relationship(1, 2, "WORKS_FOR")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -59,9 +59,9 @@ class TestRelationshipNodes:
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Company"], node_id=2)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
-        builder.add_rel(1, 2, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.add_relationship(1, 2, "WORKS_FOR")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -121,10 +121,10 @@ class TestRelationshipType:
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Company"], node_id=2)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
-        builder.add_rel(1, 2, "WORKS_FOR")
-        builder.add_rel(1, 0, "KNOWS")  # Bidirectional
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.add_relationship(1, 2, "WORKS_FOR")
+        builder.add_relationship(1, 0, "KNOWS")  # Bidirectional
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -172,15 +172,15 @@ class TestRelationshipProperties:
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Company"], node_id=2)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_FOR")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
         
         # Set relationship properties
-        builder.set_rel_prop(0, 1, "KNOWS", "since", "2020")
-        builder.set_rel_prop(0, 1, "KNOWS", "strength", 8)
-        builder.set_rel_prop(0, 2, "WORKS_FOR", "since", "2018")
-        builder.set_rel_prop(0, 2, "WORKS_FOR", "salary", 100000)
-        builder.set_rel_prop(0, 2, "WORKS_FOR", "active", True)
+        builder.set_relationship_prop(0, 1, "KNOWS", "since", "2020")
+        builder.set_relationship_prop(0, 1, "KNOWS", "strength", 8)
+        builder.set_relationship_prop(0, 2, "WORKS_FOR", "since", "2018")
+        builder.set_relationship_prop(0, 2, "WORKS_FOR", "salary", 100000)
+        builder.set_relationship_prop(0, 2, "WORKS_FOR", "active", True)
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -260,9 +260,9 @@ class TestRelationshipSerialization:
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.set_rel_prop(0, 1, "KNOWS", "since", "2020")
-        builder.set_rel_prop(0, 1, "KNOWS", "strength", 8)
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.set_relationship_prop(0, 1, "KNOWS", "since", "2020")
+        builder.set_relationship_prop(0, 1, "KNOWS", "strength", 8)
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -310,7 +310,7 @@ class TestRelationshipSerialization:
         
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
-        builder.add_rel(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -336,7 +336,7 @@ class TestRelationshipEdgeCases:
         builder = manager.create_builder()
         
         builder.add_node(["Person"], node_id=0)
-        builder.add_rel(0, 0, "SELF_REF")
+        builder.add_relationship(0, 0, "SELF_REF")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -359,8 +359,8 @@ class TestRelationshipEdgeCases:
         builder.add_node(["Person"], node_id=1)
         
         # Add multiple KNOWS relationships (if deduplication allows)
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -380,8 +380,8 @@ class TestRelationshipEdgeCases:
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
         
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 0, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 0, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)

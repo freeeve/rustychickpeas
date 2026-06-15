@@ -80,7 +80,9 @@ fn builder_add_relationships_benchmark(c: &mut Criterion) {
                 for i in 0..size {
                     let from = i as u64;
                     let to = ((i + 1) % size) as u64;
-                    builder.add_rel(from as u32, to as u32, "KNOWS").unwrap();
+                    builder
+                        .add_relationship(from as u32, to as u32, "KNOWS")
+                        .unwrap();
                 }
                 black_box(builder);
             });
@@ -133,7 +135,7 @@ fn builder_finalize_benchmark(c: &mut Criterion) {
                     for i in 0..size {
                         let from = i as u32;
                         let to = ((i + 1) % size) as u32;
-                        builder.add_rel(from, to, "KNOWS").unwrap();
+                        builder.add_relationship(from, to, "KNOWS").unwrap();
                     }
                     builder
                 },
@@ -223,7 +225,7 @@ fn builder_relationship_deduplication_benchmark(c: &mut Criterion) {
                 for i in 0..size {
                     let from = (i % (size / 10).max(1)) as u32;
                     let to = ((i + 1) % (size / 10).max(1)) as u32;
-                    builder.add_rel(from, to, "KNOWS").unwrap();
+                    builder.add_relationship(from, to, "KNOWS").unwrap();
                 }
                 black_box(builder);
             });

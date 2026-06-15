@@ -4,6 +4,7 @@
 //! These benchmarks require LDBC data files (see tests/ldbc_snb_bi_benchmark.rs for data setup).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use rustychickpeas_core::types::Direction;
 use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
 use std::env;
 use std::sync::OnceLock;
@@ -86,7 +87,7 @@ fn build_synthetic_ldbc_graph() -> GraphSnapshot {
         for k in 0..interests_per_person {
             let tag = pick_tag(p, k + 101);
             builder
-                .add_rel(person_base + p as u32, tag, "hasInterest")
+                .add_relationship(person_base + p as u32, tag, "hasInterest")
                 .unwrap();
         }
     }
@@ -95,10 +96,12 @@ fn build_synthetic_ldbc_graph() -> GraphSnapshot {
     for m in 0..n_post {
         let post = post_base + m as u32;
         let creator = person_base + (m % n_person) as u32;
-        builder.add_rel(creator, post, "hasCreator").unwrap();
+        builder
+            .add_relationship(creator, post, "hasCreator")
+            .unwrap();
         for k in 0..tags_per_message {
             let tag = pick_tag(m, k);
-            builder.add_rel(post, tag, "hasTag").unwrap();
+            builder.add_relationship(post, tag, "hasTag").unwrap();
         }
     }
 
@@ -106,10 +109,12 @@ fn build_synthetic_ldbc_graph() -> GraphSnapshot {
     for m in 0..n_comment {
         let comment = comment_base + m as u32;
         let creator = person_base + ((m * 7 + 3) % n_person) as u32;
-        builder.add_rel(creator, comment, "hasCreator").unwrap();
+        builder
+            .add_relationship(creator, comment, "hasCreator")
+            .unwrap();
         for k in 0..tags_per_message {
             let tag = pick_tag(m + 9_973, k);
-            builder.add_rel(comment, tag, "hasTag").unwrap();
+            builder.add_relationship(comment, tag, "hasTag").unwrap();
         }
     }
 
@@ -155,7 +160,8 @@ fn bi1_tag_evolution_benchmark(c: &mut Criterion) {
                 std::collections::HashMap::new();
 
             for &post_id in &posts {
-                let post_tags = graph.out_neighbors_by_type(black_box(post_id), &["hasTag"]);
+                let post_tags =
+                    graph.neighbors_by_type(black_box(post_id), Direction::Outgoing, &["hasTag"]);
 
                 for i in 0..post_tags.len() {
                     for j in (i + 1)..post_tags.len() {
@@ -170,7 +176,11 @@ fn bi1_tag_evolution_benchmark(c: &mut Criterion) {
             }
 
             for &comment_id in &comments {
-                let comment_tags = graph.out_neighbors_by_type(black_box(comment_id), &["hasTag"]);
+                let comment_tags = graph.neighbors_by_type(
+                    black_box(comment_id),
+                    Direction::Outgoing,
+                    &["hasTag"],
+                );
 
                 for i in 0..comment_tags.len() {
                     for j in (i + 1)..comment_tags.len() {
@@ -209,10 +219,16 @@ fn bi2_tag_person_path_benchmark(c: &mut Criterion) {
             // Find paths through shared tags (simplified - just find persons with shared tags)
             for i in 0..persons.len().min(100) {
                 for j in (i + 1)..persons.len().min(100) {
-                    let person1_tags =
-                        graph.out_neighbors_by_type(black_box(persons[i]), &["hasInterest"]);
-                    let person2_tags =
-                        graph.out_neighbors_by_type(black_box(persons[j]), &["hasInterest"]);
+                    let person1_tags = graph.neighbors_by_type(
+                        black_box(persons[i]),
+                        Direction::Outgoing,
+                        &["hasInterest"],
+                    );
+                    let person2_tags = graph.neighbors_by_type(
+                        black_box(persons[j]),
+                        Direction::Outgoing,
+                        &["hasInterest"],
+                    );
 
                     // Check for shared tags
                     for &tag1 in &person1_tags {
@@ -245,7 +261,11 @@ fn bi3_popular_topics_benchmark(c: &mut Criterion) {
 
             if let Some(posts) = graph.nodes_with_label("Post") {
                 for post_id in posts.iter() {
-                    let tags = graph.out_neighbors_by_type(black_box(post_id), &["hasTag"]);
+                    let tags = graph.neighbors_by_type(
+                        black_box(post_id),
+                        Direction::Outgoing,
+                        &["hasTag"],
+                    );
                     for tag in tags {
                         *tag_counts.entry(tag).or_insert(0) += 1;
                     }
@@ -254,7 +274,11 @@ fn bi3_popular_topics_benchmark(c: &mut Criterion) {
 
             if let Some(comments) = graph.nodes_with_label("Comment") {
                 for comment_id in comments.iter() {
-                    let tags = graph.out_neighbors_by_type(black_box(comment_id), &["hasTag"]);
+                    let tags = graph.neighbors_by_type(
+                        black_box(comment_id),
+                        Direction::Outgoing,
+                        &["hasTag"],
+                    );
                     for tag in tags {
                         *tag_counts.entry(tag).or_insert(0) += 1;
                     }
@@ -286,9 +310,9 @@ fn bi4_top_commenters_benchmark(c: &mut Criterion) {
 
             if let Some(comments) = graph.nodes_with_label("Comment") {
                 for comment_id in comments.iter() {
-                    let creators = graph.in_neighbors(black_box(comment_id));
+                    let creators = graph.neighbors(black_box(comment_id), Direction::Incoming);
 
-                    for &creator_id in creators {
+                    for &creator_id in &creators {
                         if let Some(persons) = graph.nodes_with_label("Person") {
                             if persons.contains(creator_id) {
                                 *person_comment_counts.entry(creator_id).or_insert(0) += 1;
@@ -323,9 +347,9 @@ fn bi5_active_users_benchmark(c: &mut Criterion) {
 
             if let Some(posts) = graph.nodes_with_label("Post") {
                 for post_id in posts.iter() {
-                    let creators = graph.in_neighbors(black_box(post_id));
+                    let creators = graph.neighbors(black_box(post_id), Direction::Incoming);
 
-                    for &creator_id in creators {
+                    for &creator_id in &creators {
                         if let Some(persons) = graph.nodes_with_label("Person") {
                             if persons.contains(creator_id) {
                                 *person_post_counts.entry(creator_id).or_insert(0) += 1;
@@ -360,7 +384,11 @@ fn bi6_tag_cooccurrence_benchmark(c: &mut Criterion) {
 
             if let Some(posts) = graph.nodes_with_label("Post") {
                 for post_id in posts.iter() {
-                    let tags = graph.out_neighbors_by_type(black_box(post_id), &["hasTag"]);
+                    let tags = graph.neighbors_by_type(
+                        black_box(post_id),
+                        Direction::Outgoing,
+                        &["hasTag"],
+                    );
 
                     for i in 0..tags.len() {
                         for j in (i + 1)..tags.len() {

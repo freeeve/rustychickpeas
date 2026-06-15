@@ -155,7 +155,7 @@ fn set_node_property_from_arrow(
 /// Handles Utf8, LargeUtf8, Int64/Int32, Float64/Float32, and Boolean.
 /// Returns SchemaError for unsupported column types so values are never
 /// silently dropped.
-fn set_rel_property_from_arrow(
+fn set_relationship_property_from_arrow(
     builder: &mut GraphBuilder,
     rel_idx: usize,
     key: &str,
@@ -1050,7 +1050,7 @@ impl GraphBuilder {
 
                     if should_add {
                         let rel_idx = self.rels.len(); // Index of the relationship we're about to add
-                        self.add_rel(start_id, end_id, rel_type)?;
+                        self.add_relationship(start_id, end_id, rel_type)?;
                         rel_ids.push((start_id, end_id));
                         row_to_rel_idx[i] = Some(rel_idx);
                     }
@@ -1066,7 +1066,7 @@ impl GraphBuilder {
 
                     for (i, rel_idx_slot) in row_to_rel_idx.iter().enumerate() {
                         if let Some(rel_idx) = *rel_idx_slot {
-                            set_rel_property_from_arrow(
+                            set_relationship_property_from_arrow(
                                 self,
                                 rel_idx,
                                 prop_col,
@@ -1512,7 +1512,7 @@ impl GraphBuilder {
 
                     if should_add {
                         let rel_idx = self.rels.len();
-                        self.add_rel(start_id, end_id, rel_type)?;
+                        self.add_relationship(start_id, end_id, rel_type)?;
                         rel_ids.push((start_id, end_id));
                         row_to_rel_idx[i] = Some(rel_idx);
                     }
@@ -1528,7 +1528,7 @@ impl GraphBuilder {
 
                     for (i, rel_idx_slot) in row_to_rel_idx.iter().enumerate() {
                         if let Some(rel_idx) = *rel_idx_slot {
-                            set_rel_property_from_arrow(
+                            set_relationship_property_from_arrow(
                                 self,
                                 rel_idx,
                                 prop_col,
@@ -1784,7 +1784,7 @@ mod tests {
 
         assert_eq!(rel_ids.len(), 4);
         assert_eq!(rel_ids, vec![(1, 2), (2, 3), (3, 4), (4, 5)]);
-        assert_eq!(builder.rel_count(), 4);
+        assert_eq!(builder.relationship_count(), 4);
     }
 
     #[test]
@@ -2133,7 +2133,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 4);
-        assert_eq!(builder.rel_count(), 4);
+        assert_eq!(builder.relationship_count(), 4);
     }
 
     #[test]
@@ -2198,7 +2198,7 @@ mod tests {
 
         // Should deduplicate the first two relationships (same from, to, type, weight)
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     #[test]
@@ -2354,7 +2354,7 @@ mod tests {
 
         // Only the first relationship should be added (others have null nodes)
         assert_eq!(rel_ids.len(), 1);
-        assert_eq!(builder.rel_count(), 1);
+        assert_eq!(builder.relationship_count(), 1);
     }
 
     #[test]
@@ -2419,7 +2419,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
 
         // Verify properties were set
         let snapshot = builder.finalize(None);
@@ -2820,7 +2820,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     #[test]
@@ -2848,7 +2848,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 4);
-        assert_eq!(builder.rel_count(), 4);
+        assert_eq!(builder.relationship_count(), 4);
     }
 
     #[test]
@@ -3009,7 +3009,7 @@ mod tests {
 
         // Only first relationship should be added (second has null type)
         assert_eq!(rel_ids.len(), 1);
-        assert_eq!(builder.rel_count(), 1);
+        assert_eq!(builder.relationship_count(), 1);
     }
 
     #[test]
@@ -3313,7 +3313,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 1);
-        assert_eq!(builder.rel_count(), 1);
+        assert_eq!(builder.relationship_count(), 1);
 
         // Verify all property types were set
         let snapshot = builder.finalize(None);
@@ -3847,7 +3847,7 @@ mod tests {
 
         // Only the first relationship should be added (others have null nodes)
         assert_eq!(rel_ids.len(), 1);
-        assert_eq!(builder.rel_count(), 1);
+        assert_eq!(builder.relationship_count(), 1);
     }
 
     #[test]
@@ -4588,7 +4588,7 @@ mod tests {
 
         // Should treat as unique (add all) since key_props is empty
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     #[test]
@@ -4657,7 +4657,7 @@ mod tests {
 
         // First two relationships have same (from, to, type, weight, verified), so should be deduplicated
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     // ============================================================================

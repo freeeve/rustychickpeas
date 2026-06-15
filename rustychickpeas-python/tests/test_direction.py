@@ -34,8 +34,8 @@ class TestDirection:
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Person"], node_id=2)
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -67,8 +67,8 @@ class TestDirection:
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Person"], node_id=2)
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -78,15 +78,15 @@ class TestDirection:
         node1 = snapshot.node(1)
         
         # Test outgoing
-        outgoing_ids = node0.relationship_ids(Direction.Outgoing)
+        outgoing_ids = node0.neighbor_ids(Direction.Outgoing)
         assert outgoing_ids == [1]
         
         # Test incoming
-        incoming_ids = node1.relationship_ids(Direction.Incoming)
+        incoming_ids = node1.neighbor_ids(Direction.Incoming)
         assert incoming_ids == [0]
         
         # Test both
-        both_ids = node1.relationship_ids(Direction.Both)
+        both_ids = node1.neighbor_ids(Direction.Both)
         assert set(both_ids) == {0, 2}
     
     def test_direction_in_get_degree(self):
@@ -97,8 +97,8 @@ class TestDirection:
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Person"], node_id=2)
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(1, 2, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(1, 2, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)
@@ -131,9 +131,9 @@ class TestDirection:
         builder.add_node(["Person"], node_id=0)
         builder.add_node(["Person"], node_id=1)
         builder.add_node(["Person"], node_id=2)
-        builder.add_rel(0, 1, "KNOWS")
-        builder.add_rel(0, 2, "WORKS_WITH")
-        builder.add_rel(1, 2, "KNOWS")
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_WITH")
+        builder.add_relationship(1, 2, "KNOWS")
         
         builder.set_version("test")
         builder.finalize_into(manager)

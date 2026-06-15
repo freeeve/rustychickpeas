@@ -33,15 +33,19 @@ fn main() {
 
     // Deterministic small-world-ish wiring
     for i in 0..PEOPLE {
-        builder.add_rel(i, (i + 1) % PEOPLE, "KNOWS").unwrap();
-        builder.add_rel(i, (i * 7 + 3) % PEOPLE, "KNOWS").unwrap();
         builder
-            .add_rel(i, PEOPLE + (i % COMPANIES), "WORKS_FOR")
+            .add_relationship(i, (i + 1) % PEOPLE, "KNOWS")
+            .unwrap();
+        builder
+            .add_relationship(i, (i * 7 + 3) % PEOPLE, "KNOWS")
+            .unwrap();
+        builder
+            .add_relationship(i, PEOPLE + (i % COMPANIES), "WORKS_FOR")
             .unwrap();
     }
     for c in 0..COMPANIES.saturating_sub(1) {
         builder
-            .add_rel(PEOPLE + c, PEOPLE + c + 1, "PARTNER_OF")
+            .add_relationship(PEOPLE + c, PEOPLE + c + 1, "PARTNER_OF")
             .unwrap();
     }
 

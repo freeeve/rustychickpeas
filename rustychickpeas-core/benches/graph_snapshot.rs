@@ -5,6 +5,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
+use rustychickpeas_core::types::Direction;
 use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
 use std::env;
 
@@ -43,7 +44,9 @@ fn setup_snapshot(num_nodes: usize, num_rels: usize) -> GraphSnapshot {
         let from = (i % num_nodes) as u64;
         let to = ((i + 1) % num_nodes) as u64;
         let rel_type = if i % 2 == 0 { "KNOWS" } else { "WORKS_FOR" };
-        builder.add_rel(from as u32, to as u32, rel_type).unwrap();
+        builder
+            .add_relationship(from as u32, to as u32, rel_type)
+            .unwrap();
     }
 
     builder.finalize(None)
@@ -83,12 +86,12 @@ fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
                 } else {
                     "WORKS_FOR"
                 };
-                builder.add_rel(node_id, target, rel_type).unwrap();
+                builder.add_relationship(node_id, target, rel_type).unwrap();
             }
             // Add some long-range connections (every 100th node)
             if i % 100 == 0 {
                 let target = ((i * 7 + 1) % num_nodes) as u32;
-                builder.add_rel(node_id, target, "KNOWS").unwrap();
+                builder.add_relationship(node_id, target, "KNOWS").unwrap();
             }
         }
     } else {
@@ -114,7 +117,9 @@ fn setup_realistic_graph(num_nodes: usize, avg_degree: usize) -> GraphSnapshot {
                 } else {
                     "WORKS_FOR"
                 };
-                builder.add_rel(i as u32, target, rel_type).unwrap();
+                builder
+                    .add_relationship(i as u32, target, rel_type)
+                    .unwrap();
             }
         }
     }
@@ -131,7 +136,7 @@ fn snapshot_get_neighbors_benchmark(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             b.iter(|| {
-                let neighbors = snapshot.out_neighbors(black_box(test_node));
+                let neighbors = snapshot.neighbors(black_box(test_node), Direction::Outgoing);
                 black_box(neighbors);
             });
         });
@@ -199,7 +204,7 @@ fn snapshot_get_degree_benchmark(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             b.iter(|| {
                 // Calculate degree from neighbors
-                let neighbors = snapshot.out_neighbors(black_box(test_node));
+                let neighbors = snapshot.neighbors(black_box(test_node), Direction::Outgoing);
                 let degree = neighbors.len();
                 black_box(degree);
             });
@@ -226,9 +231,9 @@ fn snapshot_traversal_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 // 2-hop traversal
                 let mut count = 0;
-                let neighbors1 = snapshot.out_neighbors(black_box(start_node));
+                let neighbors1 = snapshot.neighbors(black_box(start_node), Direction::Outgoing);
                 for &n1 in neighbors1.iter().take(10) {
-                    let neighbors2 = snapshot.out_neighbors(n1);
+                    let neighbors2 = snapshot.neighbors(n1, Direction::Outgoing);
                     count += neighbors2.len();
                 }
                 black_box(count);
@@ -569,14 +574,14 @@ fn snapshot_get_neighbors_high_degree_benchmark(c: &mut Criterion) {
     let hub_node = 0u32;
     for i in 1..=hub_degree {
         let target = (i % num_nodes) as u32;
-        builder.add_rel(hub_node, target, "KNOWS").unwrap();
+        builder.add_relationship(hub_node, target, "KNOWS").unwrap();
     }
 
     // Add some other relationships to make it realistic
     for i in 1..num_nodes {
         let from = i as u32;
         let to = ((i + 1) % num_nodes) as u32;
-        builder.add_rel(from, to, "KNOWS").unwrap();
+        builder.add_relationship(from, to, "KNOWS").unwrap();
     }
 
     let snapshot = builder.finalize(None);
@@ -584,7 +589,7 @@ fn snapshot_get_neighbors_high_degree_benchmark(c: &mut Criterion) {
     group.throughput(Throughput::Elements(hub_degree as u64));
     group.bench_function("10000", |b| {
         b.iter(|| {
-            let neighbors = snapshot.out_neighbors(black_box(hub_node));
+            let neighbors = snapshot.neighbors(black_box(hub_node), Direction::Outgoing);
             black_box(neighbors);
         });
     });
@@ -615,7 +620,7 @@ fn snapshot_get_property_many_nodes_benchmark(c: &mut Criterion) {
     for i in 0..num_nodes {
         let from = i as u32;
         let to = ((i + 1) % num_nodes) as u32;
-        builder.add_rel(from, to, "KNOWS").unwrap();
+        builder.add_relationship(from, to, "KNOWS").unwrap();
     }
 
     let snapshot = builder.finalize(None);

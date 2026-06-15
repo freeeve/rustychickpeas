@@ -80,12 +80,12 @@ impl GraphReader {
     }
 
     /// Actual node count (not the CSR ID-space size).
-    pub fn n_nodes(&self) -> u32 {
+    pub fn node_count(&self) -> u32 {
         self.graph.n_nodes
     }
 
     /// Relationship count.
-    pub fn n_rels(&self) -> u64 {
+    pub fn relationship_count(&self) -> u64 {
         self.graph.n_rels
     }
 
@@ -105,30 +105,43 @@ impl GraphReader {
         self.atom_ids.get(s).copied()
     }
 
-    /// Outgoing neighbors of `node_id` (empty for unknown IDs).
-    pub fn out_neighbors(&self, node_id: u32) -> &[u32] {
-        self.graph.out_neighbors(node_id)
+    /// Neighbors of `node_id` in the given direction (empty for unknown IDs).
+    /// [`Direction::Both`] returns outgoing neighbors followed by incoming ones.
+    pub fn neighbors(&self, node_id: u32, direction: Direction) -> Vec<u32> {
+        match direction {
+            Direction::Outgoing => self.graph.out_neighbors(node_id).to_vec(),
+            Direction::Incoming => self.graph.in_neighbors(node_id).to_vec(),
+            Direction::Both => {
+                let mut neighbors = self.graph.out_neighbors(node_id).to_vec();
+                neighbors.extend_from_slice(self.graph.in_neighbors(node_id));
+                neighbors
+            }
+        }
     }
 
-    /// Incoming neighbors of `node_id` (empty for unknown IDs).
-    pub fn in_neighbors(&self, node_id: u32) -> &[u32] {
-        self.graph.in_neighbors(node_id)
-    }
-
-    /// Outgoing neighbors reached via a relationship type.
-    pub fn out_neighbors_by_type(&self, node_id: u32, rel_type: &str) -> Vec<u32> {
-        self.neighbors_by_type(node_id, rel_type, Direction::Outgoing)
-    }
-
-    /// Incoming neighbors reached via a relationship type.
-    pub fn in_neighbors_by_type(&self, node_id: u32, rel_type: &str) -> Vec<u32> {
-        self.neighbors_by_type(node_id, rel_type, Direction::Incoming)
-    }
-
-    fn neighbors_by_type(&self, node_id: u32, rel_type: &str, dir: Direction) -> Vec<u32> {
+    /// Neighbors of `node_id` in the given direction reached via a relationship
+    /// type. [`Direction::Both`] returns outgoing neighbors followed by incoming.
+    pub fn neighbors_by_type(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_type: &str,
+    ) -> Vec<u32> {
         let Some(type_atom) = self.atom_id(rel_type) else {
             return Vec::new();
         };
+        let mut neighbors = Vec::new();
+        if matches!(direction, Direction::Outgoing | Direction::Both) {
+            neighbors.extend(self.neighbors_by_type_dir(node_id, type_atom, Direction::Outgoing));
+        }
+        if matches!(direction, Direction::Incoming | Direction::Both) {
+            neighbors.extend(self.neighbors_by_type_dir(node_id, type_atom, Direction::Incoming));
+        }
+        neighbors
+    }
+
+    /// Single-direction relationship-type neighbor scan over the resident CSR.
+    fn neighbors_by_type_dir(&self, node_id: u32, type_atom: u32, dir: Direction) -> Vec<u32> {
         let (offsets, nbrs, types) = match dir {
             Direction::Outgoing => (
                 &self.graph.out_offsets,
@@ -214,12 +227,14 @@ impl GraphReader {
                 };
                 match direction {
                     Direction::Outgoing => {
-                        expand(self.out_neighbors(node), &mut next, &mut visited)
+                        expand(self.graph.out_neighbors(node), &mut next, &mut visited)
                     }
-                    Direction::Incoming => expand(self.in_neighbors(node), &mut next, &mut visited),
+                    Direction::Incoming => {
+                        expand(self.graph.in_neighbors(node), &mut next, &mut visited)
+                    }
                     Direction::Both => {
-                        expand(self.out_neighbors(node), &mut next, &mut visited);
-                        expand(self.in_neighbors(node), &mut next, &mut visited);
+                        expand(self.graph.out_neighbors(node), &mut next, &mut visited);
+                        expand(self.graph.in_neighbors(node), &mut next, &mut visited);
                     }
                 }
             }

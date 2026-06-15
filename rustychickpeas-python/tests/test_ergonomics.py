@@ -13,7 +13,7 @@ def build_snapshot(n_nodes=3):
         builder.add_node(["Person"], node_id=i)
         builder.set_prop(i, "name", f"node{i}")
     for i in range(n_nodes - 1):
-        builder.add_rel(i, i + 1, "KNOWS")
+        builder.add_relationship(i, i + 1, "KNOWS")
     builder.set_version("test")
     builder.finalize_into(manager)
     return manager.graph_snapshot("test")

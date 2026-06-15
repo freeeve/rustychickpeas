@@ -181,7 +181,7 @@ builder.add_node(Some(1001), &["Person"]).unwrap();
 builder.add_node(Some(1002), &["Person"]).unwrap();
 
 // Add relationships (node IDs are required)
-builder.add_rel(1001, 1002, "KNOWS").unwrap();
+builder.add_relationship(1001, 1002, "KNOWS").unwrap();
 
 // Set properties
 builder.set_prop_str(1001, "name", "Alice").unwrap();
@@ -198,7 +198,7 @@ manager.add_snapshot(snapshot);
 let snapshot = manager.graph_snapshot("v1.0").unwrap();
 
 // Fast neighbor lookup (CSR format)
-let neighbors = snapshot.out_neighbors(1001);
+let neighbors = snapshot.neighbors(1001, Direction::Outgoing);
 
 // Label query (inverted index)
 let person_nodes = snapshot.nodes_with_label("Person");

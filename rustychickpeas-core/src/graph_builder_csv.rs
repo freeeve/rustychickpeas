@@ -728,8 +728,8 @@ fn process_rel_row(
         return Ok(None);
     }
 
-    // Add relationship via add_rel() to ensure deg_out/deg_in and known_nodes are updated
-    let rel_idx = builder.add_rel(start_id, end_id, &rel_type)?;
+    // Add relationship via add_relationship() to ensure deg_out/deg_in and known_nodes are updated
+    let rel_idx = builder.add_relationship(start_id, end_id, &rel_type)?;
 
     // Add properties
     for (prop_key, prop_val) in props {
@@ -985,7 +985,7 @@ mod tests {
 
         assert_eq!(rel_ids.len(), 4);
         assert_eq!(rel_ids, vec![(1, 2), (2, 3), (3, 4), (4, 5)]);
-        assert_eq!(builder.rel_count(), 4);
+        assert_eq!(builder.relationship_count(), 4);
     }
 
     #[test]
@@ -1038,7 +1038,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     #[test]
@@ -1168,7 +1168,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rel_ids.len(), 2);
-        assert_eq!(builder.rel_count(), 2);
+        assert_eq!(builder.relationship_count(), 2);
     }
 
     #[test]

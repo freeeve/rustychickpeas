@@ -11,7 +11,7 @@ High-performance in-memory graph database written in Rust with Python bindings v
 
 Three-layer design:
 
-1. **Builder Layer** (`GraphBuilder`) — Mutable staging area for constructing graphs. Supports direct add_node/add_rel calls and bulk loading from CSV/Parquet/S3.
+1. **Builder Layer** (`GraphBuilder`) — Mutable staging area for constructing graphs. Supports direct add_node/add_relationship calls and bulk loading from CSV/Parquet/S3.
 2. **Snapshot Layer** (`GraphSnapshot`) — Immutable, read-optimized graph. CSR adjacency, columnar properties, lazy-built inverted indexes.
 3. **Manager Layer** (`RustyChickpeas`) — Thread-safe version management for multiple snapshots via `Arc<RwLock<HashMap>>`.
 
@@ -91,7 +91,7 @@ rustychickpeas/
 
 - **NodeId** = `u32` (max ~4.3B nodes)
 - **NodeSet** — Adaptive: `RoaringBitmap` for large sets, `BitVec` for sets <= 256 nodes
-- **CSR adjacency** — `out_neighbors`/`in_neighbors` arrays with parallel type arrays
+- **CSR adjacency** — `out_nbrs`/`in_nbrs` arrays with parallel type arrays; queried via `neighbors(node, Direction)`
 - **Column** — Dense or sparse columnar property storage (>80% fill = dense)
 - **StringInterner** — Thread-safe string interning via `lasso::Rodeo` wrapped in `Arc<RwLock>`
 - **ValueId** — Tagged union (Str, I64, F64, Bool) for property values

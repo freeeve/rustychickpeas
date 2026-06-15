@@ -21,7 +21,7 @@ implemented here).
 
 ```rust
 let reader = GraphReader::from_rcpg_bytes(&bytes)?;
-reader.out_neighbors(0);
+reader.neighbors(0, Direction::Outgoing);
 reader.bfs(0, 3, Direction::Outgoing);
 
 // records via roaringrange's RecordStore over any RangeFetch transport
