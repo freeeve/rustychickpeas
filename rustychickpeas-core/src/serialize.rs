@@ -145,23 +145,42 @@ impl GraphSnapshot {
             .map(|(key, data)| (key, data_to_column(data)))
             .collect();
 
+        let out_types: Vec<RelationshipType> = section
+            .out_types
+            .into_iter()
+            .map(RelationshipType::new)
+            .collect();
+        let in_types: Vec<RelationshipType> = section
+            .in_types
+            .into_iter()
+            .map(RelationshipType::new)
+            .collect();
+        // The format does not store the incoming->outgoing position map; rebuild
+        // it from the adjacency arrays so incoming relationship-property reads
+        // are correct. Only needed when the snapshot has relationship properties.
+        let in_to_out = if rel_columns.is_empty() {
+            Vec::new()
+        } else {
+            crate::graph_snapshot::compute_in_to_out_from_csr(
+                &section.out_offsets,
+                &section.out_nbrs,
+                &out_types,
+                &section.in_offsets,
+                &section.in_nbrs,
+                &in_types,
+            )
+        };
+
         GraphSnapshot {
             n_nodes: section.n_nodes,
             n_rels: section.n_rels,
             out_offsets: section.out_offsets,
             out_nbrs: section.out_nbrs,
-            out_types: section
-                .out_types
-                .into_iter()
-                .map(RelationshipType::new)
-                .collect(),
+            out_types,
             in_offsets: section.in_offsets,
             in_nbrs: section.in_nbrs,
-            in_types: section
-                .in_types
-                .into_iter()
-                .map(RelationshipType::new)
-                .collect(),
+            in_types,
+            in_to_out,
             label_index,
             type_index,
             version: section.version,

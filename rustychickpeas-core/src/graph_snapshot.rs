@@ -168,6 +168,72 @@ impl Atoms {
     }
 }
 
+/// A relationship incident to a node, as returned by
+/// [`GraphSnapshot::relationships`].
+///
+/// Carries the other endpoint, the relationship type, the direction relative to
+/// the queried node, and the CSR position used to read the relationship's
+/// properties via [`GraphSnapshot::relationship_property`] — which the plain
+/// neighbor accessors do not expose. `pos` is valid for property access in
+/// **both** directions (for incoming relationships it is mapped to the position
+/// where the property is stored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelationshipRef {
+    /// The other endpoint of the relationship, relative to the queried node.
+    pub neighbor: NodeId,
+    /// Relationship type.
+    pub rel_type: RelationshipType,
+    /// Direction relative to the queried node: `Outgoing` if it is the source,
+    /// `Incoming` if it is the destination.
+    pub direction: Direction,
+    /// CSR position; pass to [`GraphSnapshot::relationship_property`] to read
+    /// this relationship's properties.
+    pub pos: u32,
+}
+
+/// Recompute the incoming->outgoing CSR position map from the adjacency arrays
+/// alone (used when a snapshot is reconstructed without builder permutations,
+/// e.g. on deserialization). Pairs the k-th `u->v` edge of a given type in the
+/// outgoing CSR with the k-th such edge in the incoming CSR; both CSRs preserve
+/// insertion order within a group, so the pairing matches the original edges.
+pub(crate) fn compute_in_to_out_from_csr(
+    out_offsets: &[u32],
+    out_nbrs: &[NodeId],
+    out_types: &[RelationshipType],
+    in_offsets: &[u32],
+    in_nbrs: &[NodeId],
+    in_types: &[RelationshipType],
+) -> Vec<u32> {
+    use std::collections::{HashMap, VecDeque};
+    let n = in_offsets.len().saturating_sub(1);
+    let m = out_nbrs.len();
+    let mut groups: HashMap<(NodeId, NodeId, RelationshipType), VecDeque<u32>> = HashMap::new();
+    for v in 0..n {
+        for inpos in in_offsets[v]..in_offsets[v + 1] {
+            let key = (
+                in_nbrs[inpos as usize],
+                v as NodeId,
+                in_types[inpos as usize],
+            );
+            groups.entry(key).or_default().push_back(inpos);
+        }
+    }
+    let mut in_to_out = vec![0u32; m];
+    for u in 0..n {
+        for outpos in out_offsets[u]..out_offsets[u + 1] {
+            let key = (
+                u as NodeId,
+                out_nbrs[outpos as usize],
+                out_types[outpos as usize],
+            );
+            if let Some(inpos) = groups.get_mut(&key).and_then(|q| q.pop_front()) {
+                in_to_out[inpos as usize] = outpos;
+            }
+        }
+    }
+    in_to_out
+}
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
@@ -209,6 +275,12 @@ pub struct GraphSnapshot {
     /// Incoming relationship types: len = n_rels
     /// Parallel to in_nbrs, contains relationship type for each edge
     pub in_types: Vec<RelationshipType>,
+
+    /// Maps an incoming CSR position to the outgoing CSR position of the same
+    /// edge, so relationship properties (stored by outgoing position) can be
+    /// read for incoming relationships. Empty when the graph has no
+    /// relationship properties (the map would be unused).
+    pub in_to_out: Vec<u32>,
 
     // --- Label/type indexes (value -> nodeset) ---
     /// Label index: label -> nodes with that label
@@ -329,6 +401,7 @@ impl GraphSnapshot {
             in_offsets: vec![0],
             in_nbrs: Vec::new(),
             in_types: Vec::new(),
+            in_to_out: Vec::new(),
             label_index: HashMap::new(),
             type_index: HashMap::new(),
             version: None,
@@ -568,6 +641,75 @@ impl GraphSnapshot {
             node_id,
             allowed.as_ref(),
         )
+    }
+
+    /// Get the relationships incident to a node in the given direction,
+    /// optionally filtered by relationship type (an empty `rel_types` matches
+    /// all types).
+    ///
+    /// Unlike [`out_neighbors`](Self::out_neighbors)/[`in_neighbors`](Self::in_neighbors),
+    /// which yield only node IDs, each [`RelationshipRef`] carries the
+    /// [`pos`](RelationshipRef::pos) needed to read the relationship's
+    /// properties via [`relationship_property`](Self::relationship_property) —
+    /// for incoming relationships as well as outgoing (the incoming position is
+    /// mapped to where the property is stored). Use this when a query must read
+    /// a per-relationship property during traversal, e.g. filtering `KNOWS`
+    /// edges by a `creationDate`.
+    pub fn relationships(
+        &self,
+        node_id: NodeId,
+        direction: Direction,
+        rel_types: &[&str],
+    ) -> Vec<RelationshipRef> {
+        let allowed: Option<std::collections::HashSet<RelationshipType>> = if rel_types.is_empty() {
+            None
+        } else {
+            Some(
+                rel_types
+                    .iter()
+                    .filter_map(|s| self.relationship_type_from_str(s))
+                    .collect(),
+            )
+        };
+        let keep = |t: &RelationshipType| allowed.as_ref().is_none_or(|a| a.contains(t));
+        let node = node_id as usize;
+        let mut rels = Vec::new();
+
+        if matches!(direction, Direction::Outgoing | Direction::Both)
+            && node < self.out_offsets.len().saturating_sub(1)
+        {
+            for pos in self.out_offsets[node]..self.out_offsets[node + 1] {
+                let rel_type = self.out_types[pos as usize];
+                if keep(&rel_type) {
+                    rels.push(RelationshipRef {
+                        neighbor: self.out_nbrs[pos as usize],
+                        rel_type,
+                        direction: Direction::Outgoing,
+                        pos,
+                    });
+                }
+            }
+        }
+        if matches!(direction, Direction::Incoming | Direction::Both)
+            && node < self.in_offsets.len().saturating_sub(1)
+        {
+            for inpos in self.in_offsets[node]..self.in_offsets[node + 1] {
+                let rel_type = self.in_types[inpos as usize];
+                if keep(&rel_type) {
+                    // Map the incoming position to the outgoing position where
+                    // the property is stored (falls back to `inpos` when the
+                    // graph has no relationship properties — then unused).
+                    let pos = self.in_to_out.get(inpos as usize).copied().unwrap_or(inpos);
+                    rels.push(RelationshipRef {
+                        neighbor: self.in_nbrs[inpos as usize],
+                        rel_type,
+                        direction: Direction::Incoming,
+                        pos,
+                    });
+                }
+            }
+        }
+        rels
     }
 
     /// Get incoming neighbors filtered by relationship types
@@ -1370,6 +1512,7 @@ mod tests {
             in_offsets,
             in_nbrs,
             in_types,
+            in_to_out: Vec::new(),
             label_index,
             type_index,
             version: builder.version.clone(),
@@ -1947,6 +2090,7 @@ mod tests {
             in_offsets: vec![0, 0],
             in_nbrs: Vec::new(),
             in_types: Vec::new(),
+            in_to_out: Vec::new(),
             label_index: HashMap::new(),
             type_index: HashMap::new(),
             version: builder.version.clone(),
