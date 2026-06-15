@@ -760,12 +760,15 @@ impl GraphBuilder {
         (out_offsets, out_nbrs, out_types, builder_to_csr)
     }
 
-    /// Build CSR incoming adjacency arrays
+    /// Build CSR incoming adjacency arrays, plus a `builder_to_in_csr` mapping
+    /// (builder relationship index -> position in the incoming CSR arrays). The
+    /// mapping lets `finalize` pair each incoming edge with its outgoing CSR
+    /// position, where relationship properties are stored.
     fn build_csr_incoming(
         &self,
         n: usize,
         m: usize,
-    ) -> (Vec<u32>, Vec<NodeId>, Vec<RelationshipType>) {
+    ) -> (Vec<u32>, Vec<NodeId>, Vec<RelationshipType>, Vec<usize>) {
         let mut in_offsets = vec![0u32; n + 1];
         for i in 0..n {
             in_offsets[i + 1] = in_offsets[i] + self.deg_in[i];
@@ -773,14 +776,18 @@ impl GraphBuilder {
         let mut in_nbrs = vec![0u32; m];
         let mut in_types = vec![RelationshipType::new(0); m];
         let mut in_pos = vec![0u32; n];
-        for ((u, v), rel_type) in self.rels.iter().zip(self.rel_types.iter()) {
+        let mut builder_to_in_csr: Vec<usize> = vec![0; m];
+        for (builder_idx, ((u, v), rel_type)) in
+            self.rels.iter().zip(self.rel_types.iter()).enumerate()
+        {
             let v_idx = *v as usize;
             let pos = (in_offsets[v_idx] + in_pos[v_idx]) as usize;
             in_nbrs[pos] = *u;
             in_types[pos] = *rel_type;
+            builder_to_in_csr[builder_idx] = pos;
             in_pos[v_idx] += 1;
         }
-        (in_offsets, in_nbrs, in_types)
+        (in_offsets, in_nbrs, in_types, builder_to_in_csr)
     }
 
     /// Build label index mapping labels to NodeSets
@@ -1095,7 +1102,7 @@ impl GraphBuilder {
         let m = self.rels.len();
 
         let (out_offsets, out_nbrs, out_types, builder_to_csr) = self.build_csr_outgoing(n, m);
-        let (in_offsets, in_nbrs, in_types) = self.build_csr_incoming(n, m);
+        let (in_offsets, in_nbrs, in_types, builder_to_in_csr) = self.build_csr_incoming(n, m);
         let label_index = self.build_label_index(n);
         let type_index = self.build_type_index();
 
@@ -1115,6 +1122,24 @@ impl GraphBuilder {
             self.node_col_str,
             n,
         );
+        // Relationship properties are stored by outgoing CSR position. To read
+        // them for *incoming* relationships too, build a map from each incoming
+        // CSR position to the corresponding outgoing position. Only needed (and
+        // only built) when the graph actually has relationship properties.
+        let has_rel_props = !self.rel_col_i64.is_empty()
+            || !self.rel_col_f64.is_empty()
+            || !self.rel_col_bool.is_empty()
+            || !self.rel_col_str.is_empty();
+        let in_to_out: Vec<u32> = if has_rel_props {
+            let mut map = vec![0u32; m];
+            for builder_idx in 0..m {
+                map[builder_to_in_csr[builder_idx]] = builder_to_csr[builder_idx] as u32;
+            }
+            map
+        } else {
+            Vec::new()
+        };
+
         let rel_columns = Self::build_rel_columns(
             self.rel_col_i64,
             self.rel_col_f64,
@@ -1135,6 +1160,7 @@ impl GraphBuilder {
             in_offsets,
             in_nbrs,
             in_types,
+            in_to_out,
             label_index,
             type_index,
             version: self.version.clone(),
@@ -2083,6 +2109,74 @@ mod tests {
         let weight_val = ValueId::I64(5);
         let prop = snapshot.relationship_property(csr_pos, "weight");
         assert_eq!(prop, Some(weight_val));
+    }
+
+    #[test]
+    fn test_relationships_read_properties_both_directions() {
+        use crate::types::Direction;
+        // Node 2 is a shared destination so we can verify INCOMING property
+        // reads — the case that was previously broken, since incoming CSR
+        // positions do not index the (outgoing-keyed) relationship columns.
+        let mut builder = GraphBuilder::new(None, None);
+        for id in 1..=4 {
+            builder.add_node(Some(id), &["Person"]).unwrap();
+        }
+        builder.add_rel(1, 2, "KNOWS").unwrap();
+        builder.add_rel(1, 3, "KNOWS").unwrap();
+        builder.add_rel(4, 2, "KNOWS").unwrap();
+        builder.set_rel_prop_i64(1, 2, "KNOWS", "since", 2020);
+        builder.set_rel_prop_i64(1, 3, "KNOWS", "since", 2021);
+        builder.set_rel_prop_i64(4, 2, "KNOWS", "since", 2019);
+        let g = builder.finalize(None);
+
+        // Outgoing from 1.
+        let mut out = std::collections::HashMap::new();
+        for r in g.relationships(1, Direction::Outgoing, &["KNOWS"]) {
+            assert_eq!(r.direction, Direction::Outgoing);
+            out.insert(r.neighbor, g.relationship_property(r.pos, "since"));
+        }
+        assert_eq!(out.get(&2), Some(&Some(ValueId::I64(2020))));
+        assert_eq!(out.get(&3), Some(&Some(ValueId::I64(2021))));
+
+        // Incoming to 2: 1->2 (2020) and 4->2 (2019). Property must read
+        // correctly via the mapped position (the fix).
+        let mut inc = std::collections::HashMap::new();
+        for r in g.relationships(2, Direction::Incoming, &["KNOWS"]) {
+            assert_eq!(r.direction, Direction::Incoming);
+            inc.insert(r.neighbor, g.relationship_property(r.pos, "since"));
+        }
+        assert_eq!(inc.get(&1), Some(&Some(ValueId::I64(2020))));
+        assert_eq!(inc.get(&4), Some(&Some(ValueId::I64(2019))));
+
+        // Direction, filter, and empty cases.
+        assert_eq!(g.relationships(1, Direction::Both, &[]).len(), 2); // 2 out, 0 in
+        assert_eq!(g.relationships(2, Direction::Both, &["KNOWS"]).len(), 2); // 0 out, 2 in
+        assert_eq!(g.relationships(1, Direction::Outgoing, &["NOPE"]).len(), 0);
+        assert_eq!(g.relationships(3, Direction::Incoming, &["KNOWS"]).len(), 1);
+    }
+
+    #[test]
+    fn test_relationships_properties_survive_roundtrip() {
+        use crate::types::Direction;
+        // After a serialize round-trip (which rebuilds the in->out position map
+        // from adjacency alone), incoming relationship-property reads must still
+        // be correct.
+        let mut builder = GraphBuilder::new(None, None);
+        for id in 1..=3 {
+            builder.add_node(Some(id), &["Person"]).unwrap();
+        }
+        builder.add_rel(1, 3, "KNOWS").unwrap();
+        builder.add_rel(2, 3, "KNOWS").unwrap();
+        builder.set_rel_prop_i64(1, 3, "KNOWS", "since", 2020);
+        builder.set_rel_prop_i64(2, 3, "KNOWS", "since", 2018);
+        let restored = GraphSnapshot::from_graph_section(builder.finalize(None).to_graph_section());
+
+        let mut inc = std::collections::HashMap::new();
+        for r in restored.relationships(3, Direction::Incoming, &["KNOWS"]) {
+            inc.insert(r.neighbor, restored.relationship_property(r.pos, "since"));
+        }
+        assert_eq!(inc.get(&1), Some(&Some(ValueId::I64(2020))));
+        assert_eq!(inc.get(&2), Some(&Some(ValueId::I64(2018))));
     }
 
     #[test]

@@ -11,7 +11,8 @@ use rustychickpeas_core::GraphSnapshot as CoreGraphSnapshot;
 #[pyclass(name = "Relationship")]
 pub struct Relationship {
     pub(crate) snapshot: std::sync::Arc<CoreGraphSnapshot>,
-    /// Index in the CSR arrays (out_nbrs/out_types or in_nbrs/in_types)
+    /// Index in the CSR arrays (out_nbrs/out_types when outgoing, in_nbrs/in_types
+    /// when incoming).
     pub(crate) rel_index: u32,
     /// Whether this is an outgoing relationship (true) or incoming (false)
     pub(crate) is_outgoing: bool,
@@ -119,7 +120,19 @@ impl Relationship {
 
     /// Get property value for this relationship
     fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
-        let value_id = self.snapshot.relationship_property(self.rel_index, &key);
+        // Relationship properties are stored by outgoing CSR position. For an
+        // incoming relationship `rel_index` addresses the incoming CSR, so map
+        // it to the corresponding outgoing position first.
+        let prop_index = if self.is_outgoing {
+            self.rel_index
+        } else {
+            self.snapshot
+                .in_to_out
+                .get(self.rel_index as usize)
+                .copied()
+                .unwrap_or(self.rel_index)
+        };
+        let value_id = self.snapshot.relationship_property(prop_index, &key);
 
         Python::with_gil(|py| {
             Ok(value_id.and_then(|vid| value_id_to_pyobject(py, vid, &self.snapshot.atoms)))
