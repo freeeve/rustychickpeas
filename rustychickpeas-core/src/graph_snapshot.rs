@@ -234,6 +234,70 @@ pub(crate) fn compute_in_to_out_from_csr(
     in_to_out
 }
 
+/// The result of a shortest-path search ([`GraphSnapshot::dijkstra`]): the
+/// shortest distance to every reached node, with predecessors for path
+/// reconstruction.
+#[derive(Debug, Clone)]
+pub struct ShortestPaths {
+    source: NodeId,
+    dist: HashMap<NodeId, f64>,
+    prev: HashMap<NodeId, NodeId>,
+}
+
+impl ShortestPaths {
+    /// The shortest distance from the source to `node`, or `None` if unreached.
+    pub fn distance(&self, node: NodeId) -> Option<f64> {
+        self.dist.get(&node).copied()
+    }
+
+    /// Whether `node` was reached from the source.
+    pub fn reached(&self, node: NodeId) -> bool {
+        self.dist.contains_key(&node)
+    }
+
+    /// The shortest path from the source to `target` as a node sequence (source
+    /// first, target last), or `None` if `target` was not reached.
+    pub fn path_to(&self, target: NodeId) -> Option<Vec<NodeId>> {
+        if !self.dist.contains_key(&target) {
+            return None;
+        }
+        let mut path = vec![target];
+        let mut cur = target;
+        while cur != self.source {
+            cur = *self.prev.get(&cur)?;
+            path.push(cur);
+        }
+        path.reverse();
+        Some(path)
+    }
+}
+
+/// Min-heap entry for Dijkstra, ordered by ascending cost.
+struct DijkstraState {
+    cost: f64,
+    node: NodeId,
+}
+impl PartialEq for DijkstraState {
+    fn eq(&self, other: &Self) -> bool {
+        self.cost == other.cost && self.node == other.node
+    }
+}
+impl Eq for DijkstraState {}
+impl Ord for DijkstraState {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse cost so BinaryHeap (a max-heap) yields the smallest cost first.
+        other
+            .cost
+            .total_cmp(&self.cost)
+            .then_with(|| self.node.cmp(&other.node))
+    }
+}
+impl PartialOrd for DijkstraState {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
@@ -710,6 +774,61 @@ impl GraphSnapshot {
             }
         }
         rels
+    }
+
+    /// Weighted single-source shortest paths via Dijkstra's algorithm.
+    ///
+    /// The `weight` closure returns the cost of traversing a relationship; it
+    /// receives the step's source node and the [`RelationshipRef`], so it can
+    /// read a stored edge weight via [`RelationshipRef::pos`] (with
+    /// [`relationship_property`](Self::relationship_property)) or compute a
+    /// derived cost. Weights must be **non-negative** (Dijkstra's assumption).
+    ///
+    /// Pass a `target` to stop as soon as its shortest distance is known
+    /// (single-pair search), or `None` to reach all nodes. `direction` and
+    /// `rel_types` restrict which relationships are followed, as in
+    /// [`relationships`](Self::relationships).
+    pub fn dijkstra<W>(
+        &self,
+        source: NodeId,
+        direction: Direction,
+        rel_types: &[&str],
+        target: Option<NodeId>,
+        weight: W,
+    ) -> ShortestPaths
+    where
+        W: Fn(NodeId, &RelationshipRef) -> f64,
+    {
+        let mut dist: HashMap<NodeId, f64> = HashMap::new();
+        let mut prev: HashMap<NodeId, NodeId> = HashMap::new();
+        let mut heap = std::collections::BinaryHeap::new();
+        dist.insert(source, 0.0);
+        heap.push(DijkstraState {
+            cost: 0.0,
+            node: source,
+        });
+
+        while let Some(DijkstraState { cost, node }) = heap.pop() {
+            // Skip stale heap entries (a shorter path was found after pushing).
+            if cost > *dist.get(&node).unwrap_or(&f64::INFINITY) {
+                continue;
+            }
+            if Some(node) == target {
+                break;
+            }
+            for rel in self.relationships(node, direction, rel_types) {
+                let next = cost + weight(node, &rel);
+                if next < *dist.get(&rel.neighbor).unwrap_or(&f64::INFINITY) {
+                    dist.insert(rel.neighbor, next);
+                    prev.insert(rel.neighbor, node);
+                    heap.push(DijkstraState {
+                        cost: next,
+                        node: rel.neighbor,
+                    });
+                }
+            }
+        }
+        ShortestPaths { source, dist, prev }
     }
 
     /// Get incoming neighbors filtered by relationship types
