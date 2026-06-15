@@ -2180,6 +2180,39 @@ mod tests {
     }
 
     #[test]
+    fn test_dijkstra_weighted_paths() {
+        use crate::types::Direction;
+        // Weights stored as edge properties; the cost closure reads them via the
+        // relationship position (the composition the relationships() API enables).
+        let mut b = GraphBuilder::new(None, None);
+        for id in 1..=5 {
+            b.add_node(Some(id), &["N"]).unwrap();
+        }
+        for &(u, v, w) in &[(1, 2, 1), (1, 3, 5), (2, 3, 1), (3, 4, 2), (2, 4, 10)] {
+            b.add_rel(u, v, "E").unwrap();
+            b.set_rel_prop_i64(u, v, "E", "w", w);
+        }
+        let g = b.finalize(None);
+        let cost = |_from: NodeId, rel: &crate::RelationshipRef| match g
+            .relationship_property(rel.pos, "w")
+        {
+            Some(ValueId::I64(w)) => w as f64,
+            _ => f64::INFINITY,
+        };
+
+        let sp = g.dijkstra(1, Direction::Outgoing, &["E"], None, cost);
+        assert_eq!(sp.distance(4), Some(4.0)); // 1->2->3->4 (4), beats 1->2->4 (11)
+        assert_eq!(sp.distance(3), Some(2.0)); // 1->2->3 (2), beats direct 1->3 (5)
+        assert_eq!(sp.path_to(4), Some(vec![1, 2, 3, 4]));
+        assert_eq!(sp.distance(5), None);
+        assert!(!sp.reached(5));
+
+        // Single-pair search stops early but still reports the right distance.
+        let sp2 = g.dijkstra(1, Direction::Outgoing, &["E"], Some(4), cost);
+        assert_eq!(sp2.distance(4), Some(4.0));
+    }
+
+    #[test]
     fn test_set_rel_props() {
         use crate::types::PropertyValue;
 
