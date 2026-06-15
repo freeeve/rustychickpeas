@@ -643,11 +643,91 @@ fn snapshot_get_property_many_nodes_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
+fn snapshot_neighbors_incoming_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_neighbors_incoming");
+
+    for size in [100, 1000, 10000, 100000].iter() {
+        let snapshot = setup_snapshot(*size, *size * 2);
+        let test_node = (*size / 2) as u32;
+
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
+            b.iter(|| {
+                let neighbors = snapshot.neighbors(black_box(test_node), Direction::Incoming);
+                black_box(neighbors);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn snapshot_neighbors_by_type_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_neighbors_by_type");
+
+    for size in [100, 1000, 10000, 100000].iter() {
+        let snapshot = setup_snapshot(*size, *size * 2);
+        let test_node = (*size / 2) as u32;
+
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
+            b.iter(|| {
+                let neighbors = snapshot.neighbors_by_type(
+                    black_box(test_node),
+                    Direction::Outgoing,
+                    &["KNOWS"],
+                );
+                black_box(neighbors);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn snapshot_relationships_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_relationships");
+
+    for size in [100, 1000, 10000, 100000].iter() {
+        let snapshot = setup_snapshot(*size, *size * 2);
+        let test_node = (*size / 2) as u32;
+
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
+            b.iter(|| {
+                let rels = snapshot.relationships(black_box(test_node), Direction::Outgoing, &[]);
+                black_box(rels);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn snapshot_dijkstra_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_dijkstra");
+
+    // Full single-source shortest paths with a derived (unit) weight.
+    for size in [100, 1000, 10000, 100000].iter() {
+        let snapshot = setup_realistic_graph(*size, 8); // Average degree of 8
+        let source = 0u32;
+
+        group.throughput(Throughput::Elements(*size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
+            b.iter(|| {
+                let paths =
+                    snapshot.dijkstra(black_box(source), Direction::Outgoing, &[], None, |_, _| {
+                        1.0
+                    });
+                black_box(paths);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = get_criterion();
     targets =
         snapshot_get_neighbors_benchmark,
+        snapshot_neighbors_incoming_benchmark,
+        snapshot_neighbors_by_type_benchmark,
+        snapshot_relationships_benchmark,
         snapshot_get_property_benchmark,
         snapshot_get_nodes_with_label_benchmark,
         snapshot_get_nodes_with_property_benchmark,
@@ -655,6 +735,7 @@ criterion_group! {
         snapshot_get_neighbors_high_degree_benchmark,
         snapshot_get_property_many_nodes_benchmark,
         snapshot_traversal_benchmark,
+        snapshot_dijkstra_benchmark,
         bidirectional_bfs_benchmark,
         bidirectional_bfs_with_filters_benchmark,
         bfs_benchmark,
