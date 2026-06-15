@@ -316,6 +316,21 @@ For Python-specific performance tests, see [rustychickpeas-python/tests/benchmar
 - BFS traversal: ~130ns per node
 - Bitmap operations: Sub-microsecond for millions of elements
 
+**Analytical query workload (LDBC SNB BI-style)**:
+
+Measured on a *synthetic* LDBC-style social graph — 1,110,000 nodes and 4,500,000 relationships (Person/Post/Comment/Tag connected by `hasCreator`/`hasTag`/`hasInterest`), generated deterministically by the `ldbc_snb_bi` benchmark — on an Apple M3 Max. Median of 10 samples per query:
+
+| Query | Description | Time |
+|-------|-------------|------|
+| BI1 | Tag co-evolution (pairs co-occurring across posts & comments) | 123 ms |
+| BI2 | Tag person path (persons linked via shared interests) | 2.0 ms |
+| BI3 | Popular topics (most-referenced tags) | 99 ms |
+| BI4 | Top commenters | 18 ms |
+| BI5 | Active users (most posts) | 7.2 ms |
+| BI6 | Tag co-occurrence (frequently paired tags) | 31 ms |
+
+This is a generated dataset, not the official LDBC SNB data — it requires no download and its size scales with the `LDBC_SYNTH_SCALE` environment variable (the figures above use scale 50). To benchmark against a real LDBC SNB dataset, point the `ldbc_snb_bi_benchmark` integration test at a Parquet snapshot via `LDBC_DATA_DIR`.
+
 ## Limits and Scalability
 
 ### Hard Limits

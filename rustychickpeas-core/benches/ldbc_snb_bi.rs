@@ -4,58 +4,123 @@
 //! These benchmarks require LDBC data files (see tests/ldbc_snb_bi_benchmark.rs for data setup).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rustychickpeas_core::GraphSnapshot;
+use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
 use std::env;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// Get the path to LDBC data directory
-/// Defaults to SF0.003, with fallbacks to SF1 and SF10 if not found
-/// Retained for future graph loading in get_ldbc_graph (currently stubbed)
-#[allow(dead_code)]
-fn get_ldbc_data_dir() -> Option<PathBuf> {
-    if let Ok(dir) = env::var("LDBC_DATA_DIR") {
-        return Some(PathBuf::from(dir));
+/// Build a synthetic graph with LDBC SNB-like structure so the BI query
+/// benchmarks have data to run against in CI without the multi-GB dataset.
+///
+/// The generated graph has Person, Post, Comment and Tag nodes wired with
+/// `hasCreator` (Person -> Post/Comment), `hasTag` (Post/Comment -> Tag) and
+/// `hasInterest` (Person -> Tag) relationships, matching what the BI queries
+/// traverse. Tag selection is deliberately skewed so a small subset of tags
+/// dominates, mimicking the power-law tag popularity that BI3/BI6 surface.
+/// Sizes scale linearly with the `LDBC_SYNTH_SCALE` environment variable
+/// (default 1); generation is fully deterministic for stable measurements.
+///
+/// To benchmark against a real LDBC SNB dataset instead, use the integration
+/// test `tests/ldbc_snb_bi_benchmark.rs` with `LDBC_DATA_DIR` pointing at the
+/// Parquet snapshot.
+fn build_synthetic_ldbc_graph() -> GraphSnapshot {
+    let scale: usize = env::var("LDBC_SYNTH_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&s| s >= 1)
+        .unwrap_or(1);
+
+    let n_person = 2_000 * scale;
+    let n_post = 5_000 * scale;
+    let n_comment = 15_000 * scale;
+    let n_tag = 200 * scale;
+    let tags_per_message = 3;
+    let interests_per_person = 5;
+
+    // Contiguous id ranges per node type.
+    let person_base = 0u32;
+    let post_base = person_base + n_person as u32;
+    let comment_base = post_base + n_post as u32;
+    let tag_base = comment_base + n_comment as u32;
+    let total_nodes = n_person + n_post + n_comment + n_tag;
+
+    let mut builder = GraphBuilder::new(Some(total_nodes), Some(total_nodes * 6));
+
+    for i in 0..n_person {
+        builder
+            .add_node(Some(person_base + i as u32), &["Person"])
+            .unwrap();
+    }
+    for i in 0..n_post {
+        builder
+            .add_node(Some(post_base + i as u32), &["Post"])
+            .unwrap();
+    }
+    for i in 0..n_comment {
+        builder
+            .add_node(Some(comment_base + i as u32), &["Comment"])
+            .unwrap();
+    }
+    for i in 0..n_tag {
+        builder
+            .add_node(Some(tag_base + i as u32), &["Tag"])
+            .unwrap();
     }
 
-    let scale_factor = env::var("LDBC_SF").unwrap_or_else(|_| "0.003".to_string());
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ldbc_data");
+    // Deterministic, skewed tag picker: ~70% of references hit the most popular
+    // quarter of tags, the rest spread across the full range.
+    let popular_tags = (n_tag / 4).max(1);
+    let pick_tag = |seed: usize, k: usize| -> u32 {
+        let v = seed
+            .wrapping_mul(2_654_435_761)
+            .wrapping_add(k.wrapping_mul(40_503));
+        let idx = if v % 10 < 7 {
+            v % popular_tags
+        } else {
+            v % n_tag
+        };
+        tag_base + idx as u32
+    };
 
-    // Try the specified scale factor first
-    let sf_path = base_dir.join(format!(
-        "social-network-sf{}-bi-parquet/graphs/parquet/bi/composite-merged-fk/initial_snapshot",
-        scale_factor
-    ));
-
-    if sf_path.exists() {
-        return Some(sf_path);
-    }
-
-    // Try fallbacks
-    for fallback_sf in &["0.003", "1", "10"] {
-        if fallback_sf != &scale_factor {
-            let fallback_path = base_dir.join(format!("social-network-sf{}-bi-parquet/graphs/parquet/bi/composite-merged-fk/initial_snapshot", fallback_sf));
-            if fallback_path.exists() {
-                return Some(fallback_path);
-            }
+    // Person -> Tag interests.
+    for p in 0..n_person {
+        for k in 0..interests_per_person {
+            let tag = pick_tag(p, k + 101);
+            builder
+                .add_rel(person_base + p as u32, tag, "hasInterest")
+                .unwrap();
         }
     }
 
-    None
+    // Posts: a creator (Person -> Post) and a few tags (Post -> Tag).
+    for m in 0..n_post {
+        let post = post_base + m as u32;
+        let creator = person_base + (m % n_person) as u32;
+        builder.add_rel(creator, post, "hasCreator").unwrap();
+        for k in 0..tags_per_message {
+            let tag = pick_tag(m, k);
+            builder.add_rel(post, tag, "hasTag").unwrap();
+        }
+    }
+
+    // Comments: a creator (Person -> Comment) and a few tags (Comment -> Tag).
+    for m in 0..n_comment {
+        let comment = comment_base + m as u32;
+        let creator = person_base + ((m * 7 + 3) % n_person) as u32;
+        builder.add_rel(creator, comment, "hasCreator").unwrap();
+        for k in 0..tags_per_message {
+            let tag = pick_tag(m + 9_973, k);
+            builder.add_rel(comment, tag, "hasTag").unwrap();
+        }
+    }
+
+    builder.finalize(None)
 }
 
-/// Global graph cache - loaded once and reused across benchmarks
-static GRAPH_CACHE: OnceLock<Option<GraphSnapshot>> = OnceLock::new();
+/// Global graph cache - built once and reused across benchmarks
+static GRAPH_CACHE: OnceLock<GraphSnapshot> = OnceLock::new();
 
-fn get_ldbc_graph() -> Option<&'static GraphSnapshot> {
-    GRAPH_CACHE
-        .get_or_init(|| {
-            // Try to load the graph - this is expensive, so we cache it
-            // For now, return None if data not available
-            // In a real implementation, you'd call load_ldbc_graph() here
-            None
-        })
-        .as_ref()
+fn get_ldbc_graph() -> &'static GraphSnapshot {
+    GRAPH_CACHE.get_or_init(build_synthetic_ldbc_graph)
 }
 
 fn get_criterion() -> Criterion {
@@ -71,13 +136,7 @@ fn get_criterion() -> Criterion {
 /// BI1: Tag Evolution
 /// Find tags that are used together in posts/comments
 fn bi1_tag_evolution_benchmark(c: &mut Criterion) {
-    let graph = match get_ldbc_graph() {
-        Some(g) => g,
-        None => {
-            eprintln!("Skipping LDBC benchmarks: data not available. Set LDBC_DATA_DIR or place data in ../ldbc_data/");
-            return;
-        }
-    };
+    let graph = get_ldbc_graph();
 
     let mut group = c.benchmark_group("ldbc_snb_bi1_tag_evolution");
 
@@ -135,10 +194,7 @@ fn bi1_tag_evolution_benchmark(c: &mut Criterion) {
 /// BI2: Tag Person Path
 /// Find paths between persons through shared tags
 fn bi2_tag_person_path_benchmark(c: &mut Criterion) {
-    let graph = match get_ldbc_graph() {
-        Some(g) => g,
-        None => return,
-    };
+    let graph = get_ldbc_graph();
 
     let mut group = c.benchmark_group("ldbc_snb_bi2_tag_person_path");
 
@@ -178,10 +234,7 @@ fn bi2_tag_person_path_benchmark(c: &mut Criterion) {
 /// BI3: Popular Topics
 /// Find the most popular tags (by number of posts/comments)
 fn bi3_popular_topics_benchmark(c: &mut Criterion) {
-    let graph = match get_ldbc_graph() {
-        Some(g) => g,
-        None => return,
-    };
+    let graph = get_ldbc_graph();
 
     let mut group = c.benchmark_group("ldbc_snb_bi3_popular_topics");
 
@@ -222,10 +275,7 @@ fn bi3_popular_topics_benchmark(c: &mut Criterion) {
 /// BI4: Top Commenters
 /// Find persons who have made the most comments
 fn bi4_top_commenters_benchmark(c: &mut Criterion) {
-    let graph = match get_ldbc_graph() {
-        Some(g) => g,
-        None => return,
-    };
+    let graph = get_ldbc_graph();
 
     let mut group = c.benchmark_group("ldbc_snb_bi4_top_commenters");
 
@@ -262,10 +312,7 @@ fn bi4_top_commenters_benchmark(c: &mut Criterion) {
 /// BI5: Active Users
 /// Find persons with the most posts
 fn bi5_active_users_benchmark(c: &mut Criterion) {
-    let graph = match get_ldbc_graph() {
-        Some(g) => g,
-        None => return,
-    };
+    let graph = get_ldbc_graph();
 
     let mut group = c.benchmark_group("ldbc_snb_bi5_active_users");
 
@@ -302,10 +349,7 @@ fn bi5_active_users_benchmark(c: &mut Criterion) {
 /// BI6: Tag Co-occurrence
 /// Find tags that frequently appear together
 fn bi6_tag_cooccurrence_benchmark(c: &mut Criterion) {
-    let graph = match get_ldbc_graph() {
-        Some(g) => g,
-        None => return,
-    };
+    let graph = get_ldbc_graph();
 
     let mut group = c.benchmark_group("ldbc_snb_bi6_tag_cooccurrence");
 

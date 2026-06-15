@@ -20,7 +20,12 @@ jobs:
           fetch-depth: 0  # Need full history for commit SHA
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned to the stable-branch commit for supply-chain hardening. The
+        # toolchain input is required when pinning this action by SHA, since it
+        # otherwise infers the channel from the ref name.
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
       
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -35,7 +40,7 @@ jobs:
       
       - name: Run benchmarks
         run: |
-          cargo bench --bench graph_builder --bench graph_snapshot
+          cargo bench --bench graph_builder --bench graph_snapshot --bench ldbc_snb_bi
         continue-on-error: true  # Don't fail CI if benchmarks are slow
       
       - name: Collect results
@@ -64,4 +69,73 @@ jobs:
             git push origin HEAD:${{ github.ref_name }} || echo "Push failed"
           fi
         continue-on-error: true
+
+  # Instruction-count regression gate. Callgrind counts are deterministic, so
+  # unlike the wall-clock job above this one can fail a PR on a real regression
+  # without being fooled by shared-runner noise.
+  iai:
+    name: Instruction-count regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need base + head commits for baseline comparison
+
+      - name: Install Rust
+        # Pinned to the stable-branch commit for supply-chain hardening. The
+        # toolchain input is required when pinning this action by SHA, since it
+        # otherwise infers the channel from the ref name.
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Cache Cargo + iai runner
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/iai-callgrind-runner
+            target/
+          key: ${{ runner.os }}-iai-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-iai-
+
+      - name: Install iai-callgrind-runner
+        run: |
+          # Version must match the iai-callgrind dev-dependency in
+          # rustychickpeas-core/Cargo.toml.
+          cargo install iai-callgrind-runner --version 0.16.1 --locked || true
+
+      # On pull requests: baseline the PR base commit, then compare the head
+      # against it and fail if instructions (Ir) regress by more than 5%. When
+      # the bench itself is new in the PR (absent on the base), there is nothing
+      # to gate against yet, so we only record; the gate activates on later PRs
+      # once instruction_counts has landed on the base branch.
+      - name: Instruction-count regression (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.sha }}'
+          git checkout --force "$base"
+          if cargo metadata --no-deps --format-version=1 \
+               | python3 -c "import json,sys; m=json.load(sys.stdin); names={t['name'] for p in m['packages'] for t in p['targets']}; sys.exit(0 if 'instruction_counts' in names else 1)"; then
+            cargo bench -p rustychickpeas-core --bench instruction_counts -- --save-baseline=base
+            git checkout --force "$head"
+            cargo bench -p rustychickpeas-core --bench instruction_counts -- \
+              --baseline=base --callgrind-limits='ir=5.0%'
+          else
+            echo "::notice::instruction_counts bench is new in this PR; recording counts only. The regression gate activates once it lands on the base branch."
+            git checkout --force "$head"
+            cargo bench -p rustychickpeas-core --bench instruction_counts
+          fi
+
+      # On pushes: just record counts (no baseline to gate against).
+      - name: Record (push)
+        if: github.event_name != 'pull_request'
+        run: cargo bench -p rustychickpeas-core --bench instruction_counts
 

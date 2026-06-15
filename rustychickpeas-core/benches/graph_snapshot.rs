@@ -3,7 +3,7 @@
 //! Tests the performance of querying immutable GraphSnapshot instances,
 //! including neighbor lookups, property access, and label queries.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
 use rustychickpeas_core::{GraphBuilder, GraphSnapshot};
 use std::env;
@@ -221,6 +221,7 @@ fn snapshot_traversal_benchmark(c: &mut Criterion) {
         };
         let start_node = 0u32;
 
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             b.iter(|| {
                 // 2-hop traversal
@@ -259,6 +260,7 @@ fn bidirectional_bfs_benchmark(c: &mut Criterion) {
         let target_nodes: Vec<u32> = ((*size * 9 / 10)..*size).map(|i| i as u32).collect();
         let target = NodeSet::new(RoaringBitmap::from_iter(target_nodes.iter().copied()));
 
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             // Type annotations needed for None filters
             type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
@@ -305,6 +307,7 @@ fn bidirectional_bfs_with_filters_benchmark(c: &mut Criterion) {
         let target_nodes: Vec<u32> = ((*size * 9 / 10)..*size).map(|i| i as u32).collect();
         let target = NodeSet::new(RoaringBitmap::from_iter(target_nodes.iter().copied()));
 
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(
             BenchmarkId::new("with_rel_type_filter", *size),
             size,
@@ -402,6 +405,7 @@ fn bfs_benchmark(c: &mut Criterion) {
         let start_nodes: Vec<u32> = (0..(*size / 10)).map(|i| i as u32).collect();
         let start = NodeSet::new(RoaringBitmap::from_iter(start_nodes.iter().copied()));
 
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             // Type annotations needed for None filters
             type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
@@ -444,6 +448,7 @@ fn bfs_with_filters_benchmark(c: &mut Criterion) {
         let start_nodes: Vec<u32> = (0..(*size / 10)).map(|i| i as u32).collect();
         let start = NodeSet::new(RoaringBitmap::from_iter(start_nodes.iter().copied()));
 
+        group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(
             BenchmarkId::new("with_rel_type_filter", *size),
             size,
@@ -576,6 +581,7 @@ fn snapshot_get_neighbors_high_degree_benchmark(c: &mut Criterion) {
 
     let snapshot = builder.finalize(None);
 
+    group.throughput(Throughput::Elements(hub_degree as u64));
     group.bench_function("10000", |b| {
         b.iter(|| {
             let neighbors = snapshot.out_neighbors(black_box(hub_node));
@@ -614,6 +620,8 @@ fn snapshot_get_property_many_nodes_benchmark(c: &mut Criterion) {
 
     let snapshot = builder.finalize(None);
 
+    // 100 nodes x 3 property reads per iteration
+    group.throughput(Throughput::Elements(300));
     group.bench_function("10000", |b| {
         // Test getting properties from multiple nodes
         let test_nodes: Vec<u32> = (0..100).map(|i| (i * 100) as u32).collect();
