@@ -19,7 +19,7 @@ pub type PropertyKey = u32;
 // PropertyId removed - not used in GraphSnapshot
 
 /// Relationship direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     Outgoing,
     Incoming,

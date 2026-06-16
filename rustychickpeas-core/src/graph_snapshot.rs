@@ -9,7 +9,7 @@ use crate::geo::GeoIndex;
 use crate::types::{Direction, Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// Interned value ID for property indexes
 /// All strings are interned for fast equality/hash operations
@@ -340,6 +340,12 @@ impl PartialOrd for DijkstraState {
     }
 }
 
+/// A built forest-root array, returned by
+/// [`chain_roots`](GraphSnapshot::chain_roots): index it by node id for the
+/// terminal of that node's functional-relationship chain. Shared (`Arc`) so a
+/// hot loop can hold it and index lock-free.
+pub type ChainRoots = Arc<[NodeId]>;
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
@@ -420,6 +426,14 @@ pub struct GraphSnapshot {
     /// Lazy geo index: (label, lat_key, lon_key) -> k-d tree over coordinates,
     /// built per field on first geo query. See [`crate::geo`].
     pub geo_index: Mutex<HashMap<(Label, PropertyKey, PropertyKey), GeoIndex>>,
+
+    // --- Forest-root index (lazy, built once per (direction, rel_type)) ---
+    /// Lazily built forest-root arrays: `(direction, rel_type)` -> a per-node
+    /// array whose `[node]` is the terminal of that node's functional `rel_type`
+    /// chain. Built on first access by
+    /// [`chain_roots`](GraphSnapshot::chain_roots); the returned `Arc` slice is
+    /// indexed lock-free, so a hot loop pays no per-node synchronization.
+    pub chain_root_index: Mutex<HashMap<(Direction, RelationshipType), ChainRoots>>,
 
     // --- String tables ---
     /// Flattened string interner
@@ -526,6 +540,7 @@ impl GraphSnapshot {
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
             geo_index: Mutex::new(HashMap::new()),
+            chain_root_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(vec!["".to_string()]),
         }
     }
@@ -759,6 +774,19 @@ impl GraphSnapshot {
         rel_types: impl RelTypeFilter,
     ) -> NeighborsByType<'_> {
         let matcher = rel_types.into_match(self);
+        self.neighbors_with(node_id, direction, matcher)
+    }
+
+    /// [`neighbors_by_type`](Self::neighbors_by_type) over a pre-resolved
+    /// [`RelMatch`], so a hot caller (e.g. [`bfs_distances`](Self::bfs_distances)
+    /// or [`chain_root`](Self::chain_root)) resolves the type filter once instead
+    /// of on every node.
+    fn neighbors_with(
+        &self,
+        node_id: NodeId,
+        direction: Direction,
+        matcher: RelMatch,
+    ) -> NeighborsByType<'_> {
         let node = node_id as usize;
         let out = if matches!(direction, Direction::Outgoing | Direction::Both) {
             edge_range(&self.out_offsets, node)
@@ -1418,6 +1446,144 @@ impl GraphSnapshot {
         (visited_nodes, visited_rels)
     }
 
+    /// The per-node forest-root array for the functional `rel_type` chain in
+    /// `direction`: index it by `node` to get the terminal of that node's chain —
+    /// the node reached by following the single outgoing `rel_type` edge until one
+    /// with no such edge (a node already terminal maps to itself).
+    ///
+    /// The array is built once per `(direction, rel_type)` in `O(node_count)` with
+    /// path compression, then cached, so a hot loop should call this **once** and
+    /// index the returned slice lock-free rather than calling
+    /// [`chain_root`](Self::chain_root) per node. Intended for a relationship that
+    /// is *functional* in `direction` (each node has at most one outgoing
+    /// `rel_type` edge), so the reachable structure is a forest — e.g. walking
+    /// `replyOf` from a reply up to its root message. Malformed, non-functional
+    /// data (a node with several such edges, or a cycle) follows the first
+    /// neighbor in CSR order and is broken by a `node_count` depth cap, resolving
+    /// deterministically. Pass a pre-resolved [`RelationshipType`] (via
+    /// [`rel_type`](Self::rel_type)).
+    pub fn chain_roots(&self, direction: Direction, rel_type: RelationshipType) -> ChainRoots {
+        let key = (direction, rel_type);
+        {
+            let index = self
+                .chain_root_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(roots) = index.get(&key) {
+                return Arc::clone(roots);
+            }
+        }
+        // Build outside the lock; another thread may race us, in which case the
+        // first-inserted array wins (both are identical).
+        let roots: ChainRoots = self.build_chain_roots(direction, rel_type).into();
+        let mut index = self
+            .chain_root_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(index.entry(key).or_insert(roots))
+    }
+
+    /// The terminal of `node`'s functional `rel_type` chain in `direction` (a node
+    /// already terminal maps to itself). Convenience wrapper over
+    /// [`chain_roots`](Self::chain_roots); for a per-node hot loop, call
+    /// `chain_roots` once and index the slice instead of calling this per node.
+    pub fn chain_root(
+        &self,
+        node: NodeId,
+        direction: Direction,
+        rel_type: RelationshipType,
+    ) -> NodeId {
+        self.chain_roots(direction, rel_type)
+            .get(node as usize)
+            .copied()
+            .unwrap_or(node)
+    }
+
+    /// Build the forest-root array for `(direction, rel_type)`, where `root[n]` is
+    /// the terminal of `n`'s chain. `O(node_count)`: each node is resolved once
+    /// via path compression. A depth cap of `node_count` breaks any cycle a
+    /// malformed, non-functional graph might contain, so the build always
+    /// terminates and is deterministic.
+    fn build_chain_roots(&self, direction: Direction, rel_type: RelationshipType) -> Vec<NodeId> {
+        let n = self.n_nodes as usize;
+        let matcher = RelMatch::One(rel_type);
+        const UNRESOLVED: NodeId = NodeId::MAX;
+        let mut root = vec![UNRESOLVED; n];
+        let mut path: Vec<NodeId> = Vec::new();
+        for start in 0..n as NodeId {
+            if root[start as usize] != UNRESOLVED {
+                continue;
+            }
+            path.clear();
+            let mut cur = start;
+            let terminal = loop {
+                let resolved = root[cur as usize];
+                if resolved != UNRESOLVED {
+                    break resolved;
+                }
+                match self.neighbors_with(cur, direction, matcher.clone()).next() {
+                    // `path.len() <= n` bounds a malformed cycle (a valid chain has
+                    // at most `n - 1` edges, so this never trips on a forest).
+                    Some(parent) if path.len() <= n => {
+                        path.push(cur);
+                        cur = parent;
+                    }
+                    _ => break cur,
+                }
+            };
+            for &node in &path {
+                root[node as usize] = terminal;
+            }
+            root[start as usize] = terminal;
+        }
+        root
+    }
+
+    /// Unweighted single-source breadth-first search returning the hop distance
+    /// from `start` to every reached node (`start` itself maps to `0`).
+    ///
+    /// `max_depth = Some(d)` restricts the search to nodes within `d` hops of
+    /// `start`; `None` reaches the entire connected component. `direction` and
+    /// `rel_types` restrict which relationships are followed, exactly as in
+    /// [`neighbors_by_type`](Self::neighbors_by_type).
+    ///
+    /// Distances are integer hop counts and no predecessor map is built, so this
+    /// is the primitive to reach for when you need "every node within k hops" or
+    /// the eccentricity of `start` over an unweighted relationship — cheaper than
+    /// [`dijkstra`](Self::dijkstra) with a unit weight, which carries f64 costs
+    /// and path-reconstruction state you would discard.
+    pub fn bfs_distances(
+        &self,
+        start: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+        max_depth: Option<u32>,
+    ) -> HashMap<NodeId, u32> {
+        let matcher = rel_types.into_match(self);
+        let mut dist: HashMap<NodeId, u32> = HashMap::new();
+        dist.insert(start, 0);
+        let mut frontier: Vec<NodeId> = vec![start];
+        let mut depth = 0u32;
+        while !frontier.is_empty() {
+            if max_depth.is_some_and(|max| depth >= max) {
+                break;
+            }
+            let next_depth = depth + 1;
+            let mut next: Vec<NodeId> = Vec::new();
+            for &node in &frontier {
+                for neighbor in self.neighbors_with(node, direction, matcher.clone()) {
+                    if !dist.contains_key(&neighbor) {
+                        dist.insert(neighbor, next_depth);
+                        next.push(neighbor);
+                    }
+                }
+            }
+            frontier = next;
+            depth = next_depth;
+        }
+        dist
+    }
+
     /// Get nodes with a specific label
     ///
     /// # Arguments
@@ -1976,6 +2142,7 @@ mod tests {
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
             geo_index: Mutex::new(HashMap::new()),
+            chain_root_index: Mutex::new(HashMap::new()),
             atoms,
         }
     }
@@ -2627,6 +2794,7 @@ mod tests {
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
             geo_index: Mutex::new(HashMap::new()),
+            chain_root_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(atoms_vec),
         };
 
@@ -3112,6 +3280,89 @@ mod tests {
         assert!(nodes.contains(2));
         assert!(nodes.contains(3)); // Reachable from both
         assert!(nodes.contains(1)); // Reachable from 0
+    }
+
+    #[test]
+    fn test_chain_root_walks_reply_forest_to_root() {
+        // replyOf forest (child -replyOf-> parent): 0 is a root message,
+        //   1 -> 0, 2 -> 1, 3 -> 1, 4 -> 2; 5 is a separate childless root.
+        // (Contiguous ids so external == internal node id.)
+        let mut builder = GraphBuilder::new(Some(10), Some(10));
+        for id in [0, 1, 2, 3, 4, 5] {
+            builder.add_node(Some(id), &["Message"]).unwrap();
+        }
+        builder.add_relationship(1, 0, "replyOf").unwrap();
+        builder.add_relationship(2, 1, "replyOf").unwrap();
+        builder.add_relationship(3, 1, "replyOf").unwrap();
+        builder.add_relationship(4, 2, "replyOf").unwrap();
+        let snapshot = builder.finalize(None);
+        let reply_of = snapshot.rel_type("replyOf").unwrap();
+
+        // Every node in the tree resolves to root 0.
+        for n in [0, 1, 2, 3, 4] {
+            assert_eq!(snapshot.chain_root(n, Direction::Outgoing, reply_of), 0);
+        }
+        // A node with no parent edge is its own root.
+        assert_eq!(snapshot.chain_root(5, Direction::Outgoing, reply_of), 5);
+        // The cached second call returns the same terminal.
+        assert_eq!(snapshot.chain_root(4, Direction::Outgoing, reply_of), 0);
+
+        // chain_roots exposes the whole per-node array (built once, cached).
+        let roots = snapshot.chain_roots(Direction::Outgoing, reply_of);
+        assert_eq!(roots[2], 0);
+        assert_eq!(roots[5], 5);
+        // The (direction, rel_type) index entry is now present.
+        let index = snapshot
+            .chain_root_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(index.contains_key(&(Direction::Outgoing, reply_of)));
+    }
+
+    #[test]
+    fn test_chain_root_terminates_on_cycle() {
+        // Malformed, non-functional data: a 3-cycle. chain_root must terminate
+        // via the depth cap and return a node deterministically rather than hang.
+        let mut builder = GraphBuilder::new(Some(4), Some(4));
+        for id in [0, 1, 2] {
+            builder.add_node(Some(id), &["N"]).unwrap();
+        }
+        builder.add_relationship(0, 1, "loops").unwrap();
+        builder.add_relationship(1, 2, "loops").unwrap();
+        builder.add_relationship(2, 0, "loops").unwrap();
+        let snapshot = builder.finalize(None);
+        let loops = snapshot.rel_type("loops").unwrap();
+        let root = snapshot.chain_root(0, Direction::Outgoing, loops);
+        assert!([0, 1, 2].contains(&root));
+    }
+
+    #[test]
+    fn test_bfs_distances_hop_counts() {
+        // 0 ->1 ->2 ->3 and 0 ->4 ->3 (KNOWS); 0 ->5 (WORKS_FOR).
+        let snapshot = create_bfs_test_snapshot();
+        let dist = snapshot.bfs_distances(0, Direction::Outgoing, "KNOWS", None);
+        assert_eq!(dist.get(&0), Some(&0));
+        assert_eq!(dist.get(&1), Some(&1));
+        assert_eq!(dist.get(&4), Some(&1));
+        assert_eq!(dist.get(&2), Some(&2));
+        // 3 is reached at depth 2 via 0->4->3, not depth 3 via 0->1->2->3.
+        assert_eq!(dist.get(&3), Some(&2));
+        // 5 sits behind a WORKS_FOR edge, so a KNOWS BFS never reaches it.
+        assert_eq!(dist.get(&5), None);
+    }
+
+    #[test]
+    fn test_bfs_distances_max_depth_and_eccentricity() {
+        let snapshot = create_bfs_test_snapshot();
+        // Bounded to one hop: the start plus its direct KNOWS neighbors only.
+        let near = snapshot.bfs_distances(0, Direction::Outgoing, "KNOWS", Some(1));
+        assert_eq!(near.len(), 3); // 0, 1, 4
+        assert_eq!(near.get(&1), Some(&1));
+        assert_eq!(near.get(&4), Some(&1));
+        assert!(!near.contains_key(&2));
+        // Eccentricity of 0 over KNOWS is the maximum hop distance, 2.
+        let all = snapshot.bfs_distances(0, Direction::Outgoing, "KNOWS", None);
+        assert_eq!(all.values().copied().max(), Some(2));
     }
 }
 
