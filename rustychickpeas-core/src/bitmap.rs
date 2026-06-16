@@ -54,6 +54,44 @@ impl NodeSet {
         }
     }
 
+    /// Smallest node id in the set, or `None` if empty. O(1) for the Roaring backing.
+    #[inline]
+    pub fn min(&self) -> Option<u32> {
+        match self {
+            NodeSet::Roaring(bitmap) => bitmap.min(),
+            NodeSet::Bitset(bitset) => bitset.first_one().map(|i| i as u32),
+        }
+    }
+
+    /// Largest node id in the set, or `None` if empty. O(1) for the Roaring backing.
+    #[inline]
+    pub fn max(&self) -> Option<u32> {
+        match self {
+            NodeSet::Roaring(bitmap) => bitmap.max(),
+            NodeSet::Bitset(bitset) => bitset.last_one().map(|i| i as u32),
+        }
+    }
+
+    /// The set as a contiguous half-open `[min, max + 1)` range, iff it is
+    /// non-empty and gap-free; `None` for an empty or sparse set.
+    ///
+    /// A set of `n` ids spanning `[min, max]` is gap-free exactly when
+    /// `max - min + 1 == n`, so this is O(1) (given O(1) `min`/`max`/`len`). The
+    /// returned [`Range`](std::ops::Range) is itself an `Iterator` and a rayon
+    /// `IntoParallelIterator`, so a caller can scan it directly — sequentially or
+    /// in parallel — avoiding the per-element dispatch cost of [`iter`](Self::iter).
+    /// Returns `None` when the assumption does not hold, so callers must keep a
+    /// correct fallback (e.g. [`iter`](Self::iter)) rather than assume contiguity.
+    pub fn as_range(&self) -> Option<std::ops::Range<u32>> {
+        let (min, max) = (self.min()?, self.max()?);
+        let span = (max as u64) - (min as u64) + 1;
+        if span == self.len() as u64 {
+            Some(min..max.checked_add(1)?)
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&mut self, node_id: u32) -> bool {
         match self {
             NodeSet::Roaring(bitmap) => bitmap.insert(node_id),
@@ -232,6 +270,44 @@ mod tests {
         let ns = NodeSet::empty();
         assert_eq!(ns.len(), 0);
         assert!(ns.is_empty());
+    }
+
+    #[test]
+    fn test_nodeset_min_max_as_range() {
+        // Contiguous range [5, 9] -> Some(5..10), min/max exact.
+        let ns = NodeSet::new((5u32..=9).collect());
+        assert_eq!(ns.min(), Some(5));
+        assert_eq!(ns.max(), Some(9));
+        assert_eq!(ns.as_range(), Some(5..10));
+
+        // A gap breaks contiguity -> None, but min/max still hold.
+        let mut rb = RoaringBitmap::new();
+        for id in [5u32, 6, 7, 9] {
+            rb.insert(id);
+        }
+        let sparse = NodeSet::new(rb);
+        assert_eq!(sparse.min(), Some(5));
+        assert_eq!(sparse.max(), Some(9));
+        assert_eq!(sparse.as_range(), None);
+
+        // Empty set: no min/max, no range.
+        let empty = NodeSet::empty();
+        assert_eq!(empty.min(), None);
+        assert_eq!(empty.as_range(), None);
+
+        // Single element is a one-wide range.
+        let one = NodeSet::new(RoaringBitmap::from_iter([42u32]));
+        assert_eq!(one.as_range(), Some(42..43));
+
+        // Bitset backing behaves the same for a contiguous run.
+        let mut bv = bitvec::vec::BitVec::repeat(false, 8);
+        for i in 2..=5 {
+            bv.set(i, true);
+        }
+        let bitset = NodeSet::new_bitset(bv);
+        assert_eq!(bitset.min(), Some(2));
+        assert_eq!(bitset.max(), Some(5));
+        assert_eq!(bitset.as_range(), Some(2..6));
     }
 
     #[test]
