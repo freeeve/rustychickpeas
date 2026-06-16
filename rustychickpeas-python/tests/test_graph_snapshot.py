@@ -950,3 +950,68 @@ class TestBFS:
         assert 3 in nodes  # Reachable from both
         assert 1 in nodes  # Reachable from 0
 
+
+
+class TestShortestPath:
+    """Test GraphSnapshot.shortest_path (weighted + unweighted)."""
+
+    @pytest.fixture
+    def weighted_snapshot(self):
+        # 0->3 directly is 1 hop but expensive; 0->2->3 is cheap.
+        manager = RustyChickpeas()
+        builder = manager.create_builder()
+        for i in range(5):
+            builder.add_node(["Person"], node_id=i)
+        for (u, v, cost) in [(0, 1, 1.0), (1, 3, 1.0), (0, 2, 0.1), (2, 3, 0.1), (0, 3, 5.0)]:
+            builder.add_relationship(u, v, "KNOWS")
+            builder.set_relationship_prop_f64(u, v, "KNOWS", "cost", cost)
+        # Node 4 is isolated (unreachable).
+        builder.set_version("test")
+        builder.finalize_into(manager)
+        return manager.graph_snapshot("test")
+
+    def test_unweighted_is_hop_count(self, weighted_snapshot):
+        # Fewest hops 0->3 is the direct edge: 1 hop.
+        assert weighted_snapshot.shortest_path(0, 3) == 1.0
+
+    def test_weighted_takes_cheap_path(self, weighted_snapshot):
+        # Cheapest 0->3 is 0->2->3 = 0.1 + 0.1.
+        cost = weighted_snapshot.shortest_path(0, 3, weight_property="cost")
+        assert cost == pytest.approx(0.2)
+
+    def test_source_equals_target(self, weighted_snapshot):
+        assert weighted_snapshot.shortest_path(2, 2) == 0.0
+
+    def test_unreachable_returns_none(self, weighted_snapshot):
+        assert weighted_snapshot.shortest_path(0, 4) is None
+
+    def test_out_of_range_raises(self, weighted_snapshot):
+        with pytest.raises(ValueError):
+            weighted_snapshot.shortest_path(0, 999)
+
+
+class TestNeighborsTypeFilter:
+    """Test the optional rel_types filter on neighbors()."""
+
+    @pytest.fixture
+    def typed_snapshot(self):
+        manager = RustyChickpeas()
+        builder = manager.create_builder()
+        builder.add_node(["Person"], node_id=0)
+        builder.add_node(["Person"], node_id=1)
+        builder.add_node(["Company"], node_id=2)
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.set_version("test")
+        builder.finalize_into(manager)
+        return manager.graph_snapshot("test")
+
+    def test_no_filter_returns_all(self, typed_snapshot):
+        ids = sorted(n.id() for n in typed_snapshot.neighbors(0, Direction.Outgoing))
+        assert ids == [1, 2]
+
+    def test_filter_to_one_type(self, typed_snapshot):
+        knows = [n.id() for n in typed_snapshot.neighbors(0, Direction.Outgoing, ["KNOWS"])]
+        assert knows == [1]
+        work = [n.id() for n in typed_snapshot.neighbors(0, Direction.Outgoing, ["WORKS_FOR"])]
+        assert work == [2]

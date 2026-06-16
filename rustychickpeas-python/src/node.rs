@@ -45,11 +45,11 @@ impl Node {
         direction: Direction,
         rel_types: Option<Vec<String>>,
     ) -> PyResult<Vec<Relationship>> {
-        // Convert string types to RelationshipType IDs using O(1) reverse index
+        // Convert string types to RelationshipType IDs via the public resolver.
         let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().and_then(|types| {
             let ids: Vec<RelationshipType> = types
                 .iter()
-                .filter_map(|s| self.snapshot.atoms.get_id(s).map(RelationshipType::new))
+                .filter_map(|s| self.snapshot.rel_type(s))
                 .collect();
             if ids.is_empty() && !types.is_empty() {
                 return None;

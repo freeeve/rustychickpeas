@@ -8,7 +8,9 @@ use pyo3::prelude::*;
 use roaring::RoaringBitmap;
 use rustychickpeas_core::bitmap::NodeSet;
 use rustychickpeas_core::types::PropertyKey;
-use rustychickpeas_core::{GraphSnapshot as CoreGraphSnapshot, Label, RelationshipType, ValueId};
+use rustychickpeas_core::{
+    GraphSnapshot as CoreGraphSnapshot, Label, RelationshipRef, RelationshipType, ValueId,
+};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Python wrapper for GraphSnapshot
@@ -195,11 +197,11 @@ impl GraphSnapshot {
             )));
         }
 
-        // Convert string types to RelationshipType IDs using O(1) reverse index
+        // Convert string types to RelationshipType IDs via the public resolver.
         let rel_type_ids: Option<Vec<RelationshipType>> = rel_types.as_ref().and_then(|types| {
             let ids: Vec<RelationshipType> = types
                 .iter()
-                .filter_map(|s| self.snapshot.atoms.get_id(s).map(RelationshipType::new))
+                .filter_map(|s| self.snapshot.rel_type(s))
                 .collect();
             if ids.is_empty() && !types.is_empty() {
                 return None;
@@ -283,9 +285,15 @@ impl GraphSnapshot {
 
     /// Get neighbors of a node as Node objects
     /// Returns a list of Node objects for neighbors in the specified direction
-    fn neighbors(&self, node_id: u32, direction: Direction) -> PyResult<Vec<Node>> {
-        // Get relationships and extract neighbor node IDs
-        let rels = self.relationships(node_id, direction, None)?;
+    #[pyo3(signature = (node_id, direction, rel_types=None))]
+    fn neighbors(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+    ) -> PyResult<Vec<Node>> {
+        // Get relationships (optionally type-filtered) and extract neighbor IDs.
+        let rels = self.relationships(node_id, direction, rel_types)?;
         let mut neighbor_ids = Vec::new();
 
         for rel in rels {
@@ -321,6 +329,52 @@ impl GraphSnapshot {
     /// Get degree of a node
     fn degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
         Ok(self.snapshot.neighbors(node_id, direction.into()).count())
+    }
+
+    /// Weighted (or unweighted) shortest-path cost from `source` to `target`, or
+    /// `None` if `target` is unreachable.
+    ///
+    /// With `weight_property`, each followed edge costs that f64/i64 edge
+    /// property (an edge that lacks it is skipped); without it, every edge costs
+    /// 1.0 (a hop count). `rel_types` optionally restricts which relationship
+    /// types are followed (all types when `None`). Weights must be non-negative;
+    /// the search is a bidirectional Dijkstra.
+    #[pyo3(signature = (source, target, direction=Direction::Both, rel_types=None, weight_property=None))]
+    fn shortest_path(
+        &self,
+        py: Python<'_>,
+        source: u32,
+        target: u32,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+        weight_property: Option<String>,
+    ) -> PyResult<Option<f64>> {
+        if source >= self.snapshot.n_nodes || target >= self.snapshot.n_nodes {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Node ID out of range (max: {})",
+                self.snapshot.n_nodes.saturating_sub(1)
+            )));
+        }
+        let types: Vec<&str> = rel_types
+            .as_ref()
+            .map(|t| t.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let snapshot = self.snapshot.clone();
+        // No Python is called during the search, so release the GIL.
+        let cost = py.allow_threads(move || {
+            let weight = |_from: u32, rel: &RelationshipRef| -> f64 {
+                match &weight_property {
+                    Some(prop) => match snapshot.relationship_property(rel.pos, prop) {
+                        Some(ValueId::F64(bits)) => f64::from_bits(bits),
+                        Some(ValueId::I64(w)) => w as f64,
+                        _ => f64::INFINITY,
+                    },
+                    None => 1.0,
+                }
+            };
+            snapshot.weighted_shortest_path(source, target, direction.into(), &types[..], weight)
+        });
+        Ok(cost)
     }
 
     /// Get relationships by type using the type_index bitmap for O(1) lookup
