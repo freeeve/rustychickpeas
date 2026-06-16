@@ -1516,6 +1516,41 @@ impl GraphSnapshot {
         result
     }
 
+    /// BM25-ranked full-text search: the top `k` nodes of `label` by relevance
+    /// of their `key` string property to `query` (disjunctive — a node scores
+    /// for every query token it contains). Returns `(node, score)` pairs sorted
+    /// by score descending, ties broken by ascending node id. Shares the same
+    /// lazily built `(label, key)` index as [`fts`](Self::fts).
+    pub fn fts_ranked(&self, label: &str, key: &str, query: &str, k: usize) -> Vec<(NodeId, f32)> {
+        let (Some(label_id), Some(key_id)) =
+            (self.label_from_str(label), self.property_key_from_str(key))
+        else {
+            return Vec::new();
+        };
+        let index_key = (label_id, key_id);
+
+        // Fast path: index already built (short lock).
+        {
+            let index = self
+                .fulltext_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(field) = index.get(&index_key) {
+                return field.query_ranked(query, k);
+            }
+        }
+
+        // Build outside the lock, then cache (a racing build is identical).
+        let field = self.build_fulltext_field(label_id, key_id);
+        let result = field.query_ranked(query, k);
+        let mut index = self
+            .fulltext_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        index.entry(index_key).or_insert(field);
+        result
+    }
+
     /// Build the inverted index for one `(label, key)` text field by scanning
     /// the string column and tokenizing each labelled node's value.
     fn build_fulltext_field(&self, label: Label, key: PropertyKey) -> FullTextField {

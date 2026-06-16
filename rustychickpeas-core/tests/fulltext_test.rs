@@ -73,3 +73,33 @@ fn second_query_uses_cached_index() {
     assert_eq!(hits(&g, "brown"), [0, 1]);
     assert_eq!(hits(&g, "fox"), [0, 2]);
 }
+
+#[test]
+fn ranked_search_orders_by_relevance_and_scopes_by_label() {
+    let g = docs_graph();
+
+    // "fox" appears in docs 0 and 2; both are returned, scored positively.
+    let ranked = g.fts_ranked("Doc", "body", "fox", 10);
+    let mut ids: Vec<u32> = ranked.iter().map(|(n, _)| *n).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, [0, 2]);
+    assert!(ranked.iter().all(|(_, s)| *s > 0.0));
+
+    // Both node 0 ("The quick brown fox", 4 tokens) and node 2 ("Quick red
+    // fox", 3 tokens) contain both query terms; BM25 length normalization ranks
+    // the shorter document (node 2) first.
+    let both: Vec<u32> = g
+        .fts_ranked("Doc", "body", "quick fox", 10)
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
+    assert_eq!(both, [2, 0]);
+
+    // Label scoping: the "Other" node (3) never surfaces.
+    assert!(g.fts_ranked("Doc", "body", "irrelevant", 10).is_empty());
+
+    // Degenerate inputs.
+    assert!(g.fts_ranked("Doc", "body", "", 10).is_empty());
+    assert!(g.fts_ranked("Doc", "body", "fox", 0).is_empty());
+    assert!(g.fts_ranked("Nope", "body", "fox", 10).is_empty());
+}
