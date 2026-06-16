@@ -6,6 +6,7 @@
 pub mod bitmap;
 pub mod error;
 pub mod fulltext;
+pub mod geo;
 pub mod graph_builder;
 pub mod graph_builder_csv;
 pub mod graph_builder_parquet;
@@ -28,6 +29,7 @@ pub use graph_snapshot::{
     RelationshipsByType, ShortestPaths, ValueId,
 };
 pub use fulltext::FullTextField;
+pub use geo::{haversine_km, GeoIndex};
 pub use rusty_chickpeas::RustyChickpeas;
 pub use types::{
     Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipDeduplication,

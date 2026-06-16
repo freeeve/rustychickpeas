@@ -188,6 +188,7 @@ impl GraphSnapshot {
             rel_columns,
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
+            geo_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(section.atoms),
         }
     }

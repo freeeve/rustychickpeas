@@ -5,6 +5,7 @@
 
 use crate::bitmap::NodeSet;
 use crate::fulltext::FullTextField;
+use crate::geo::GeoIndex;
 use crate::types::{Direction, Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
@@ -375,6 +376,11 @@ pub struct GraphSnapshot {
     /// built per field on first `fts` call. See [`crate::fulltext`].
     pub fulltext_index: Mutex<HashMap<(Label, PropertyKey), FullTextField>>,
 
+    // --- Geo-spatial index (lazy-initialized) ---
+    /// Lazy geo index: (label, lat_key, lon_key) -> k-d tree over coordinates,
+    /// built per field on first geo query. See [`crate::geo`].
+    pub geo_index: Mutex<HashMap<(Label, PropertyKey, PropertyKey), GeoIndex>>,
+
     // --- String tables ---
     /// Flattened string interner
     pub atoms: Atoms,
@@ -479,6 +485,7 @@ impl GraphSnapshot {
             rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
+            geo_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(vec!["".to_string()]),
         }
     }
@@ -1567,6 +1574,114 @@ impl GraphSnapshot {
         FullTextField::build(docs)
     }
 
+    /// Geo-spatial search: nodes of `label` within `km` great-circle distance of
+    /// `(lat, lon)`, using the `lat_key`/`lon_key` f64 properties. The result is
+    /// a [`NodeSet`], composing with [`fts`](Self::fts) and
+    /// [`nodes_with_label`](Self::nodes_with_label) via `&`/`|`/`-`. The
+    /// per-`(label, lat_key, lon_key)` index is built lazily and cached.
+    pub fn geo_within_radius(
+        &self,
+        label: &str,
+        lat_key: &str,
+        lon_key: &str,
+        lat: f64,
+        lon: f64,
+        km: f64,
+    ) -> NodeSet {
+        self.with_geo_index(label, lat_key, lon_key, |gi| gi.within_radius(lat, lon, km))
+            .unwrap_or_else(NodeSet::empty)
+    }
+
+    /// Geo-spatial search: nodes of `label` whose `(lat_key, lon_key)` fall in
+    /// the lat/lon rectangle with corners `min = (lat, lon)` and `max =
+    /// (lat, lon)`. When `min.1 > max.1` the box crosses the antimeridian.
+    /// Returns a [`NodeSet`].
+    pub fn geo_within_bbox(
+        &self,
+        label: &str,
+        lat_key: &str,
+        lon_key: &str,
+        min: (f64, f64),
+        max: (f64, f64),
+    ) -> NodeSet {
+        self.with_geo_index(label, lat_key, lon_key, |gi| {
+            gi.within_bbox(min.0, min.1, max.0, max.1)
+        })
+        .unwrap_or_else(NodeSet::empty)
+    }
+
+    /// Geo-spatial search: the `k` nodes of `label` nearest `(lat, lon)` as
+    /// `(node, distance_km)`, sorted by increasing distance (ties by node id).
+    pub fn geo_knn(
+        &self,
+        label: &str,
+        lat_key: &str,
+        lon_key: &str,
+        lat: f64,
+        lon: f64,
+        k: usize,
+    ) -> Vec<(NodeId, f64)> {
+        self.with_geo_index(label, lat_key, lon_key, |gi| gi.knn(lat, lon, k))
+            .unwrap_or_default()
+    }
+
+    /// Run `query` against the lazily built, cached geo index for
+    /// `(label, lat_key, lon_key)`. Returns `None` if any name is unknown.
+    fn with_geo_index<R>(
+        &self,
+        label: &str,
+        lat_key: &str,
+        lon_key: &str,
+        query: impl FnOnce(&GeoIndex) -> R,
+    ) -> Option<R> {
+        let key = (
+            self.label_from_str(label)?,
+            self.property_key_from_str(lat_key)?,
+            self.property_key_from_str(lon_key)?,
+        );
+
+        // Fast path: index already built (short lock).
+        {
+            let index = self
+                .geo_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(gi) = index.get(&key) {
+                return Some(query(gi));
+            }
+        }
+
+        // Build outside the lock, then cache (a racing build is identical).
+        let gi = self.build_geo_index(key.0, key.1, key.2);
+        let result = query(&gi);
+        let mut index = self
+            .geo_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        index.entry(key).or_insert(gi);
+        Some(result)
+    }
+
+    /// Build the geo index for one `(label, lat_key, lon_key)` field by reading
+    /// each labelled node's lat/lon f64 properties.
+    fn build_geo_index(&self, label: Label, lat_key: PropertyKey, lon_key: PropertyKey) -> GeoIndex {
+        let label_nodes = self.nodes_with_label_id(label);
+        let (Some(lat_col), Some(lon_col)) =
+            (self.columns.get(&lat_key), self.columns.get(&lon_key))
+        else {
+            return GeoIndex::default();
+        };
+        let points = lat_col.iter_entries().filter_map(|(node, lat_val)| {
+            if !label_nodes.is_some_and(|ns| ns.contains(node)) {
+                return None;
+            }
+            let lat = lat_val.to_f64()?;
+            let lon = lon_col.get(node)?.to_f64()?;
+            Some((node, lat, lon))
+        });
+        GeoIndex::build(points)
+    }
+
     /// Get property value for a node
     ///
     /// # Arguments
@@ -1820,6 +1935,7 @@ mod tests {
             rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
+            geo_index: Mutex::new(HashMap::new()),
             atoms,
         }
     }
@@ -2442,6 +2558,7 @@ mod tests {
             rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
+            geo_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(atoms_vec),
         };
 
