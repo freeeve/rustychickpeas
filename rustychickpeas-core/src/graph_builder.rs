@@ -1193,6 +1193,7 @@ impl GraphBuilder {
             columns,
             rel_columns,
             prop_index: std::sync::Mutex::new(prop_index),
+            fulltext_index: std::sync::Mutex::new(hashbrown::HashMap::new()),
             atoms,
         }
     }

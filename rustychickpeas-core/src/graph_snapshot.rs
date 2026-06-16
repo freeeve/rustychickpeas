@@ -4,6 +4,7 @@
 //! and columnar storage for properties, providing maximum query performance.
 
 use crate::bitmap::NodeSet;
+use crate::fulltext::FullTextField;
 use crate::types::{Direction, Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
@@ -369,6 +370,11 @@ pub struct GraphSnapshot {
     /// Indexes are scoped by label to allow the same property key to be indexed separately per label
     pub prop_index: Mutex<HashMap<(Label, PropertyKey), HashMap<ValueId, NodeSet>>>,
 
+    // --- Full-text index (lazy-initialized) ---
+    /// Lazy boolean inverted index: (label, property_key) -> token postings,
+    /// built per field on first `fts` call. See [`crate::fulltext`].
+    pub fulltext_index: Mutex<HashMap<(Label, PropertyKey), FullTextField>>,
+
     // --- String tables ---
     /// Flattened string interner
     pub atoms: Atoms,
@@ -472,6 +478,7 @@ impl GraphSnapshot {
             columns: HashMap::new(),
             rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
+            fulltext_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(vec!["".to_string()]),
         }
     }
@@ -1470,6 +1477,61 @@ impl GraphSnapshot {
         entry.get(&value).cloned()
     }
 
+    /// Full-text search: nodes of `label` whose `key` string property contains
+    /// every token in `query` (boolean AND). Returns the empty set for an
+    /// unknown label/key, an empty query, or a token no document contains.
+    ///
+    /// The per-`(label, key)` inverted index is built lazily on first call and
+    /// cached (the same check-release-build-reacquire pattern as the equality
+    /// index). The result is a [`NodeSet`], so it composes with
+    /// [`nodes_with_label`](Self::nodes_with_label) and other node sets via
+    /// `&`/`|`/`-`.
+    pub fn fts(&self, label: &str, key: &str, query: &str) -> NodeSet {
+        let (Some(label_id), Some(key_id)) =
+            (self.label_from_str(label), self.property_key_from_str(key))
+        else {
+            return NodeSet::empty();
+        };
+        let index_key = (label_id, key_id);
+
+        // Fast path: index already built (short lock).
+        {
+            let index = self
+                .fulltext_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(field) = index.get(&index_key) {
+                return field.query(query);
+            }
+        }
+
+        // Build outside the lock, then cache (a racing build is identical).
+        let field = self.build_fulltext_field(label_id, key_id);
+        let result = field.query(query);
+        let mut index = self
+            .fulltext_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        index.entry(index_key).or_insert(field);
+        result
+    }
+
+    /// Build the inverted index for one `(label, key)` text field by scanning
+    /// the string column and tokenizing each labelled node's value.
+    fn build_fulltext_field(&self, label: Label, key: PropertyKey) -> FullTextField {
+        let label_nodes = self.nodes_with_label_id(label);
+        let Some(column) = self.columns.get(&key) else {
+            return FullTextField::default();
+        };
+        let docs = column.iter_entries().filter_map(|(node, value)| match value {
+            ValueId::Str(sid) if label_nodes.is_some_and(|ns| ns.contains(node)) => {
+                self.atoms.resolve(sid).map(|text| (node, text))
+            }
+            _ => None,
+        });
+        FullTextField::build(docs)
+    }
+
     /// Get property value for a node
     ///
     /// # Arguments
@@ -1722,6 +1784,7 @@ mod tests {
             columns,
             rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
+            fulltext_index: Mutex::new(HashMap::new()),
             atoms,
         }
     }
@@ -2343,6 +2406,7 @@ mod tests {
             columns: HashMap::new(),
             rel_columns: HashMap::new(),
             prop_index: Mutex::new(HashMap::new()),
+            fulltext_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(atoms_vec),
         };
 

@@ -5,6 +5,7 @@
 
 pub mod bitmap;
 pub mod error;
+pub mod fulltext;
 pub mod graph_builder;
 pub mod graph_builder_csv;
 pub mod graph_builder_parquet;
@@ -26,6 +27,7 @@ pub use graph_snapshot::{
     Column, GraphSnapshot, NeighborsByType, RelMatch, RelTypeFilter, RelationshipRef,
     RelationshipsByType, ShortestPaths, ValueId,
 };
+pub use fulltext::FullTextField;
 pub use rusty_chickpeas::RustyChickpeas;
 pub use types::{
     Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipDeduplication,
