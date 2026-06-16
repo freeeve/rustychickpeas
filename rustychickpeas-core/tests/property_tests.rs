@@ -125,13 +125,13 @@ proptest! {
         prop_assert_eq!(snapshot.n_rels, edge_count);
 
         for id in 0..n {
-            let mut out: Vec<u32> = snapshot.neighbors(id, Direction::Outgoing).to_vec();
+            let mut out: Vec<u32> = snapshot.neighbors(id, Direction::Outgoing).collect();
             out.sort_unstable();
             let mut expected_out = out_model.remove(&id).unwrap_or_default();
             expected_out.sort_unstable();
             prop_assert_eq!(out, expected_out, "neighbors({}, Outgoing)", id);
 
-            let mut inn: Vec<u32> = snapshot.neighbors(id, Direction::Incoming).to_vec();
+            let mut inn: Vec<u32> = snapshot.neighbors(id, Direction::Incoming).collect();
             inn.sort_unstable();
             let mut expected_in = in_model.remove(&id).unwrap_or_default();
             expected_in.sort_unstable();

@@ -12,14 +12,14 @@ fn assert_snapshots_equivalent(a: &GraphSnapshot, b: &GraphSnapshot, max_id: u32
     assert_eq!(a.version(), b.version());
     for id in 0..=max_id {
         assert_eq!(
-            a.neighbors(id, Direction::Outgoing),
-            b.neighbors(id, Direction::Outgoing),
+            a.neighbors(id, Direction::Outgoing).collect::<Vec<_>>(),
+            b.neighbors(id, Direction::Outgoing).collect::<Vec<_>>(),
             "out({})",
             id
         );
         assert_eq!(
-            a.neighbors(id, Direction::Incoming),
-            b.neighbors(id, Direction::Incoming),
+            a.neighbors(id, Direction::Incoming).collect::<Vec<_>>(),
+            b.neighbors(id, Direction::Incoming).collect::<Vec<_>>(),
             "in({})",
             id
         );
@@ -58,8 +58,12 @@ fn rcpg_round_trip_with_properties() {
 
     // typed traversal survives (exercises type_index + atoms)
     assert_eq!(
-        snapshot.neighbors_by_type(0, Direction::Outgoing, &["WORKS_FOR"]),
-        restored.neighbors_by_type(0, Direction::Outgoing, &["WORKS_FOR"])
+        snapshot
+            .neighbors_by_type(0, Direction::Outgoing, &["WORKS_FOR"])
+            .collect::<Vec<_>>(),
+        restored
+            .neighbors_by_type(0, Direction::Outgoing, &["WORKS_FOR"])
+            .collect::<Vec<_>>()
     );
 
     // properties survive, including string resolution through atoms
@@ -108,7 +112,10 @@ fn rcpg_topology_only_write() {
 
     let restored = GraphSnapshot::read_rcpg(&lean).unwrap();
     // traversal and labels intact, properties absent
-    assert_eq!(restored.neighbors(0, Direction::Outgoing), vec![1]);
+    assert_eq!(
+        restored.neighbors(0, Direction::Outgoing).collect::<Vec<_>>(),
+        vec![1]
+    );
     let people: Vec<u32> = restored
         .nodes_with_label("Person")
         .unwrap()
@@ -131,7 +138,10 @@ fn rcpg_file_round_trip() {
     snapshot.write_rcpg_file(path.to_str().unwrap()).unwrap();
     let restored = GraphSnapshot::read_rcpg_file(path.to_str().unwrap()).unwrap();
     assert_eq!(restored.n_nodes, 1);
-    assert_eq!(restored.neighbors(0, Direction::Outgoing), vec![0]);
+    assert_eq!(
+        restored.neighbors(0, Direction::Outgoing).collect::<Vec<_>>(),
+        vec![0]
+    );
 }
 
 #[test]
@@ -180,8 +190,8 @@ proptest! {
         prop_assert_eq!(restored.n_rels, snapshot.n_rels);
         let max_id = ids.iter().copied().max().unwrap();
         for id in 0..=max_id {
-            prop_assert_eq!(snapshot.neighbors(id, Direction::Outgoing), restored.neighbors(id, Direction::Outgoing));
-            prop_assert_eq!(snapshot.neighbors(id, Direction::Incoming), restored.neighbors(id, Direction::Incoming));
+            prop_assert_eq!(snapshot.neighbors(id, Direction::Outgoing).collect::<Vec<_>>(), restored.neighbors(id, Direction::Outgoing).collect::<Vec<_>>());
+            prop_assert_eq!(snapshot.neighbors(id, Direction::Incoming).collect::<Vec<_>>(), restored.neighbors(id, Direction::Incoming).collect::<Vec<_>>());
             let (a, b) = (snapshot.prop(id, "num"), restored.prop(id, "num"));
             prop_assert_eq!(a, b);
             match (snapshot.prop(id, "tag"), restored.prop(id, "tag")) {

@@ -824,7 +824,9 @@ fn bi1_tag_evolution() {
         std::collections::HashMap::new();
 
     for &post_id in &posts {
-        let post_tags = graph.neighbors_by_type(post_id, Direction::Outgoing, &["hasTag"]);
+        let post_tags = graph
+            .neighbors_by_type(post_id, Direction::Outgoing, &["hasTag"])
+            .collect::<Vec<_>>();
 
         for i in 0..post_tags.len() {
             for j in (i + 1)..post_tags.len() {
@@ -839,7 +841,9 @@ fn bi1_tag_evolution() {
     }
 
     for &comment_id in &comments {
-        let comment_tags = graph.neighbors_by_type(comment_id, Direction::Outgoing, &["hasTag"]);
+        let comment_tags = graph
+            .neighbors_by_type(comment_id, Direction::Outgoing, &["hasTag"])
+            .collect::<Vec<_>>();
 
         for i in 0..comment_tags.len() {
             for j in (i + 1)..comment_tags.len() {
@@ -893,8 +897,9 @@ fn bi2_tag_person_path() {
 
     for &person1_id in persons.iter().take(sample_size) {
         // Get tags this person is interested in
-        let person1_tags =
-            graph.neighbors_by_type(person1_id, Direction::Outgoing, &["hasInterest"]);
+        let person1_tags = graph
+            .neighbors_by_type(person1_id, Direction::Outgoing, &["hasInterest"])
+            .collect::<Vec<_>>();
 
         for &tag_id in &person1_tags {
             // Find other persons interested in the same tag
@@ -984,7 +989,9 @@ fn bi4_top_commenters() {
     if let Some(comments) = graph.nodes_with_label("Comment") {
         for comment_id in comments.iter() {
             // Try to find creator (incoming relationship from Person)
-            let creators = graph.neighbors(comment_id, Direction::Incoming);
+            let creators = graph
+                .neighbors(comment_id, Direction::Incoming)
+                .collect::<Vec<_>>();
 
             for &creator_id in &creators {
                 if let Some(persons) = graph.nodes_with_label("Person") {
@@ -1021,7 +1028,9 @@ fn bi5_active_users() {
     if let Some(posts) = graph.nodes_with_label("Post") {
         for post_id in posts.iter() {
             // Find creator
-            let creators = graph.neighbors(post_id, Direction::Incoming);
+            let creators = graph
+                .neighbors(post_id, Direction::Incoming)
+                .collect::<Vec<_>>();
 
             for &creator_id in &creators {
                 if let Some(persons) = graph.nodes_with_label("Person") {
@@ -1058,7 +1067,9 @@ fn bi6_tag_cooccurrence() {
     // Check posts
     if let Some(posts) = graph.nodes_with_label("Post") {
         for post_id in posts.iter() {
-            let tags = graph.neighbors_by_type(post_id, Direction::Outgoing, &["hasTag"]);
+            let tags = graph
+                .neighbors_by_type(post_id, Direction::Outgoing, &["hasTag"])
+                .collect::<Vec<_>>();
 
             for i in 0..tags.len() {
                 for j in (i + 1)..tags.len() {

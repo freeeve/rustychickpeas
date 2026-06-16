@@ -200,13 +200,17 @@ impl Node {
         direction: Direction,
         rel_types: Option<Vec<String>>,
     ) -> PyResult<Vec<u32>> {
-        let neighbor_ids = match rel_types {
+        let neighbor_ids: Vec<u32> = match rel_types {
             Some(types) => {
                 let type_strs: Vec<&str> = types.iter().map(|s| s.as_str()).collect();
                 self.snapshot
-                    .neighbors_by_type(self.node_id, direction.into(), &type_strs)
+                    .neighbors_by_type(self.node_id, direction.into(), type_strs.as_slice())
+                    .collect()
             }
-            None => self.snapshot.neighbors(self.node_id, direction.into()),
+            None => self
+                .snapshot
+                .neighbors(self.node_id, direction.into())
+                .collect(),
         };
 
         Ok(neighbor_ids)
@@ -230,7 +234,7 @@ impl Node {
         Ok(self
             .snapshot
             .neighbors(self.node_id, direction.into())
-            .len())
+            .count())
     }
 
     /// Get the internal node ID

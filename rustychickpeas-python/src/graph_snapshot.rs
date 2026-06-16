@@ -275,7 +275,10 @@ impl GraphSnapshot {
     /// Get neighbor node IDs of a node
     /// Returns a list of node IDs for neighbors in the specified direction
     fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
-        Ok(self.snapshot.neighbors(node_id, direction.into()))
+        Ok(self
+            .snapshot
+            .neighbors(node_id, direction.into())
+            .collect())
     }
 
     /// Get neighbors of a node as Node objects
@@ -317,7 +320,7 @@ impl GraphSnapshot {
 
     /// Get degree of a node
     fn degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
-        Ok(self.snapshot.neighbors(node_id, direction.into()).len())
+        Ok(self.snapshot.neighbors(node_id, direction.into()).count())
     }
 
     /// Get relationships by type using the type_index bitmap for O(1) lookup

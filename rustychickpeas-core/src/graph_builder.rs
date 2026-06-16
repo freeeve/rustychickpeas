@@ -2120,7 +2120,9 @@ mod tests {
 
         // Verify relationship properties are in the snapshot
         // We need to find the CSR position for the relationship
-        let neighbors = snapshot.neighbors(1, crate::types::Direction::Outgoing);
+        let neighbors: Vec<u32> = snapshot
+            .neighbors(1, crate::types::Direction::Outgoing)
+            .collect();
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0], 2);
 
@@ -2175,10 +2177,10 @@ mod tests {
         assert_eq!(inc.get(&4), Some(&Some(ValueId::I64(2019))));
 
         // Direction, filter, and empty cases.
-        assert_eq!(g.relationships(1, Direction::Both, &[]).len(), 2); // 2 out, 0 in
-        assert_eq!(g.relationships(2, Direction::Both, &["KNOWS"]).len(), 2); // 0 out, 2 in
-        assert_eq!(g.relationships(1, Direction::Outgoing, &["NOPE"]).len(), 0);
-        assert_eq!(g.relationships(3, Direction::Incoming, &["KNOWS"]).len(), 1);
+        assert_eq!(g.relationships(1, Direction::Both, &[] as &[&str]).count(), 2); // 2 out, 0 in
+        assert_eq!(g.relationships(2, Direction::Both, &["KNOWS"]).count(), 2); // 0 out, 2 in
+        assert_eq!(g.relationships(1, Direction::Outgoing, &["NOPE"]).count(), 0);
+        assert_eq!(g.relationships(3, Direction::Incoming, &["KNOWS"]).count(), 1);
     }
 
     #[test]

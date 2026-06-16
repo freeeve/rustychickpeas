@@ -652,46 +652,13 @@ impl GraphSnapshot {
         self.n_rels
     }
 
-    /// Zero-copy slice of a node's outgoing neighbors in CSR order (internal; the
-    /// public accessor is [`neighbors`](Self::neighbors)).
-    #[inline]
-    fn out_neighbors_slice(&self, node_id: NodeId) -> &[NodeId] {
-        if node_id as usize >= self.out_offsets.len().saturating_sub(1) {
-            return &[];
-        }
-        let start = self.out_offsets[node_id as usize] as usize;
-        let end = self.out_offsets[node_id as usize + 1] as usize;
-        &self.out_nbrs[start..end]
-    }
-
-    /// Zero-copy slice of a node's incoming neighbors in CSR order (internal; the
-    /// public accessor is [`neighbors`](Self::neighbors)).
-    #[inline]
-    fn in_neighbors_slice(&self, node_id: NodeId) -> &[NodeId] {
-        if node_id as usize >= self.in_offsets.len().saturating_sub(1) {
-            return &[];
-        }
-        let start = self.in_offsets[node_id as usize] as usize;
-        let end = self.in_offsets[node_id as usize + 1] as usize;
-        &self.in_nbrs[start..end]
-    }
-
-    /// Get the neighbors of a node in the given direction.
-    ///
-    /// Returns the node IDs reachable from `node_id` by following relationships
-    /// in `direction`; [`Direction::Both`] returns outgoing neighbors followed
-    /// by incoming ones. For per-relationship type or property access during a
-    /// traversal, use [`relationships`](Self::relationships) instead.
-    pub fn neighbors(&self, node_id: NodeId, direction: Direction) -> Vec<NodeId> {
-        match direction {
-            Direction::Outgoing => self.out_neighbors_slice(node_id).to_vec(),
-            Direction::Incoming => self.in_neighbors_slice(node_id).to_vec(),
-            Direction::Both => {
-                let mut neighbors = self.out_neighbors_slice(node_id).to_vec();
-                neighbors.extend_from_slice(self.in_neighbors_slice(node_id));
-                neighbors
-            }
-        }
+    /// All neighbors of a node in the given direction, as a lazy iterator
+    /// ([`Direction::Both`] yields outgoing then incoming). `.collect()` it for a
+    /// `Vec`, `.next()` for the first, or iterate it directly to avoid allocating.
+    /// For per-relationship type or property access during a traversal, use
+    /// [`relationships`](Self::relationships) instead.
+    pub fn neighbors(&self, node_id: NodeId, direction: Direction) -> NeighborsByType<'_> {
+        self.neighbors_by_type(node_id, direction, &[] as &[&str])
     }
 
     /// Get the neighbors of a node in the given direction, restricted to
@@ -720,47 +687,41 @@ impl GraphSnapshot {
     /// builder.add_relationship(0, 2, "WORKS_FOR").unwrap();
     /// let snapshot = builder.finalize(None);
     ///
-    /// // Get outgoing neighbors connected via "KNOWS" relationships
-    /// let neighbors = snapshot.neighbors_by_type(0, Direction::Outgoing, &["KNOWS"]);
+    /// // Returns a lazy iterator; collect it for a Vec, or iterate directly.
+    /// let knows: Vec<_> = snapshot.neighbors_by_type(0, Direction::Outgoing, "KNOWS").collect();
+    /// assert_eq!(knows, vec![1]);
     ///
-    /// // Get neighbors connected via multiple relationship types
-    /// let neighbors = snapshot.neighbors_by_type(0, Direction::Outgoing, &["KNOWS", "WORKS_FOR"]);
+    /// // Multiple types (resolved per call); a single &str or a pre-resolved
+    /// // `rel_type(..)` are also accepted.
+    /// let count = snapshot
+    ///     .neighbors_by_type(0, Direction::Outgoing, &["KNOWS", "WORKS_FOR"])
+    ///     .count();
+    /// assert_eq!(count, 2);
     /// ```
     pub fn neighbors_by_type(
         &self,
         node_id: NodeId,
         direction: Direction,
-        rel_types: &[&str],
-    ) -> Vec<NodeId> {
-        let ids: Vec<RelationshipType> = rel_types
-            .iter()
-            .filter_map(|s| self.relationship_type_from_str(s))
-            .collect();
-        let allowed: Option<std::collections::HashSet<RelationshipType>> = if ids.is_empty() {
-            None
+        rel_types: impl RelTypeFilter,
+    ) -> NeighborsByType<'_> {
+        let matcher = rel_types.into_match(self);
+        let node = node_id as usize;
+        let out = if matches!(direction, Direction::Outgoing | Direction::Both) {
+            edge_range(&self.out_offsets, node)
         } else {
-            Some(ids.into_iter().collect())
+            0..0
         };
-        let mut neighbors = Vec::new();
-        if matches!(direction, Direction::Outgoing | Direction::Both) {
-            neighbors.extend(Self::neighbors_by_type_from_csr(
-                &self.out_offsets,
-                &self.out_nbrs,
-                &self.out_types,
-                node_id,
-                allowed.as_ref(),
-            ));
+        let inc = if matches!(direction, Direction::Incoming | Direction::Both) {
+            edge_range(&self.in_offsets, node)
+        } else {
+            0..0
+        };
+        NeighborsByType {
+            graph: self,
+            out,
+            inc,
+            matcher,
         }
-        if matches!(direction, Direction::Incoming | Direction::Both) {
-            neighbors.extend(Self::neighbors_by_type_from_csr(
-                &self.in_offsets,
-                &self.in_nbrs,
-                &self.in_types,
-                node_id,
-                allowed.as_ref(),
-            ));
-        }
-        neighbors
     }
 
     /// Get the relationships incident to a node in the given direction,
@@ -779,57 +740,37 @@ impl GraphSnapshot {
         &self,
         node_id: NodeId,
         direction: Direction,
-        rel_types: &[&str],
-    ) -> Vec<RelationshipRef> {
-        let allowed: Option<std::collections::HashSet<RelationshipType>> = if rel_types.is_empty() {
-            None
-        } else {
-            Some(
-                rel_types
-                    .iter()
-                    .filter_map(|s| self.relationship_type_from_str(s))
-                    .collect(),
-            )
-        };
-        let keep = |t: &RelationshipType| allowed.as_ref().is_none_or(|a| a.contains(t));
-        let node = node_id as usize;
-        let mut rels = Vec::new();
+        rel_types: impl RelTypeFilter,
+    ) -> RelationshipsByType<'_> {
+        self.relationships_with(node_id, direction, rel_types.into_match(self))
+    }
 
-        if matches!(direction, Direction::Outgoing | Direction::Both)
-            && node < self.out_offsets.len().saturating_sub(1)
-        {
-            for pos in self.out_offsets[node]..self.out_offsets[node + 1] {
-                let rel_type = self.out_types[pos as usize];
-                if keep(&rel_type) {
-                    rels.push(RelationshipRef {
-                        neighbor: self.out_nbrs[pos as usize],
-                        rel_type,
-                        direction: Direction::Outgoing,
-                        pos,
-                    });
-                }
-            }
+    /// [`relationships`](Self::relationships) over a pre-resolved [`RelMatch`],
+    /// so a hot caller (e.g. [`dijkstra`](Self::dijkstra)) resolves the type
+    /// filter once instead of on every node.
+    fn relationships_with(
+        &self,
+        node_id: NodeId,
+        direction: Direction,
+        matcher: RelMatch,
+    ) -> RelationshipsByType<'_> {
+        let node = node_id as usize;
+        let out = if matches!(direction, Direction::Outgoing | Direction::Both) {
+            edge_range(&self.out_offsets, node)
+        } else {
+            0..0
+        };
+        let inc = if matches!(direction, Direction::Incoming | Direction::Both) {
+            edge_range(&self.in_offsets, node)
+        } else {
+            0..0
+        };
+        RelationshipsByType {
+            graph: self,
+            out,
+            inc,
+            matcher,
         }
-        if matches!(direction, Direction::Incoming | Direction::Both)
-            && node < self.in_offsets.len().saturating_sub(1)
-        {
-            for inpos in self.in_offsets[node]..self.in_offsets[node + 1] {
-                let rel_type = self.in_types[inpos as usize];
-                if keep(&rel_type) {
-                    // Map the incoming position to the outgoing position where
-                    // the property is stored (falls back to `inpos` when the
-                    // graph has no relationship properties — then unused).
-                    let pos = self.in_to_out.get(inpos as usize).copied().unwrap_or(inpos);
-                    rels.push(RelationshipRef {
-                        neighbor: self.in_nbrs[inpos as usize],
-                        rel_type,
-                        direction: Direction::Incoming,
-                        pos,
-                    });
-                }
-            }
-        }
-        rels
     }
 
     /// Weighted single-source shortest paths via Dijkstra's algorithm.
@@ -848,13 +789,16 @@ impl GraphSnapshot {
         &self,
         source: NodeId,
         direction: Direction,
-        rel_types: &[&str],
+        rel_types: impl RelTypeFilter,
         target: Option<NodeId>,
         weight: W,
     ) -> ShortestPaths
     where
         W: Fn(NodeId, &RelationshipRef) -> f64,
     {
+        // Resolve the type filter once; the per-node clone is cheap for the
+        // common All/One cases (a single type like "knows").
+        let matcher = rel_types.into_match(self);
         let mut dist: HashMap<NodeId, f64> = HashMap::new();
         let mut prev: HashMap<NodeId, NodeId> = HashMap::new();
         let mut heap = std::collections::BinaryHeap::new();
@@ -872,7 +816,7 @@ impl GraphSnapshot {
             if Some(node) == target {
                 break;
             }
-            for rel in self.relationships(node, direction, rel_types) {
+            for rel in self.relationships_with(node, direction, matcher.clone()) {
                 let next = cost + weight(node, &rel);
                 if next < *dist.get(&rel.neighbor).unwrap_or(&f64::INFINITY) {
                     dist.insert(rel.neighbor, next);
@@ -1470,6 +1414,16 @@ impl GraphSnapshot {
     pub fn relationship_type_from_str(&self, rel_type: &str) -> Option<RelationshipType> {
         self.atoms.get_id(rel_type).map(RelationshipType::new)
     }
+
+    /// Resolve a relationship-type name to its interned [`RelationshipType`], or
+    /// `None` if no edge of that type exists. Short alias for
+    /// [`relationship_type_from_str`](Self::relationship_type_from_str); resolve
+    /// once and pass the result to a traversal method in a hot loop to skip the
+    /// per-call string lookup.
+    #[inline]
+    pub fn rel_type(&self, name: &str) -> Option<RelationshipType> {
+        self.relationship_type_from_str(name)
+    }
 }
 
 impl Default for GraphSnapshot {
@@ -1690,45 +1644,41 @@ mod tests {
     #[test]
     fn test_get_neighbors_outgoing() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.neighbors(0, Direction::Outgoing);
-        assert_eq!(neighbors.len(), 1);
-        assert_eq!(neighbors[0], 1);
-
-        let neighbors = snapshot.neighbors(1, Direction::Outgoing);
-        assert_eq!(neighbors.len(), 1);
-        assert_eq!(neighbors[0], 2);
-
-        let neighbors = snapshot.neighbors(2, Direction::Outgoing);
-        assert_eq!(neighbors.len(), 0);
+        assert_eq!(
+            snapshot.neighbors(0, Direction::Outgoing).collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            snapshot.neighbors(1, Direction::Outgoing).collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(snapshot.neighbors(2, Direction::Outgoing).count(), 0);
     }
 
     #[test]
     fn test_get_neighbors_incoming() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.neighbors(0, Direction::Incoming);
-        assert_eq!(neighbors.len(), 0);
-
-        let neighbors = snapshot.neighbors(1, Direction::Incoming);
-        assert_eq!(neighbors.len(), 1);
-        assert_eq!(neighbors[0], 0);
-
-        let neighbors = snapshot.neighbors(2, Direction::Incoming);
-        assert_eq!(neighbors.len(), 1);
-        assert_eq!(neighbors[0], 1);
+        assert_eq!(snapshot.neighbors(0, Direction::Incoming).count(), 0);
+        assert_eq!(
+            snapshot.neighbors(1, Direction::Incoming).collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert_eq!(
+            snapshot.neighbors(2, Direction::Incoming).collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[test]
     fn test_get_neighbors_outgoing_invalid() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.neighbors(999, Direction::Outgoing);
-        assert_eq!(neighbors.len(), 0);
+        assert_eq!(snapshot.neighbors(999, Direction::Outgoing).count(), 0);
     }
 
     #[test]
     fn test_get_neighbors_incoming_invalid() {
         let snapshot = create_test_snapshot();
-        let neighbors = snapshot.neighbors(999, Direction::Incoming);
-        assert_eq!(neighbors.len(), 0);
+        assert_eq!(snapshot.neighbors(999, Direction::Incoming).count(), 0);
     }
 
     #[test]
@@ -2712,5 +2662,188 @@ mod tests {
         assert!(nodes.contains(2));
         assert!(nodes.contains(3)); // Reachable from both
         assert!(nodes.contains(1)); // Reachable from 0
+    }
+}
+
+/// How a relationship-type filter matches an edge's [`RelationshipType`].
+///
+/// Produced from a [`RelTypeFilter`] argument; the `All` and `One` cases are
+/// allocation-free.
+#[derive(Clone, Debug)]
+pub enum RelMatch {
+    /// Match every relationship type (an empty filter).
+    All,
+    /// Match a single resolved type.
+    One(RelationshipType),
+    /// Match any of a set of resolved types.
+    Set(Vec<RelationshipType>),
+}
+
+impl RelMatch {
+    #[inline]
+    fn matches(&self, rt: RelationshipType) -> bool {
+        match self {
+            RelMatch::All => true,
+            RelMatch::One(t) => *t == rt,
+            RelMatch::Set(v) => v.contains(&rt),
+        }
+    }
+}
+
+/// A relationship-type filter accepted by the traversal methods
+/// ([`neighbors_by_type`](GraphSnapshot::neighbors_by_type),
+/// [`relationships`](GraphSnapshot::relationships),
+/// [`dijkstra`](GraphSnapshot::dijkstra)).
+///
+/// Implemented for `&str`, `&[&str]` (and arrays), a pre-resolved
+/// [`RelationshipType`], and `&[RelationshipType]`. Pass a string for convenience
+/// (resolved on the spot) or a pre-resolved [`RelationshipType`] (via
+/// [`rel_type`](GraphSnapshot::rel_type)) in a hot loop to skip the per-call
+/// string lookup. An empty slice matches all types.
+pub trait RelTypeFilter {
+    /// Resolve this filter against the snapshot's interned relationship types.
+    fn into_match(self, graph: &GraphSnapshot) -> RelMatch;
+}
+
+impl RelTypeFilter for RelationshipType {
+    #[inline]
+    fn into_match(self, _graph: &GraphSnapshot) -> RelMatch {
+        RelMatch::One(self)
+    }
+}
+
+impl RelTypeFilter for &str {
+    #[inline]
+    fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
+        // An unresolvable name has no edges, so it matches nothing.
+        graph
+            .relationship_type_from_str(self)
+            .map_or(RelMatch::Set(Vec::new()), RelMatch::One)
+    }
+}
+
+impl RelTypeFilter for &[&str] {
+    fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
+        if self.is_empty() {
+            RelMatch::All
+        } else {
+            RelMatch::Set(
+                self.iter()
+                    .filter_map(|s| graph.relationship_type_from_str(s))
+                    .collect(),
+            )
+        }
+    }
+}
+
+impl<const N: usize> RelTypeFilter for &[&str; N] {
+    #[inline]
+    fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
+        self.as_slice().into_match(graph)
+    }
+}
+
+impl RelTypeFilter for &[RelationshipType] {
+    fn into_match(self, _graph: &GraphSnapshot) -> RelMatch {
+        if self.is_empty() {
+            RelMatch::All
+        } else {
+            RelMatch::Set(self.to_vec())
+        }
+    }
+}
+
+impl<const N: usize> RelTypeFilter for &[RelationshipType; N] {
+    #[inline]
+    fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
+        self.as_slice().into_match(graph)
+    }
+}
+
+/// CSR edge-index range `[start, end)` for a node in a direction's offset array.
+#[inline]
+fn edge_range(offsets: &[u32], node: usize) -> core::ops::Range<usize> {
+    if node + 1 >= offsets.len() {
+        return 0..0;
+    }
+    offsets[node] as usize..offsets[node + 1] as usize
+}
+
+/// Lazy, allocation-free iterator over a node's type-filtered neighbors, yielding
+/// outgoing matches then incoming ones. Returned by
+/// [`neighbors`](GraphSnapshot::neighbors) and
+/// [`neighbors_by_type`](GraphSnapshot::neighbors_by_type); `.collect()` it for a
+/// `Vec`.
+pub struct NeighborsByType<'a> {
+    graph: &'a GraphSnapshot,
+    out: core::ops::Range<usize>,
+    inc: core::ops::Range<usize>,
+    matcher: RelMatch,
+}
+
+impl Iterator for NeighborsByType<'_> {
+    type Item = NodeId;
+
+    #[inline]
+    fn next(&mut self) -> Option<NodeId> {
+        for k in &mut self.out {
+            if self.matcher.matches(self.graph.out_types[k]) {
+                return Some(self.graph.out_nbrs[k]);
+            }
+        }
+        for k in &mut self.inc {
+            if self.matcher.matches(self.graph.in_types[k]) {
+                return Some(self.graph.in_nbrs[k]);
+            }
+        }
+        None
+    }
+}
+
+/// Lazy, allocation-free iterator over a node's type-filtered relationships, each
+/// carrying [`RelationshipRef::pos`] for property access, outgoing then incoming.
+/// Returned by [`relationships`](GraphSnapshot::relationships).
+pub struct RelationshipsByType<'a> {
+    graph: &'a GraphSnapshot,
+    out: core::ops::Range<usize>,
+    inc: core::ops::Range<usize>,
+    matcher: RelMatch,
+}
+
+impl Iterator for RelationshipsByType<'_> {
+    type Item = RelationshipRef;
+
+    #[inline]
+    fn next(&mut self) -> Option<RelationshipRef> {
+        for pos in &mut self.out {
+            let rel_type = self.graph.out_types[pos];
+            if self.matcher.matches(rel_type) {
+                return Some(RelationshipRef {
+                    neighbor: self.graph.out_nbrs[pos],
+                    rel_type,
+                    direction: Direction::Outgoing,
+                    pos: pos as u32,
+                });
+            }
+        }
+        for inpos in &mut self.inc {
+            let rel_type = self.graph.in_types[inpos];
+            if self.matcher.matches(rel_type) {
+                // Map the incoming position to where the property is stored.
+                let pos = self
+                    .graph
+                    .in_to_out
+                    .get(inpos)
+                    .copied()
+                    .unwrap_or(inpos as u32);
+                return Some(RelationshipRef {
+                    neighbor: self.graph.in_nbrs[inpos],
+                    rel_type,
+                    direction: Direction::Incoming,
+                    pos,
+                });
+            }
+        }
+        None
     }
 }

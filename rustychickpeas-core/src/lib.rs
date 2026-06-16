@@ -22,7 +22,10 @@ pub use rustychickpeas_format as format;
 pub use error::{GraphError, Result};
 pub use graph_builder::GraphBuilder;
 pub use graph_builder_csv::CsvColumnType;
-pub use graph_snapshot::{Column, GraphSnapshot, RelationshipRef, ShortestPaths, ValueId};
+pub use graph_snapshot::{
+    Column, GraphSnapshot, NeighborsByType, RelMatch, RelTypeFilter, RelationshipRef,
+    RelationshipsByType, ShortestPaths, ValueId,
+};
 pub use rusty_chickpeas::RustyChickpeas;
 pub use types::{
     Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipDeduplication,
