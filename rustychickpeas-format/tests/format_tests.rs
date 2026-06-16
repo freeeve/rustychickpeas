@@ -233,4 +233,33 @@ proptest! {
             );
         }
     }
+
+    /// Arbitrary bytes must parse-or-error, never panic — verifying the reader's
+    /// "never panics on malformed input" guarantee against random *content*
+    /// (the truncation test only covers prefixes of otherwise-valid data).
+    #[test]
+    fn rcpg_arbitrary_bytes_never_panic(
+        bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..1024),
+    ) {
+        // A panic here fails the property; the Ok/Err result itself is irrelevant.
+        let _ = rcpg::parse(&bytes);
+    }
+
+    /// A valid RCPG with corrupted bytes (the "right length, wrong content" space
+    /// that truncation misses) must still parse-or-error without panicking.
+    #[test]
+    fn rcpg_mutation_never_panic(
+        mutations in proptest::collection::vec(
+            (proptest::num::usize::ANY, proptest::num::u8::ANY),
+            1..16,
+        ),
+    ) {
+        let mut bytes = Vec::new();
+        rcpg::write(&sample_graph(), &mut bytes).unwrap();
+        for (idx, byte) in mutations {
+            let i = idx % bytes.len();
+            bytes[i] = byte;
+        }
+        let _ = rcpg::parse(&bytes);
+    }
 }
