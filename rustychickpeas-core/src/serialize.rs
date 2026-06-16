@@ -45,6 +45,15 @@ fn column_to_data(col: &Column) -> ColumnData {
         Column::SparseF64(v) => ColumnData::SparseF64(v.clone()),
         Column::SparseBool(v) => ColumnData::SparseBool(v.clone()),
         Column::SparseStr(v) => ColumnData::SparseStr(v.clone()),
+        Column::RankI64 {
+            present, values, ..
+        } => ColumnData::SparseI64(
+            present
+                .iter_ones()
+                .zip(values.iter())
+                .map(|(pos, &v)| (pos as u32, v))
+                .collect(),
+        ),
     }
 }
 

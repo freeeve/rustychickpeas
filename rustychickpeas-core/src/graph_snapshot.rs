@@ -60,7 +60,21 @@ pub enum Column {
     SparseBool(Vec<(NodeId, bool)>),
     /// Sparse string column (interned string IDs)
     SparseStr(Vec<(NodeId, u32)>),
+    /// Rank/select i64 column for the moderately-sparse band: O(1) reads without
+    /// the binary search of [`Column::SparseI64`]. `present` marks which positions
+    /// carry a value; `block_rank[b]` caches the number of set bits before block
+    /// `b` (`RANK_BLOCK` positions per block); `values` holds the values in
+    /// ascending-position order. Build via [`Column::build_rank_i64`].
+    RankI64 {
+        present: bitvec::vec::BitVec,
+        block_rank: Vec<u32>,
+        values: Vec<i64>,
+    },
 }
+
+/// Positions per rank block for [`Column::RankI64`]. A `get` does one indexed
+/// `block_rank` read plus a popcount over at most this many bits (8 × u64).
+const RANK_BLOCK: usize = 512;
 
 impl Column {
     /// Get property value for a node (if dense) or None
@@ -100,7 +114,50 @@ impl Column {
     /// Get property value for a node (tries dense first, then sparse)
     #[inline]
     pub fn get(&self, node_id: NodeId) -> Option<ValueId> {
+        if let Column::RankI64 {
+            present,
+            block_rank,
+            values,
+        } = self
+        {
+            let pos = node_id as usize;
+            if pos >= present.len() || !present[pos] {
+                return None;
+            }
+            let b = pos / RANK_BLOCK;
+            let idx = block_rank[b] as usize + present[b * RANK_BLOCK..pos].count_ones();
+            return Some(ValueId::I64(values[idx]));
+        }
         self.get_dense(node_id).or_else(|| self.get_sparse(node_id))
+    }
+
+    /// Build a rank/select i64 column from `(position, value)` pairs **sorted by
+    /// position** over a column space of `len` positions. Reads are O(1): one
+    /// `block_rank` index plus a bounded popcount. Uses `len/8` bits for presence
+    /// plus a block-rank index of `len/RANK_BLOCK` u32s — smaller than the
+    /// equivalent [`Column::SparseI64`] pair array once fill exceeds ~1/64.
+    pub fn build_rank_i64(sorted_pairs: &[(u32, i64)], len: usize) -> Column {
+        let mut present = bitvec::vec::BitVec::repeat(false, len);
+        let mut values = Vec::with_capacity(sorted_pairs.len());
+        for &(pos, val) in sorted_pairs {
+            present.set(pos as usize, true);
+            values.push(val);
+        }
+        let nblocks = len.div_ceil(RANK_BLOCK);
+        let mut block_rank = Vec::with_capacity(nblocks + 1);
+        let mut acc = 0u32;
+        block_rank.push(0u32);
+        for b in 0..nblocks {
+            let start = b * RANK_BLOCK;
+            let end = ((b + 1) * RANK_BLOCK).min(len);
+            acc += present[start..end].count_ones() as u32;
+            block_rank.push(acc);
+        }
+        Column::RankI64 {
+            present,
+            block_rank,
+            values,
+        }
     }
 
     /// The dense `i64` values as a contiguous slice indexed by node id, or `None`
@@ -172,6 +229,14 @@ impl Column {
             }
             Column::SparseBool(col) => Box::new(col.iter().map(|&(id, v)| (id, ValueId::Bool(v)))),
             Column::SparseStr(col) => Box::new(col.iter().map(|&(id, v)| (id, ValueId::Str(v)))),
+            Column::RankI64 {
+                present, values, ..
+            } => Box::new(
+                present
+                    .iter_ones()
+                    .zip(values.iter())
+                    .map(|(pos, &v)| (pos as NodeId, ValueId::I64(v))),
+            ),
         }
     }
 }
@@ -2509,6 +2574,54 @@ mod tests {
         assert_eq!(col.get(0), Some(ValueId::Str(1)));
         assert_eq!(col.get(1), None);
         assert_eq!(col.get(2), Some(ValueId::Str(3)));
+    }
+
+    #[test]
+    fn test_column_rank_i64_get_basic() {
+        // First position, gap, and last position over a small space.
+        let col = Column::build_rank_i64(&[(0, 10), (2, 30), (4, 50)], 5);
+        assert_eq!(col.get(0), Some(ValueId::I64(10)));
+        assert_eq!(col.get(1), None);
+        assert_eq!(col.get(2), Some(ValueId::I64(30)));
+        assert_eq!(col.get(3), None);
+        assert_eq!(col.get(4), Some(ValueId::I64(50)));
+        // Out of range.
+        assert_eq!(col.get(5), None);
+        assert_eq!(col.get(99), None);
+    }
+
+    #[test]
+    fn test_column_rank_i64_matches_sparse_across_blocks() {
+        // Spread entries across several RANK_BLOCK (512) blocks, including the
+        // exact block boundaries, and assert byte-for-byte parity with a sparse
+        // column over the whole space.
+        let len = RANK_BLOCK * 4 + 7;
+        let positions = [
+            0,
+            1,
+            RANK_BLOCK - 1,
+            RANK_BLOCK,
+            RANK_BLOCK + 1,
+            RANK_BLOCK * 2,
+            RANK_BLOCK * 3 + 5,
+            len - 1,
+        ];
+        let pairs: Vec<(u32, i64)> = positions
+            .iter()
+            .map(|&p| (p as u32, (p as i64) * 7 + 1))
+            .collect();
+        let rank = Column::build_rank_i64(&pairs, len);
+        let sparse = Column::SparseI64(pairs.clone());
+        for pos in 0..(len as u32 + 3) {
+            assert_eq!(rank.get(pos), sparse.get(pos), "mismatch at pos {pos}");
+        }
+        // iter_entries parity (ascending position order).
+        let from_rank: Vec<_> = rank.iter_entries().collect();
+        let expect: Vec<_> = pairs
+            .iter()
+            .map(|&(p, v)| (p, ValueId::I64(v)))
+            .collect();
+        assert_eq!(from_rank, expect);
     }
 
     #[test]

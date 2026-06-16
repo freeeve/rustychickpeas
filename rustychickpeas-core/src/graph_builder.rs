@@ -11,6 +11,12 @@ use crate::types::{Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
 
+/// Minimum total relationship count before a moderately-sparse i64 edge column is
+/// stored as a rank/select column ([`Column::build_rank_i64`]) instead of a
+/// binary-searched sparse column. Below this the sparse array is small enough that
+/// binary search stays cache-friendly and the rank index isn't worth its build cost.
+const RANK_SELECT_MIN_RELS: usize = 1_000_000;
+
 /// Trait for converting common types to ValueId for GraphBuilder
 /// For strings, uses the builder's interner to look up or intern the string
 pub trait IntoValueIdBuilder {
@@ -953,11 +959,18 @@ impl GraphBuilder {
                 rel_columns.insert(key, Column::DenseI64(col));
             } else {
                 csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
-                let sparse: Vec<(u32, i64)> = csr_pairs
+                let sorted: Vec<(u32, i64)> = csr_pairs
                     .into_iter()
                     .map(|(pos, val)| (pos as u32, val))
                     .collect();
-                rel_columns.insert(key, Column::SparseI64(sparse));
+                // On a large graph, a moderately-sparse i64 edge column is read
+                // far faster via rank/select (O(1)) than binary search, and is
+                // also smaller than the pair array once fill exceeds ~1/64.
+                if m >= RANK_SELECT_MIN_RELS && sorted.len().saturating_mul(64) >= m {
+                    rel_columns.insert(key, Column::build_rank_i64(&sorted, m));
+                } else {
+                    rel_columns.insert(key, Column::SparseI64(sorted));
+                }
             }
         }
 
