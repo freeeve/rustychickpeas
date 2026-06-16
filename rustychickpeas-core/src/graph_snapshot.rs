@@ -70,6 +70,24 @@ pub enum Column {
         block_rank: Vec<u32>,
         values: Vec<i64>,
     },
+    /// Rank/select f64 column (see [`Column::RankI64`]).
+    RankF64 {
+        present: bitvec::vec::BitVec,
+        block_rank: Vec<u32>,
+        values: Vec<f64>,
+    },
+    /// Rank/select boolean column; values packed in a bitvec (see [`Column::RankI64`]).
+    RankBool {
+        present: bitvec::vec::BitVec,
+        block_rank: Vec<u32>,
+        values: bitvec::vec::BitVec,
+    },
+    /// Rank/select string column of interned ids (see [`Column::RankI64`]).
+    RankStr {
+        present: bitvec::vec::BitVec,
+        block_rank: Vec<u32>,
+        values: Vec<u32>,
+    },
 }
 
 /// Positions per rank block for [`Column::RankI64`]. A `get` does one indexed
@@ -114,35 +132,47 @@ impl Column {
     /// Get property value for a node (tries dense first, then sparse)
     #[inline]
     pub fn get(&self, node_id: NodeId) -> Option<ValueId> {
-        if let Column::RankI64 {
-            present,
-            block_rank,
-            values,
-        } = self
-        {
-            let pos = node_id as usize;
-            if pos >= present.len() || !present[pos] {
-                return None;
-            }
-            let b = pos / RANK_BLOCK;
-            let idx = block_rank[b] as usize + present[b * RANK_BLOCK..pos].count_ones();
-            return Some(ValueId::I64(values[idx]));
+        let pos = node_id as usize;
+        match self {
+            Column::RankI64 {
+                present,
+                block_rank,
+                values,
+            } => Self::rank_at(present, block_rank, pos).map(|i| ValueId::I64(values[i])),
+            Column::RankF64 {
+                present,
+                block_rank,
+                values,
+            } => Self::rank_at(present, block_rank, pos).map(|i| ValueId::from_f64(values[i])),
+            Column::RankBool {
+                present,
+                block_rank,
+                values,
+            } => Self::rank_at(present, block_rank, pos).map(|i| ValueId::Bool(values[i])),
+            Column::RankStr {
+                present,
+                block_rank,
+                values,
+            } => Self::rank_at(present, block_rank, pos).map(|i| ValueId::Str(values[i])),
+            _ => self.get_dense(node_id).or_else(|| self.get_sparse(node_id)),
         }
-        self.get_dense(node_id).or_else(|| self.get_sparse(node_id))
     }
 
-    /// Build a rank/select i64 column from `(position, value)` pairs **sorted by
-    /// position** over a column space of `len` positions. Reads are O(1): one
-    /// `block_rank` index plus a bounded popcount. Uses `len/8` bits for presence
-    /// plus a block-rank index of `len/RANK_BLOCK` u32s — smaller than the
-    /// equivalent [`Column::SparseI64`] pair array once fill exceeds ~1/64.
-    pub fn build_rank_i64(sorted_pairs: &[(u32, i64)], len: usize) -> Column {
-        let mut present = bitvec::vec::BitVec::repeat(false, len);
-        let mut values = Vec::with_capacity(sorted_pairs.len());
-        for &(pos, val) in sorted_pairs {
-            present.set(pos as usize, true);
-            values.push(val);
+    /// Index into a rank/select column's `values` for `pos`, or `None` if `pos`
+    /// carries no value. O(1): one `block_rank` read plus a popcount over at most
+    /// `RANK_BLOCK` bits.
+    #[inline]
+    fn rank_at(present: &bitvec::vec::BitVec, block_rank: &[u32], pos: usize) -> Option<usize> {
+        if pos >= present.len() || !present[pos] {
+            return None;
         }
+        let b = pos / RANK_BLOCK;
+        Some(block_rank[b] as usize + present[b * RANK_BLOCK..pos].count_ones())
+    }
+
+    /// Build the block-rank index for a presence bitvec: `block_rank[b]` is the
+    /// number of set bits before block `b` (`RANK_BLOCK` positions per block).
+    fn block_rank_for(present: &bitvec::vec::BitVec, len: usize) -> Vec<u32> {
         let nblocks = len.div_ceil(RANK_BLOCK);
         let mut block_rank = Vec::with_capacity(nblocks + 1);
         let mut acc = 0u32;
@@ -153,7 +183,72 @@ impl Column {
             acc += present[start..end].count_ones() as u32;
             block_rank.push(acc);
         }
+        block_rank
+    }
+
+    /// Build a rank/select i64 column from `(position, value)` pairs **sorted by
+    /// position** over a column space of `len` positions. Reads are O(1): one
+    /// `block_rank` index plus a bounded popcount. Uses `len/8` bits for presence
+    /// plus a block-rank index of `len/RANK_BLOCK` u32s — smaller than the
+    /// equivalent [`Column::SparseI64`] pair array once fill exceeds ~1/64.
+    pub(crate) fn build_rank_i64(sorted_pairs: &[(u32, i64)], len: usize) -> Column {
+        let mut present = bitvec::vec::BitVec::repeat(false, len);
+        let mut values = Vec::with_capacity(sorted_pairs.len());
+        for &(pos, val) in sorted_pairs {
+            present.set(pos as usize, true);
+            values.push(val);
+        }
+        let block_rank = Self::block_rank_for(&present, len);
         Column::RankI64 {
+            present,
+            block_rank,
+            values,
+        }
+    }
+
+    /// Build a rank/select f64 column from position-sorted pairs. See [`Column::build_rank_i64`].
+    pub(crate) fn build_rank_f64(sorted_pairs: &[(u32, f64)], len: usize) -> Column {
+        let mut present = bitvec::vec::BitVec::repeat(false, len);
+        let mut values = Vec::with_capacity(sorted_pairs.len());
+        for &(pos, val) in sorted_pairs {
+            present.set(pos as usize, true);
+            values.push(val);
+        }
+        let block_rank = Self::block_rank_for(&present, len);
+        Column::RankF64 {
+            present,
+            block_rank,
+            values,
+        }
+    }
+
+    /// Build a rank/select boolean column from position-sorted pairs. See [`Column::build_rank_i64`].
+    pub(crate) fn build_rank_bool(sorted_pairs: &[(u32, bool)], len: usize) -> Column {
+        let mut present = bitvec::vec::BitVec::repeat(false, len);
+        let mut values = bitvec::vec::BitVec::with_capacity(sorted_pairs.len());
+        for &(pos, val) in sorted_pairs {
+            present.set(pos as usize, true);
+            values.push(val);
+        }
+        let block_rank = Self::block_rank_for(&present, len);
+        Column::RankBool {
+            present,
+            block_rank,
+            values,
+        }
+    }
+
+    /// Build a rank/select string (interned id) column from position-sorted pairs.
+    /// See [`Column::build_rank_i64`].
+    pub(crate) fn build_rank_str(sorted_pairs: &[(u32, u32)], len: usize) -> Column {
+        let mut present = bitvec::vec::BitVec::repeat(false, len);
+        let mut values = Vec::with_capacity(sorted_pairs.len());
+        for &(pos, val) in sorted_pairs {
+            present.set(pos as usize, true);
+            values.push(val);
+        }
+        let block_rank = Self::block_rank_for(&present, len);
+        Column::RankStr {
             present,
             block_rank,
             values,
@@ -236,6 +331,30 @@ impl Column {
                     .iter_ones()
                     .zip(values.iter())
                     .map(|(pos, &v)| (pos as NodeId, ValueId::I64(v))),
+            ),
+            Column::RankF64 {
+                present, values, ..
+            } => Box::new(
+                present
+                    .iter_ones()
+                    .zip(values.iter())
+                    .map(|(pos, &v)| (pos as NodeId, ValueId::from_f64(v))),
+            ),
+            Column::RankBool {
+                present, values, ..
+            } => Box::new(
+                present
+                    .iter_ones()
+                    .zip(values.iter())
+                    .map(|(pos, b)| (pos as NodeId, ValueId::Bool(*b))),
+            ),
+            Column::RankStr {
+                present, values, ..
+            } => Box::new(
+                present
+                    .iter_ones()
+                    .zip(values.iter())
+                    .map(|(pos, &v)| (pos as NodeId, ValueId::Str(v))),
             ),
         }
     }
@@ -1836,12 +1955,14 @@ impl GraphSnapshot {
         let Some(column) = self.columns.get(&key) else {
             return FullTextField::default();
         };
-        let docs = column.iter_entries().filter_map(|(node, value)| match value {
-            ValueId::Str(sid) if label_nodes.is_some_and(|ns| ns.contains(node)) => {
-                self.atoms.resolve(sid).map(|text| (node, text))
-            }
-            _ => None,
-        });
+        let docs = column
+            .iter_entries()
+            .filter_map(|(node, value)| match value {
+                ValueId::Str(sid) if label_nodes.is_some_and(|ns| ns.contains(node)) => {
+                    self.atoms.resolve(sid).map(|text| (node, text))
+                }
+                _ => None,
+            });
         FullTextField::build(docs)
     }
 
@@ -1935,7 +2056,12 @@ impl GraphSnapshot {
 
     /// Build the geo index for one `(label, lat_key, lon_key)` field by reading
     /// each labelled node's lat/lon f64 properties.
-    fn build_geo_index(&self, label: Label, lat_key: PropertyKey, lon_key: PropertyKey) -> GeoIndex {
+    fn build_geo_index(
+        &self,
+        label: Label,
+        lat_key: PropertyKey,
+        lon_key: PropertyKey,
+    ) -> GeoIndex {
         let label_nodes = self.nodes_with_label_id(label);
         let (Some(lat_col), Some(lon_col)) =
             (self.columns.get(&lat_key), self.columns.get(&lon_key))
@@ -2250,11 +2376,15 @@ mod tests {
     fn test_get_neighbors_outgoing() {
         let snapshot = create_test_snapshot();
         assert_eq!(
-            snapshot.neighbors(0, Direction::Outgoing).collect::<Vec<_>>(),
+            snapshot
+                .neighbors(0, Direction::Outgoing)
+                .collect::<Vec<_>>(),
             vec![1]
         );
         assert_eq!(
-            snapshot.neighbors(1, Direction::Outgoing).collect::<Vec<_>>(),
+            snapshot
+                .neighbors(1, Direction::Outgoing)
+                .collect::<Vec<_>>(),
             vec![2]
         );
         assert_eq!(snapshot.neighbors(2, Direction::Outgoing).count(), 0);
@@ -2265,11 +2395,15 @@ mod tests {
         let snapshot = create_test_snapshot();
         assert_eq!(snapshot.neighbors(0, Direction::Incoming).count(), 0);
         assert_eq!(
-            snapshot.neighbors(1, Direction::Incoming).collect::<Vec<_>>(),
+            snapshot
+                .neighbors(1, Direction::Incoming)
+                .collect::<Vec<_>>(),
             vec![0]
         );
         assert_eq!(
-            snapshot.neighbors(2, Direction::Incoming).collect::<Vec<_>>(),
+            snapshot
+                .neighbors(2, Direction::Incoming)
+                .collect::<Vec<_>>(),
             vec![1]
         );
     }
@@ -2296,8 +2430,14 @@ mod tests {
             b.add_relationship(0, t, "K").unwrap(); // 0 -> {1,2,3,4,5}
         }
         let g = b.finalize(None);
-        let sum: u64 =
-            g.par_neighbor_fold(0, Direction::Outgoing, "K", || 0u64, |a, n| a + n as u64, |a, b| a + b);
+        let sum: u64 = g.par_neighbor_fold(
+            0,
+            Direction::Outgoing,
+            "K",
+            || 0u64,
+            |a, n| a + n as u64,
+            |a, b| a + b,
+        );
         assert_eq!(sum, 1 + 2 + 3 + 4 + 5);
         // Matches the sequential fold over the same neighbors.
         let seq: u64 = g
@@ -2318,8 +2458,9 @@ mod tests {
         }
         let g = b.finalize(None);
         // Integer-valued weights so sums are exact in f64 regardless of association.
-        let w =
-            |from: u32, rel: &RelationshipRef| (from as i64 - rel.neighbor as i64).unsigned_abs() as f64;
+        let w = |from: u32, rel: &RelationshipRef| {
+            (from as i64 - rel.neighbor as i64).unsigned_abs() as f64
+        };
         // Bidirectional must agree with the single-source Dijkstra it mirrors.
         let bidi = g.weighted_shortest_path(0, 4, Direction::Both, "K", w);
         let uni = g
@@ -2329,8 +2470,14 @@ mod tests {
         assert_eq!(bidi, uni);
         assert!(bidi.is_some());
         // Trivial and unreachable cases.
-        assert_eq!(g.weighted_shortest_path(0, 0, Direction::Both, "K", w), Some(0.0));
-        assert_eq!(g.weighted_shortest_path(0, 5, Direction::Both, "K", w), None);
+        assert_eq!(
+            g.weighted_shortest_path(0, 0, Direction::Both, "K", w),
+            Some(0.0)
+        );
+        assert_eq!(
+            g.weighted_shortest_path(0, 5, Direction::Both, "K", w),
+            None
+        );
     }
 
     #[test]
@@ -2617,11 +2764,43 @@ mod tests {
         }
         // iter_entries parity (ascending position order).
         let from_rank: Vec<_> = rank.iter_entries().collect();
-        let expect: Vec<_> = pairs
-            .iter()
-            .map(|&(p, v)| (p, ValueId::I64(v)))
-            .collect();
+        let expect: Vec<_> = pairs.iter().map(|&(p, v)| (p, ValueId::I64(v))).collect();
         assert_eq!(from_rank, expect);
+    }
+
+    #[test]
+    fn test_column_rank_f64_bool_str_match_sparse() {
+        // Same cross-block positions, exercised for the f64/bool/str variants.
+        let len = RANK_BLOCK * 3 + 9;
+        let positions: Vec<u32> = [
+            0u32,
+            1,
+            RANK_BLOCK as u32,
+            RANK_BLOCK as u32 + 2,
+            len as u32 - 1,
+        ]
+        .to_vec();
+
+        let f64_pairs: Vec<(u32, f64)> = positions.iter().map(|&p| (p, p as f64 * 0.25)).collect();
+        let rank_f = Column::build_rank_f64(&f64_pairs, len);
+        let sparse_f = Column::SparseF64(f64_pairs);
+        for pos in 0..(len as u32 + 2) {
+            assert_eq!(rank_f.get(pos), sparse_f.get(pos), "f64 mismatch at {pos}");
+        }
+
+        let bool_pairs: Vec<(u32, bool)> = positions.iter().map(|&p| (p, p % 2 == 0)).collect();
+        let rank_b = Column::build_rank_bool(&bool_pairs, len);
+        let sparse_b = Column::SparseBool(bool_pairs);
+        for pos in 0..(len as u32 + 2) {
+            assert_eq!(rank_b.get(pos), sparse_b.get(pos), "bool mismatch at {pos}");
+        }
+
+        let str_pairs: Vec<(u32, u32)> = positions.iter().map(|&p| (p, p * 3 + 100)).collect();
+        let rank_s = Column::build_rank_str(&str_pairs, len);
+        let sparse_s = Column::SparseStr(str_pairs);
+        for pos in 0..(len as u32 + 2) {
+            assert_eq!(rank_s.get(pos), sparse_s.get(pos), "str mismatch at {pos}");
+        }
     }
 
     #[test]

@@ -54,6 +54,33 @@ fn column_to_data(col: &Column) -> ColumnData {
                 .map(|(pos, &v)| (pos as u32, v))
                 .collect(),
         ),
+        Column::RankF64 {
+            present, values, ..
+        } => ColumnData::SparseF64(
+            present
+                .iter_ones()
+                .zip(values.iter())
+                .map(|(pos, &v)| (pos as u32, v))
+                .collect(),
+        ),
+        Column::RankBool {
+            present, values, ..
+        } => ColumnData::SparseBool(
+            present
+                .iter_ones()
+                .zip(values.iter())
+                .map(|(pos, b)| (pos as u32, *b))
+                .collect(),
+        ),
+        Column::RankStr {
+            present, values, ..
+        } => ColumnData::SparseStr(
+            present
+                .iter_ones()
+                .zip(values.iter())
+                .map(|(pos, &v)| (pos as u32, v))
+                .collect(),
+        ),
     }
 }
 

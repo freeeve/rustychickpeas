@@ -11,11 +11,103 @@ use crate::types::{Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
 
-/// Minimum total relationship count before a moderately-sparse i64 edge column is
-/// stored as a rank/select column ([`Column::build_rank_i64`]) instead of a
-/// binary-searched sparse column. Below this the sparse array is small enough that
-/// binary search stays cache-friendly and the rank index isn't worth its build cost.
-const RANK_SELECT_MIN_RELS: usize = 1_000_000;
+/// Minimum column span (relationship count for edge columns, node count for node
+/// columns) before a moderately-sparse column is stored as rank/select instead of
+/// a binary-searched sparse column. Below this the sparse array stays small enough
+/// that binary search is cache-friendly and the rank index isn't worth its cost.
+const RANK_SELECT_MIN_LEN: usize = 1_000_000;
+
+/// Whether a moderately-sparse column with `present` set entries over `span`
+/// positions is worth storing as rank/select: the span must be large enough to
+/// matter, and the rank/select layout (presence bitvec + packed `value_bits`-bit
+/// values) must not use more memory than the equivalent sparse pair array
+/// (`sparse_pair_bytes` per entry, including alignment padding).
+fn rank_select_worth(
+    span: usize,
+    present: usize,
+    value_bits: usize,
+    sparse_pair_bytes: usize,
+) -> bool {
+    if span < RANK_SELECT_MIN_LEN {
+        return false;
+    }
+    let rank_bits = span + present.saturating_mul(value_bits);
+    let sparse_bits = present.saturating_mul(sparse_pair_bytes * 8);
+    rank_bits <= sparse_bits
+}
+
+/// Choose dense / rank-select / sparse storage for an i64 column from
+/// `(position, value)` pairs over `span` positions.
+fn column_from_pairs_i64(mut pairs: Vec<(u32, i64)>, span: usize) -> Column {
+    if pairs.len() >= (span as f64 * 0.8) as usize {
+        let mut col = vec![0i64; span];
+        for &(pos, val) in &pairs {
+            col[pos as usize] = val;
+        }
+        return Column::DenseI64(col);
+    }
+    pairs.sort_unstable_by_key(|(pos, _)| *pos);
+    if rank_select_worth(span, pairs.len(), 64, 16) {
+        Column::build_rank_i64(&pairs, span)
+    } else {
+        Column::SparseI64(pairs)
+    }
+}
+
+/// Choose dense / rank-select / sparse storage for an f64 column. See
+/// [`column_from_pairs_i64`].
+fn column_from_pairs_f64(mut pairs: Vec<(u32, f64)>, span: usize) -> Column {
+    if pairs.len() >= (span as f64 * 0.8) as usize {
+        let mut col = vec![0.0f64; span];
+        for &(pos, val) in &pairs {
+            col[pos as usize] = val;
+        }
+        return Column::DenseF64(col);
+    }
+    pairs.sort_unstable_by_key(|(pos, _)| *pos);
+    if rank_select_worth(span, pairs.len(), 64, 16) {
+        Column::build_rank_f64(&pairs, span)
+    } else {
+        Column::SparseF64(pairs)
+    }
+}
+
+/// Choose dense / rank-select / sparse storage for a boolean column. Sparse
+/// `(NodeId, bool)` entries pad to 8 bytes; rank/select packs one bit per value.
+/// See [`column_from_pairs_i64`].
+fn column_from_pairs_bool(mut pairs: Vec<(u32, bool)>, span: usize) -> Column {
+    if pairs.len() >= (span as f64 * 0.8) as usize {
+        let mut col = bitvec::vec::BitVec::repeat(false, span);
+        for &(pos, val) in &pairs {
+            col.set(pos as usize, val);
+        }
+        return Column::DenseBool(col);
+    }
+    pairs.sort_unstable_by_key(|(pos, _)| *pos);
+    if rank_select_worth(span, pairs.len(), 1, 8) {
+        Column::build_rank_bool(&pairs, span)
+    } else {
+        Column::SparseBool(pairs)
+    }
+}
+
+/// Choose dense / rank-select / sparse storage for a string (interned id) column.
+/// See [`column_from_pairs_i64`].
+fn column_from_pairs_str(mut pairs: Vec<(u32, u32)>, span: usize) -> Column {
+    if pairs.len() >= (span as f64 * 0.8) as usize {
+        let mut col = vec![0u32; span];
+        for &(pos, val) in &pairs {
+            col[pos as usize] = val;
+        }
+        return Column::DenseStr(col);
+    }
+    pairs.sort_unstable_by_key(|(pos, _)| *pos);
+    if rank_select_worth(span, pairs.len(), 32, 8) {
+        Column::build_rank_str(&pairs, span)
+    } else {
+        Column::SparseStr(pairs)
+    }
+}
 
 /// Trait for converting common types to ValueId for GraphBuilder
 /// For strings, uses the builder's interner to look up or intern the string
@@ -873,62 +965,18 @@ impl GraphBuilder {
         n: usize,
     ) -> HashMap<PropertyKey, Column> {
         let mut columns: HashMap<PropertyKey, Column> = HashMap::new();
-        let threshold = (n as f64 * 0.8) as usize;
 
         for (key, pairs) in node_col_i64 {
-            if pairs.len() >= threshold {
-                let mut col = vec![0i64; n];
-                for (node_id, val) in pairs {
-                    col[node_id as usize] = val;
-                }
-                columns.insert(key, Column::DenseI64(col));
-            } else {
-                let mut pairs = pairs;
-                pairs.sort_unstable_by_key(|(id, _)| *id);
-                columns.insert(key, Column::SparseI64(pairs));
-            }
+            columns.insert(key, column_from_pairs_i64(pairs, n));
         }
-
         for (key, pairs) in node_col_f64 {
-            if pairs.len() >= threshold {
-                let mut col = vec![0.0f64; n];
-                for (node_id, val) in pairs {
-                    col[node_id as usize] = val;
-                }
-                columns.insert(key, Column::DenseF64(col));
-            } else {
-                let mut pairs = pairs;
-                pairs.sort_unstable_by_key(|(id, _)| *id);
-                columns.insert(key, Column::SparseF64(pairs));
-            }
+            columns.insert(key, column_from_pairs_f64(pairs, n));
         }
-
         for (key, pairs) in node_col_bool {
-            if pairs.len() >= threshold {
-                let mut col = bitvec::vec::BitVec::repeat(false, n);
-                for (node_id, val) in pairs {
-                    col.set(node_id as usize, val);
-                }
-                columns.insert(key, Column::DenseBool(col));
-            } else {
-                let mut pairs = pairs;
-                pairs.sort_unstable_by_key(|(id, _)| *id);
-                columns.insert(key, Column::SparseBool(pairs));
-            }
+            columns.insert(key, column_from_pairs_bool(pairs, n));
         }
-
         for (key, pairs) in node_col_str {
-            if pairs.len() >= threshold {
-                let mut col = vec![0u32; n];
-                for (node_id, val) in pairs {
-                    col[node_id as usize] = val;
-                }
-                columns.insert(key, Column::DenseStr(col));
-            } else {
-                let mut pairs = pairs;
-                pairs.sort_unstable_by_key(|(id, _)| *id);
-                columns.insert(key, Column::SparseStr(pairs));
-            }
+            columns.insert(key, column_from_pairs_str(pairs, n));
         }
 
         columns
@@ -944,97 +992,37 @@ impl GraphBuilder {
         m: usize,
     ) -> HashMap<PropertyKey, Column> {
         let mut rel_columns: HashMap<PropertyKey, Column> = HashMap::new();
-        let rel_threshold = (m as f64 * 0.8) as usize;
 
         for (key, pairs) in rel_col_i64 {
-            let mut csr_pairs: Vec<(usize, i64)> = pairs
+            let csr_pairs: Vec<(u32, i64)> = pairs
                 .into_iter()
-                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx] as u32, val))
                 .collect();
-            if csr_pairs.len() >= rel_threshold {
-                let mut col = vec![0i64; m];
-                for (csr_pos, val) in csr_pairs {
-                    col[csr_pos] = val;
-                }
-                rel_columns.insert(key, Column::DenseI64(col));
-            } else {
-                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
-                let sorted: Vec<(u32, i64)> = csr_pairs
-                    .into_iter()
-                    .map(|(pos, val)| (pos as u32, val))
-                    .collect();
-                // On a large graph, a moderately-sparse i64 edge column is read
-                // far faster via rank/select (O(1)) than binary search, and is
-                // also smaller than the pair array once fill exceeds ~1/64.
-                if m >= RANK_SELECT_MIN_RELS && sorted.len().saturating_mul(64) >= m {
-                    rel_columns.insert(key, Column::build_rank_i64(&sorted, m));
-                } else {
-                    rel_columns.insert(key, Column::SparseI64(sorted));
-                }
-            }
+            rel_columns.insert(key, column_from_pairs_i64(csr_pairs, m));
         }
 
         for (key, pairs) in rel_col_f64 {
-            let mut csr_pairs: Vec<(usize, f64)> = pairs
+            let csr_pairs: Vec<(u32, f64)> = pairs
                 .into_iter()
-                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx] as u32, val))
                 .collect();
-            if csr_pairs.len() >= rel_threshold {
-                let mut col = vec![0.0f64; m];
-                for (csr_pos, val) in csr_pairs {
-                    col[csr_pos] = val;
-                }
-                rel_columns.insert(key, Column::DenseF64(col));
-            } else {
-                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
-                let sparse: Vec<(u32, f64)> = csr_pairs
-                    .into_iter()
-                    .map(|(pos, val)| (pos as u32, val))
-                    .collect();
-                rel_columns.insert(key, Column::SparseF64(sparse));
-            }
+            rel_columns.insert(key, column_from_pairs_f64(csr_pairs, m));
         }
 
         for (key, pairs) in rel_col_bool {
-            let mut csr_pairs: Vec<(usize, bool)> = pairs
+            let csr_pairs: Vec<(u32, bool)> = pairs
                 .into_iter()
-                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx] as u32, val))
                 .collect();
-            if csr_pairs.len() >= rel_threshold {
-                let mut col = bitvec::vec::BitVec::repeat(false, m);
-                for (csr_pos, val) in csr_pairs {
-                    col.set(csr_pos, val);
-                }
-                rel_columns.insert(key, Column::DenseBool(col));
-            } else {
-                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
-                let sparse: Vec<(u32, bool)> = csr_pairs
-                    .into_iter()
-                    .map(|(pos, val)| (pos as u32, val))
-                    .collect();
-                rel_columns.insert(key, Column::SparseBool(sparse));
-            }
+            rel_columns.insert(key, column_from_pairs_bool(csr_pairs, m));
         }
 
         for (key, pairs) in rel_col_str {
-            let mut csr_pairs: Vec<(usize, u32)> = pairs
+            let csr_pairs: Vec<(u32, u32)> = pairs
                 .into_iter()
-                .map(|(builder_idx, val)| (builder_to_csr[builder_idx], val))
+                .map(|(builder_idx, val)| (builder_to_csr[builder_idx] as u32, val))
                 .collect();
-            if csr_pairs.len() >= rel_threshold {
-                let mut col = vec![0u32; m];
-                for (csr_pos, val) in csr_pairs {
-                    col[csr_pos] = val;
-                }
-                rel_columns.insert(key, Column::DenseStr(col));
-            } else {
-                csr_pairs.sort_unstable_by_key(|(pos, _)| *pos);
-                let sparse: Vec<(u32, u32)> = csr_pairs
-                    .into_iter()
-                    .map(|(pos, val)| (pos as u32, val))
-                    .collect();
-                rel_columns.insert(key, Column::SparseStr(sparse));
-            }
+            rel_columns.insert(key, column_from_pairs_str(csr_pairs, m));
         }
 
         rel_columns
@@ -2193,10 +2181,19 @@ mod tests {
         assert_eq!(inc.get(&4), Some(&Some(ValueId::I64(2019))));
 
         // Direction, filter, and empty cases.
-        assert_eq!(g.relationships(1, Direction::Both, &[] as &[&str]).count(), 2); // 2 out, 0 in
+        assert_eq!(
+            g.relationships(1, Direction::Both, &[] as &[&str]).count(),
+            2
+        ); // 2 out, 0 in
         assert_eq!(g.relationships(2, Direction::Both, &["KNOWS"]).count(), 2); // 0 out, 2 in
-        assert_eq!(g.relationships(1, Direction::Outgoing, &["NOPE"]).count(), 0);
-        assert_eq!(g.relationships(3, Direction::Incoming, &["KNOWS"]).count(), 1);
+        assert_eq!(
+            g.relationships(1, Direction::Outgoing, &["NOPE"]).count(),
+            0
+        );
+        assert_eq!(
+            g.relationships(3, Direction::Incoming, &["KNOWS"]).count(),
+            1
+        );
     }
 
     #[test]
