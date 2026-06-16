@@ -92,6 +92,37 @@ impl NodeSet {
         }
     }
 
+    /// Fold the set's node ids in parallel, then merge the per-worker results.
+    ///
+    /// `identity` seeds each worker's accumulator, `fold` folds one node id into
+    /// an accumulator, and `reduce` merges two accumulators. The parallelism is an
+    /// implementation detail — the signature is pure `std` (`Fn`/`Send`/`Sync`),
+    /// so callers depend on neither a parallelism crate nor the storage layout.
+    /// Uses the contiguous-range fast path ([`as_range`](Self::as_range)) when the
+    /// ids are gap-free, otherwise a collected scan. For a sequential fold use
+    /// [`iter`](Self::iter).
+    pub fn par_fold<T, ID, F, R>(&self, identity: ID, fold: F, reduce: R) -> T
+    where
+        T: Send,
+        ID: Fn() -> T + Sync + Send,
+        F: Fn(T, u32) -> T + Sync + Send,
+        R: Fn(T, T) -> T + Sync + Send,
+    {
+        use rayon::prelude::*;
+        match self.as_range() {
+            Some(range) => range
+                .into_par_iter()
+                .fold(&identity, &fold)
+                .reduce(&identity, &reduce),
+            None => self
+                .iter()
+                .collect::<Vec<u32>>()
+                .into_par_iter()
+                .fold(&identity, &fold)
+                .reduce(&identity, &reduce),
+        }
+    }
+
     pub fn insert(&mut self, node_id: u32) -> bool {
         match self {
             NodeSet::Roaring(bitmap) => bitmap.insert(node_id),
@@ -308,6 +339,24 @@ mod tests {
         assert_eq!(bitset.min(), Some(2));
         assert_eq!(bitset.max(), Some(5));
         assert_eq!(bitset.as_range(), Some(2..6));
+    }
+
+    #[test]
+    fn test_nodeset_par_fold() {
+        let sum_ids = |ns: &NodeSet| -> u64 {
+            ns.par_fold(|| 0u64, |acc, id| acc + id as u64, |a, b| a + b)
+        };
+        // Contiguous (range fast path) matches the sequential sum.
+        let contiguous = NodeSet::new((1u32..=1000).collect());
+        assert_eq!(sum_ids(&contiguous), (1..=1000u64).sum::<u64>());
+        // Sparse (collected fallback path) — same arithmetic.
+        let mut rb = RoaringBitmap::new();
+        for id in [1u32, 2, 3, 1000] {
+            rb.insert(id);
+        }
+        assert_eq!(sum_ids(&NodeSet::new(rb)), 1 + 2 + 3 + 1000);
+        // Empty folds to the identity.
+        assert_eq!(sum_ids(&NodeSet::empty()), 0);
     }
 
     #[test]
