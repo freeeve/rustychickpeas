@@ -724,6 +724,42 @@ impl GraphSnapshot {
         }
     }
 
+    /// Fold `node`'s `direction` neighbors of the given relationship type(s) in
+    /// parallel, then merge the per-worker results — `neighbors_by_type` composed
+    /// with a parallel fold.
+    ///
+    /// `identity` seeds each worker's accumulator, `fold` folds one neighbor into
+    /// an accumulator, and `reduce` merges two accumulators. The neighbor list
+    /// (usually small) is materialized once, then folded across threads; like
+    /// [`NodeSet::par_fold`](crate::bitmap::NodeSet::par_fold) the parallelism is
+    /// a private implementation detail, so the signature is pure `std` and callers
+    /// depend on neither a parallelism crate nor the storage layout. Use this when
+    /// each neighbor drives substantial independent work (e.g. a shortest-path
+    /// search per source); for light per-neighbor work, iterate
+    /// [`neighbors_by_type`](Self::neighbors_by_type) sequentially.
+    pub fn par_neighbor_fold<T, ID, F, R>(
+        &self,
+        node: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+        identity: ID,
+        fold: F,
+        reduce: R,
+    ) -> T
+    where
+        T: Send,
+        ID: Fn() -> T + Sync + Send,
+        F: Fn(T, NodeId) -> T + Sync + Send,
+        R: Fn(T, T) -> T + Sync + Send,
+    {
+        use rayon::prelude::*;
+        let neighbors: Vec<NodeId> = self.neighbors_by_type(node, direction, rel_types).collect();
+        neighbors
+            .into_par_iter()
+            .fold(&identity, &fold)
+            .reduce(&identity, &reduce)
+    }
+
     /// Get the relationships incident to a node in the given direction,
     /// optionally filtered by relationship type (an empty `rel_types` matches
     /// all types).
@@ -829,6 +865,89 @@ impl GraphSnapshot {
             }
         }
         ShortestPaths { source, dist, prev }
+    }
+
+    /// Weighted shortest-path *cost* from `source` to `target` via bidirectional
+    /// Dijkstra: it searches from both ends and meets in the middle, exploring far
+    /// fewer nodes than a one-directional search for a point-to-point query on a
+    /// large, well-connected component. Returns `None` if `target` is unreachable.
+    ///
+    /// `weight` returns a non-negative edge cost, as in [`dijkstra`](Self::dijkstra)
+    /// (an infinite weight prunes the edge). The backward search follows the
+    /// reverse of `direction`, so `weight` must be symmetric — the usual case for
+    /// an undirected `Direction::Both` graph (e.g. `KNOWS`). When you need
+    /// distances to *many* targets from one source, or the path itself, use the
+    /// single-source [`dijkstra`](Self::dijkstra) instead.
+    pub fn weighted_shortest_path<W>(
+        &self,
+        source: NodeId,
+        target: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+        weight: W,
+    ) -> Option<f64>
+    where
+        W: Fn(NodeId, &RelationshipRef) -> f64,
+    {
+        if source == target {
+            return Some(0.0);
+        }
+        let matcher = rel_types.into_match(self);
+        let rev = Self::reverse_direction(direction);
+        let mut dist_f: HashMap<NodeId, f64> = HashMap::new();
+        let mut dist_b: HashMap<NodeId, f64> = HashMap::new();
+        dist_f.insert(source, 0.0);
+        dist_b.insert(target, 0.0);
+        let mut heap_f = std::collections::BinaryHeap::new();
+        let mut heap_b = std::collections::BinaryHeap::new();
+        heap_f.push(DijkstraState {
+            cost: 0.0,
+            node: source,
+        });
+        heap_b.push(DijkstraState {
+            cost: 0.0,
+            node: target,
+        });
+        // Best meeting cost found so far; the frontiers can't beat `top_f + top_b`.
+        let mut best = f64::INFINITY;
+
+        while !heap_f.is_empty() || !heap_b.is_empty() {
+            let top_f = heap_f.peek().map_or(f64::INFINITY, |s| s.cost);
+            let top_b = heap_b.peek().map_or(f64::INFINITY, |s| s.cost);
+            if top_f + top_b >= best {
+                break;
+            }
+            // Expand whichever frontier is currently smaller.
+            let (heap, dist, other, dir) = if top_f <= top_b {
+                (&mut heap_f, &mut dist_f, &dist_b, direction)
+            } else {
+                (&mut heap_b, &mut dist_b, &dist_f, rev)
+            };
+            let Some(DijkstraState { cost, node }) = heap.pop() else {
+                continue;
+            };
+            if cost > *dist.get(&node).unwrap_or(&f64::INFINITY) {
+                continue; // stale heap entry
+            }
+            // `node` is settled on this side; if the other side reached it too, the
+            // two halves form a candidate path.
+            if let Some(&other_cost) = other.get(&node) {
+                if cost + other_cost < best {
+                    best = cost + other_cost;
+                }
+            }
+            for rel in self.relationships_with(node, dir, matcher.clone()) {
+                let next = cost + weight(node, &rel);
+                if next < *dist.get(&rel.neighbor).unwrap_or(&f64::INFINITY) {
+                    dist.insert(rel.neighbor, next);
+                    heap.push(DijkstraState {
+                        cost: next,
+                        node: rel.neighbor,
+                    });
+                }
+            }
+        }
+        best.is_finite().then_some(best)
     }
 
     /// Check if one node can reach another via traversal
@@ -1679,6 +1798,53 @@ mod tests {
     fn test_get_neighbors_incoming_invalid() {
         let snapshot = create_test_snapshot();
         assert_eq!(snapshot.neighbors(999, Direction::Incoming).count(), 0);
+    }
+
+    #[test]
+    fn test_par_neighbor_fold() {
+        let mut b = GraphBuilder::new(Some(20), Some(20));
+        for i in 0..6 {
+            b.add_node(Some(i), &["P"]).unwrap();
+        }
+        for t in 1..6 {
+            b.add_relationship(0, t, "K").unwrap(); // 0 -> {1,2,3,4,5}
+        }
+        let g = b.finalize(None);
+        let sum: u64 =
+            g.par_neighbor_fold(0, Direction::Outgoing, "K", || 0u64, |a, n| a + n as u64, |a, b| a + b);
+        assert_eq!(sum, 1 + 2 + 3 + 4 + 5);
+        // Matches the sequential fold over the same neighbors.
+        let seq: u64 = g
+            .neighbors_by_type(0, Direction::Outgoing, "K")
+            .map(|n| n as u64)
+            .sum();
+        assert_eq!(sum, seq);
+    }
+
+    #[test]
+    fn test_weighted_shortest_path() {
+        let mut b = GraphBuilder::new(Some(20), Some(20));
+        for i in 0..6 {
+            b.add_node(Some(i), &["P"]).unwrap();
+        }
+        for &(u, v) in &[(0, 1), (1, 2), (2, 3), (3, 4), (0, 2), (2, 4)] {
+            b.add_relationship(u, v, "K").unwrap();
+        }
+        let g = b.finalize(None);
+        // Integer-valued weights so sums are exact in f64 regardless of association.
+        let w =
+            |from: u32, rel: &RelationshipRef| (from as i64 - rel.neighbor as i64).unsigned_abs() as f64;
+        // Bidirectional must agree with the single-source Dijkstra it mirrors.
+        let bidi = g.weighted_shortest_path(0, 4, Direction::Both, "K", w);
+        let uni = g
+            .dijkstra(0, Direction::Both, "K", Some(4), w)
+            .distance(4)
+            .filter(|d| d.is_finite());
+        assert_eq!(bidi, uni);
+        assert!(bidi.is_some());
+        // Trivial and unreachable cases.
+        assert_eq!(g.weighted_shortest_path(0, 0, Direction::Both, "K", w), Some(0.0));
+        assert_eq!(g.weighted_shortest_path(0, 5, Direction::Both, "K", w), None);
     }
 
     #[test]
