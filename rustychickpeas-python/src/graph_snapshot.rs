@@ -670,6 +670,40 @@ impl GraphSnapshot {
         Ok(GraphSnapshot::new(snapshot))
     }
 
+    /// Write this snapshot to an RCPG file on disk. With `topology_only=True`,
+    /// omit the property columns for a lean, traversal-only file (per-node data
+    /// is expected to live in a record store instead).
+    #[pyo3(signature = (path, topology_only=false))]
+    fn write_rcpg(&self, path: String, topology_only: bool) -> PyResult<()> {
+        if topology_only {
+            use rustychickpeas_core::format::rcpg::WriteOptions;
+            use std::io::Write;
+            let mut file = std::io::BufWriter::new(
+                std::fs::File::create(&path)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?,
+            );
+            self.snapshot
+                .write_rcpg_with(&mut file, &WriteOptions::topology_only())
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            file.flush()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+        } else {
+            self.snapshot
+                .write_rcpg_file(&path)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Read a snapshot from an RCPG file on disk (the property index rebuilds
+    /// lazily on first use).
+    #[staticmethod]
+    fn read_rcpg(path: String) -> PyResult<GraphSnapshot> {
+        let snapshot = CoreGraphSnapshot::read_rcpg_file(&path)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        Ok(GraphSnapshot::new(snapshot))
+    }
+
     /// Bidirectional BFS to find paths between source and target node sets
     ///
     /// Performs BFS from both source and target nodes simultaneously, meeting in the middle.

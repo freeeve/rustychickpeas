@@ -1015,3 +1015,50 @@ class TestNeighborsTypeFilter:
         assert knows == [1]
         work = [n.id() for n in typed_snapshot.neighbors(0, Direction.Outgoing, ["WORKS_FOR"])]
         assert work == [2]
+
+
+class TestRcpgSerialization:
+    """Test GraphSnapshot.write_rcpg / read_rcpg round-trip."""
+
+    def _sample(self):
+        manager = RustyChickpeas()
+        builder = manager.create_builder()
+        builder.add_node(["Person"], node_id=0)
+        builder.add_node(["Person"], node_id=1)
+        builder.add_node(["Company"], node_id=2)
+        builder.add_relationship(0, 1, "KNOWS")
+        builder.add_relationship(0, 2, "WORKS_FOR")
+        builder.set_prop(0, "name", "Alice")
+        builder.set_version("test")
+        builder.finalize_into(manager)
+        return manager.graph_snapshot("test")
+
+    def test_round_trip(self, tmp_path):
+        snap = self._sample()
+        path = str(tmp_path / "g.rcpg")
+        snap.write_rcpg(path)
+        loaded = GraphSnapshot.read_rcpg(path)
+        assert loaded.node_count() == snap.node_count() == 3
+        assert loaded.relationship_count() == snap.relationship_count() == 2
+        assert loaded.get_property(0, "name") == "Alice"
+        nbrs = sorted(n.id() for n in loaded.neighbors(0, Direction.Outgoing))
+        assert nbrs == [1, 2]
+
+    def test_topology_only_preserves_topology(self, tmp_path):
+        snap = self._sample()
+        path = str(tmp_path / "g_topo.rcpg")
+        snap.write_rcpg(path, topology_only=True)
+        loaded = GraphSnapshot.read_rcpg(path)
+        assert loaded.node_count() == 3
+        assert loaded.relationship_count() == 2
+        nbrs = sorted(n.id() for n in loaded.neighbors(0, Direction.Outgoing))
+        assert nbrs == [1, 2]
+        # Property columns were omitted: the data must not be recoverable.
+        try:
+            assert loaded.get_property(0, "name") is None
+        except ValueError:
+            pass  # the property key itself was dropped -- also acceptable
+
+    def test_read_missing_file_raises(self, tmp_path):
+        with pytest.raises(Exception):
+            GraphSnapshot.read_rcpg(str(tmp_path / "nope.rcpg"))
