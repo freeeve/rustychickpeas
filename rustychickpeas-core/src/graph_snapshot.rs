@@ -103,6 +103,46 @@ impl Column {
         self.get_dense(node_id).or_else(|| self.get_sparse(node_id))
     }
 
+    /// The dense `i64` values as a contiguous slice indexed by node id, or `None`
+    /// if this column is not a dense `i64` column. Lets a bulk scan index raw
+    /// values instead of constructing and matching a [`ValueId`] per row; pair
+    /// with [`NodeSet::as_range`](crate::bitmap::NodeSet::as_range) when a label's
+    /// ids form a contiguous block.
+    pub fn as_i64_slice(&self) -> Option<&[i64]> {
+        match self {
+            Column::DenseI64(col) => Some(col.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// The dense `f64` values as a contiguous slice, or `None`. (Provided for
+    /// symmetry; the BI queries read f64 weights from maps, not columns.)
+    pub fn as_f64_slice(&self) -> Option<&[f64]> {
+        match self {
+            Column::DenseF64(col) => Some(col.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// The dense boolean values as a bit slice indexed by node id, or `None`.
+    pub fn as_bool_slice(&self) -> Option<&bitvec::slice::BitSlice> {
+        match self {
+            Column::DenseBool(col) => Some(col.as_bitslice()),
+            _ => None,
+        }
+    }
+
+    /// The dense string-property values as a slice of interned string ids, or
+    /// `None`. Resolve a comparison value to its id once (and compare `u32`s)
+    /// instead of resolving a string per row; recover text via
+    /// [`GraphSnapshot::resolve_string`].
+    pub fn as_str_ids(&self) -> Option<&[u32]> {
+        match self {
+            Column::DenseStr(col) => Some(col.as_slice()),
+            _ => None,
+        }
+    }
+
     /// Iterate over all (NodeId, ValueId) entries in this column
     pub fn iter_entries(&self) -> Box<dyn Iterator<Item = (NodeId, ValueId)> + '_> {
         match self {
@@ -2059,6 +2099,34 @@ mod tests {
         // Trivial and unreachable cases.
         assert_eq!(g.weighted_shortest_path(0, 0, Direction::Both, "K", w), Some(0.0));
         assert_eq!(g.weighted_shortest_path(0, 5, Direction::Both, "K", w), None);
+    }
+
+    #[test]
+    fn test_column_typed_slices() {
+        let i = Column::DenseI64(vec![10, 20, 30]);
+        assert_eq!(i.as_i64_slice(), Some(&[10i64, 20, 30][..]));
+        assert_eq!(i.as_f64_slice(), None);
+        assert_eq!(i.as_str_ids(), None);
+        assert_eq!(i.as_bool_slice(), None);
+
+        let s = Column::DenseStr(vec![1, 2, 3]);
+        assert_eq!(s.as_str_ids(), Some(&[1u32, 2, 3][..]));
+        assert_eq!(s.as_i64_slice(), None);
+
+        let f = Column::DenseF64(vec![1.5, 2.5]);
+        assert_eq!(f.as_f64_slice(), Some(&[1.5f64, 2.5][..]));
+
+        let mut bv = bitvec::vec::BitVec::new();
+        bv.push(true);
+        bv.push(false);
+        bv.push(true);
+        let b = Column::DenseBool(bv);
+        let bs = b.as_bool_slice().unwrap();
+        assert!(bs[0] && !bs[1] && bs[2]);
+        assert_eq!(b.as_i64_slice(), None);
+
+        // Sparse columns expose no dense slice.
+        assert_eq!(Column::SparseI64(vec![(0, 5), (2, 7)]).as_i64_slice(), None);
     }
 
     #[test]
