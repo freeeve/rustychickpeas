@@ -137,6 +137,10 @@ cargo bench --bench graph_builder              # Specific suite
 
 ## Conventions
 
+- **Core public API changes need sign-off:** before adding a new public method to
+  `rustychickpeas-core` or changing an existing one's signature/return/semantics,
+  propose the design and get the maintainer's agreement first — don't alter the
+  core surface unilaterally. (Query-side/non-core crates don't need this gate.)
 - Rust 2021 edition, workspace-level version management
 - Semantic commit messages with module scope: `feat(core): ...`, `fix(python): ...`
 - Python API follows Pythonic naming (snake_case methods)
