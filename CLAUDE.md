@@ -45,9 +45,12 @@ rustychickpeas/
 │   ├── FORMAT.md                 # Frozen byte-layout spec
 │   └── src/                      # rcpg.rs, rrsr.rs, graph.rs (wasm-safe, deps: roaring+bitvec)
 ├── rustychickpeas-reader/        # Split-residency reader (native + wasm32)
-│   ├── src/                      # GraphReader (resident traversal), records (roaringrange dep), wasm bindings
-│   ├── examples/generate_demo.rs # Demo dataset generator
-│   └── demo/                     # Browser demo (index.html + main.js; data+pkg generated)
+│   ├── src/                      # GraphReader (resident traversal + ResidentSearch), records (roaringrange dep), wasm bindings
+│   ├── examples/generate_demo.rs # Demo dataset generator (social graph)
+│   └── demo/                     # Browser demo: search -> traverse -> ranged record (index.html + main.js; data+pkg generated)
+├── rustychickpeas-pipeline/      # Shared-ID build pipeline (build-side: core + format + roaringrange)
+│   ├── src/lib.rs                # build_shared_corpus: one ranked corpus -> aligned index.rrs + graph.rcpg + records.{idx,bin}
+│   └── examples/generate_shared_demo.rs # Synthetic citation corpus -> browser demo artifacts
 ├── rustychickpeas-python/        # PyO3 Python bindings
 │   ├── Cargo.toml
 │   ├── pyproject.toml            # Maturin build config, pytest config
