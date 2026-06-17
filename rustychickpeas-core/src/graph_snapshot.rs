@@ -530,11 +530,11 @@ impl PartialOrd for DijkstraState {
 /// hot loop can hold it and index lock-free.
 pub type ChainRoots = Arc<[NodeId]>;
 
-/// A resolved `i64` property column: the key -> column lookup is done once, then
-/// [`I64Col::get`] reads a position via the dense `Vec<i64>` fast path when the
-/// column is dense, else the general column lookup. Build with
-/// [`GraphSnapshot::i64_col`] (node columns, indexed by node id) or
-/// [`GraphSnapshot::i64_rel_col`] (relationship columns, indexed by CSR position).
+/// A resolved `i64` property column: [`I64Col::get`] reads a position via the
+/// dense `Vec<i64>` fast path when the column is dense, else the general column
+/// lookup. Obtained by narrowing a [`Col`] with [`Col::i64`] — itself built from
+/// [`GraphSnapshot::col`] (node columns, indexed by node id) or
+/// [`GraphSnapshot::rel_col`] (relationship columns, indexed by CSR position).
 #[derive(Clone, Copy)]
 pub struct I64Col<'a> {
     inner: I64ColInner<'a>,
@@ -548,7 +548,7 @@ enum I64ColInner<'a> {
 
 impl<'a> I64Col<'a> {
     /// The `i64` value at `pos` (a node id for node columns, a relationship CSR
-    /// position for edge columns), or `None` when absent.
+    /// position for rel columns), or `None` when absent.
     #[inline]
     pub fn get(&self, pos: NodeId) -> Option<i64> {
         match &self.inner {
@@ -572,8 +572,8 @@ impl<'a> I64Col<'a> {
     }
 }
 
-/// A resolved boolean property column (the boolean analogue of [`I64Col`]); build
-/// with [`GraphSnapshot::bool_col`].
+/// A resolved boolean property column (the boolean analogue of [`I64Col`]);
+/// obtained by narrowing a [`Col`] with [`Col::bool`].
 #[derive(Clone, Copy)]
 pub struct BoolCol<'a> {
     inner: BoolColInner<'a>,
@@ -605,6 +605,42 @@ impl<'a> BoolCol<'a> {
         match self.inner {
             BoolColInner::Dense(slice) => Some(slice),
             BoolColInner::Other(_) => None,
+        }
+    }
+}
+
+/// A resolved property column: the key -> column lookup is done once, then
+/// narrowed to a typed reader with [`Col::i64`] / [`Col::bool`] — mirroring the
+/// polars `column(name).i64()` shape. Build with [`GraphSnapshot::col`] (node
+/// columns, indexed by node id) or [`GraphSnapshot::rel_col`] (relationship
+/// columns, indexed by CSR position).
+#[derive(Clone, Copy)]
+pub struct Col<'a> {
+    col: &'a Column,
+}
+
+impl<'a> Col<'a> {
+    /// Narrow to a typed `i64` reader. Reads take the dense slice fast path when
+    /// the column is dense (see [`I64Col`]); a non-`i64` column reads back as
+    /// absent, like a mistyped [`prop`](GraphSnapshot::prop).
+    #[inline]
+    pub fn i64(self) -> I64Col<'a> {
+        I64Col {
+            inner: match self.col.as_i64_slice() {
+                Some(slice) => I64ColInner::Dense(slice),
+                None => I64ColInner::Other(self.col),
+            },
+        }
+    }
+
+    /// Narrow to a typed boolean reader (the boolean analogue of [`Col::i64`]).
+    #[inline]
+    pub fn bool(self) -> BoolCol<'a> {
+        BoolCol {
+            inner: match self.col.as_bool_slice() {
+                Some(slice) => BoolColInner::Dense(slice),
+                None => BoolColInner::Other(self.col),
+            },
         }
     }
 }
@@ -2541,43 +2577,24 @@ impl GraphSnapshot {
         self.rel_columns.get(&key)?.get(rel_csr_pos)
     }
 
-    /// A typed reader for the `i64` node property `key`, resolved once. Reads take
-    /// the dense slice fast path when the column is dense (see [`I64Col`]); `None`
-    /// if no such column exists. Hoist this out of a hot loop instead of calling
-    /// [`prop`](Self::prop) (which re-resolves the key and matches [`ValueId`]) per
-    /// node.
-    pub fn i64_col(&self, key: &str) -> Option<I64Col<'_>> {
-        let col = self.columns.get(&self.property_key_from_str(key)?)?;
-        Some(I64Col {
-            inner: match col.as_i64_slice() {
-                Some(slice) => I64ColInner::Dense(slice),
-                None => I64ColInner::Other(col),
-            },
+    /// A resolved reader for the node property `key`, or `None` if no such column
+    /// exists. Narrow it to a typed reader with [`Col::i64`] / [`Col::bool`] and
+    /// hoist out of a hot loop instead of calling [`prop`](Self::prop) (which
+    /// re-resolves the key and matches [`ValueId`]) per node — mirroring the polars
+    /// `column(name).i64()` shape.
+    pub fn col(&self, key: &str) -> Option<Col<'_>> {
+        Some(Col {
+            col: self.columns.get(&self.property_key_from_str(key)?)?,
         })
     }
 
-    /// A typed reader for the `i64` relationship property `key`, indexed by CSR
-    /// position (the relationship analogue of [`i64_col`](Self::i64_col); see
-    /// [`relationship_property`](Self::relationship_property) for the position).
-    pub fn i64_rel_col(&self, key: &str) -> Option<I64Col<'_>> {
-        let col = self.rel_columns.get(&self.property_key_from_str(key)?)?;
-        Some(I64Col {
-            inner: match col.as_i64_slice() {
-                Some(slice) => I64ColInner::Dense(slice),
-                None => I64ColInner::Other(col),
-            },
-        })
-    }
-
-    /// A typed reader for the boolean node property `key`, resolved once (the
-    /// boolean analogue of [`i64_col`](Self::i64_col); see [`BoolCol`]).
-    pub fn bool_col(&self, key: &str) -> Option<BoolCol<'_>> {
-        let col = self.columns.get(&self.property_key_from_str(key)?)?;
-        Some(BoolCol {
-            inner: match col.as_bool_slice() {
-                Some(slice) => BoolColInner::Dense(slice),
-                None => BoolColInner::Other(col),
-            },
+    /// A resolved reader for the relationship property `key`, indexed by CSR
+    /// position — the relationship analogue of [`col`](Self::col). Narrow with
+    /// [`Col::i64`] / [`Col::bool`]; the position is a [`RelationshipRef::pos`]
+    /// (see [`rel_prop`](Self::rel_prop)).
+    pub fn rel_col(&self, key: &str) -> Option<Col<'_>> {
+        Some(Col {
+            col: self.rel_columns.get(&self.property_key_from_str(key)?)?,
         })
     }
 
@@ -3594,10 +3611,10 @@ mod tests {
         assert_eq!(g.follow(0, &[]), Some(0)); // no steps -> start
         assert_eq!(g.follow(1, &[(Direction::Outgoing, "isLocatedIn")]), None); // broken chain
 
-        // Typed column readers: resolve the key once, then read by node.
-        assert_eq!(g.i64_col("plid").unwrap().get(0), Some(100));
-        assert!(g.i64_col("nonexistent").is_none());
-        assert_eq!(g.bool_col("active").unwrap().get(0), Some(true));
+        // Typed column readers: resolve the key once, narrow to a type, read by node.
+        assert_eq!(g.col("plid").unwrap().i64().get(0), Some(100));
+        assert!(g.col("nonexistent").is_none());
+        assert_eq!(g.col("active").unwrap().bool().get(0), Some(true));
 
         // str_prop: present value, empty-as-absent, and missing key all distinguished.
         assert_eq!(g.str_prop(0, "name"), Some("Alice"));
