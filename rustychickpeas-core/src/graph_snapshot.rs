@@ -2139,16 +2139,31 @@ impl GraphSnapshot {
     /// the smallest matching node id (or `None`). Use this where the key is unique only
     /// *within* a label (a `name` shared across labels, a per-type LDBC id), so the
     /// label-free [`node_by_property`] could match a node of a different label. Reuses
-    /// the cached `(label, key)` property index from
-    /// [`nodes_with_property`](Self::nodes_with_property).
+    /// the cached `(label, key)` index that [`nodes_with_property`](Self::nodes_with_property)
+    /// builds, but takes the first matching node directly — without cloning the value's
+    /// `NodeSet` (the single-node analog of `nodes_with_property`).
     pub fn node_by_label_property<V: IntoValueId>(
         &self,
         label: &str,
         key: &str,
         value: V,
     ) -> Option<NodeId> {
-        self.nodes_with_property(label, key, value)
-            .and_then(|ns| ns.iter().next())
+        let label_id = self.label_from_str(label)?;
+        let key_id = self.property_key_from_str(key)?;
+        let value_id = value.into_value_id(self)?;
+        let index_key = (label_id, key_id);
+        {
+            let index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(key_index) = index.get(&index_key) {
+                return key_index.get(&value_id).and_then(|ns| ns.iter().next());
+            }
+        }
+        let label_nodes = self.nodes_with_label_id(label_id)?;
+        let column = self.columns.get(&key_id)?;
+        let key_index = Self::build_property_index_for_key_and_label(column, Some(label_nodes));
+        let mut index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = index.entry(index_key).or_insert(key_index);
+        entry.get(&value_id).and_then(|ns| ns.iter().next())
     }
 
     /// Histogram of the neighbour nodes reached from `sources` via `rel_type` in
