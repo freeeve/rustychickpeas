@@ -10,22 +10,14 @@ import init, { WasmGraph, WasmSearch, WasmRecordIndex } from "../pkg/rustychickp
 const $ = (id) => document.getElementById(id);
 const log = (msg) => { $("log").textContent = msg; };
 
+let graph, search, recordIndex;
+
 async function fetchBytes(url, range) {
   const headers = range ? { Range: `bytes=${range[0]}-${range[1] - 1}` } : {};
   const resp = await fetch(url, { headers });
   if (!resp.ok && resp.status !== 206) throw new Error(`${url}: ${resp.status}`);
   return new Uint8Array(await resp.arrayBuffer());
 }
-
-await init();
-
-const graph = new WasmGraph(await fetchBytes("graph.rcpg"));
-const search = new WasmSearch(await fetchBytes("index.rrs"));
-const recordIndex = new WasmRecordIndex(await fetchBytes("records.idx"));
-$("stats").textContent =
-  `resident: ${graph.nodeCount()} nodes, ${graph.relationshipCount()} rels, ` +
-  `labels [${graph.labels().join(", ")}], types [${graph.relationshipTypes().join(", ")}]; ` +
-  `${recordIndex.len()} records remote`;
 
 // Fetch many records in few range requests: plan coalesces nearby records into
 // shared reads, then each record is sliced out of the chunk that covers it.
@@ -89,16 +81,40 @@ async function show() {
   $("record").textContent = record ? JSON.stringify(record, null, 2) : "(no record)";
 }
 
-$("search").onclick = runSearch;
-$("q").onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
-$("show").onclick = show;
-$("bfs").onclick = () => {
-  const id = Number($("node").value);
-  const t0 = performance.now();
-  const reached = graph.bfs(id, 2, 0);
-  const ms = (performance.now() - t0).toFixed(2);
-  renderNodes(`bfs(node ${id}, depth 2, outgoing) reached ${reached.length} nodes in ${ms} ms (zero network)`, reached);
-};
+// Boot with the failing step surfaced on the page (the browser console hides it
+// otherwise — a blank "loading…" tells you nothing).
+async function boot() {
+  try {
+    $("stats").textContent = "initializing wasm…";
+    await init();
+    $("stats").textContent = "loading graph.rcpg…";
+    graph = new WasmGraph(await fetchBytes("graph.rcpg"));
+    $("stats").textContent = "loading index.rrs…";
+    search = new WasmSearch(await fetchBytes("index.rrs"));
+    $("stats").textContent = "loading records.idx…";
+    recordIndex = new WasmRecordIndex(await fetchBytes("records.idx"));
+    $("stats").textContent =
+      `resident: ${graph.nodeCount()} nodes, ${graph.relationshipCount()} rels, ` +
+      `labels [${graph.labels().join(", ")}], types [${graph.relationshipTypes().join(", ")}]; ` +
+      `${recordIndex.len()} records remote`;
 
-await runSearch();
-await show();
+    $("search").onclick = runSearch;
+    $("q").onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
+    $("show").onclick = show;
+    $("bfs").onclick = () => {
+      const id = Number($("node").value);
+      const t0 = performance.now();
+      const reached = graph.bfs(id, 2, 0);
+      const ms = (performance.now() - t0).toFixed(2);
+      renderNodes(`bfs(node ${id}, depth 2, outgoing) reached ${reached.length} nodes in ${ms} ms (zero network)`, reached);
+    };
+
+    await runSearch();
+    await show();
+  } catch (e) {
+    $("stats").textContent = "ERROR: " + (e && (e.stack || e.message) ? e.stack || e.message : e);
+    console.error(e);
+  }
+}
+
+boot();
