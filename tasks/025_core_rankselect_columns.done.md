@@ -59,4 +59,22 @@ measurably faster. Sign-off received on the `RankI64` Column shape.
   Q6 130→94, Q4 249→212, BI4 66→34 ms) — node columns now O(1) instead of
   binary search.
 
-Follow-up (separate task): Roaring-backed presence for very-sparse (<1.5%) columns.
+### Follow-up: Roaring-backed presence for very-sparse columns — DECLINED
+
+Measured before building (`examples/roaring_presence_eval.rs`, N=2.9M, full i64
+column bytes + rank latency over 1M lookups). In the <1.56% range these columns
+target — where the column is **SparseI64 (binary search)** today — Roaring
+presence is **never a speedup**: its `rank` is ~46 ns flat (container scan),
+losing to sparse's 9–19 ns binary search *and* to bitvec rank/select's ~9 ns.
+
+| fill | roaring B | sparse B | roaring ns | sparse ns |
+|------|-----------|----------|------------|-----------|
+| 0.1% | 29 KB     | 46 KB    | 46.1       | **8.6**   |
+| 1.0% | 290 KB    | 464 KB   | 47.9       | **16.3**  |
+| 1.5% | 435 KB    | 696 KB   | 49.3       | **19.3**  |
+
+Its only edge is ~1.6× less memory than sparse — a modest absolute saving
+(~174 KB/column at 1% fill) for a ~3× slower read. The current frontier is
+already optimal: **SparseI64 below ~1.56% fill** (compact + fast), **bitvec
+rank/select above** (O(1) rank). Roaring presence sits inside that frontier
+(dominated on speed). Declined; the eval example stays as the evidence.
