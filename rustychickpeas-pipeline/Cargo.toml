@@ -1,0 +1,19 @@
+[package]
+name = "rustychickpeas-pipeline"
+description = "Shared-ID build pipeline: emit a roaringrange search index, an RCPG graph, and an RRSR record store over one rank-ordered u32 ID space from a single corpus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rustychickpeas-core = { path = "../rustychickpeas-core" }
+rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.8.0" }
+roaring = { workspace = true }
+# Search-index builder (trigram .rrs) over the shared doc-ID space. Pinned to a
+# rev for reproducibility; bump in lockstep with the reader crate.
+roaringrange = { git = "https://github.com/freeeve/roaringrange", rev = "0c5731faaa8c2e8743dafc31825b9c48ef4d863a", default-features = false }
+
+[dev-dependencies]
+# block_on for driving roaringrange's async search in the alignment test.
+futures = { version = "0.3", default-features = false, features = ["executor"] }

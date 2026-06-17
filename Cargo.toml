@@ -2,6 +2,7 @@
 members = [
     "rustychickpeas-core",
     "rustychickpeas-format",
+    "rustychickpeas-pipeline",
     "rustychickpeas-python",
     "rustychickpeas-reader",
 ]

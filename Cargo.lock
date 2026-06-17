@@ -2631,6 +2631,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustychickpeas-pipeline"
+version = "0.8.0"
+dependencies = [
+ "futures",
+ "roaring",
+ "roaringrange",
+ "rustychickpeas-core",
+ "rustychickpeas-format",
+]
+
+[[package]]
 name = "rustychickpeas-python"
 version = "0.8.0"
 dependencies = [
