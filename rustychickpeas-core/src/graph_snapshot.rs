@@ -1975,13 +1975,58 @@ impl GraphSnapshot {
         direction: Direction,
         rel_type: &str,
     ) -> HashMap<NodeId, usize> {
-        let mut counts: HashMap<NodeId, usize> = HashMap::new();
-        for s in sources {
-            for t in self.neighbors_by_type(s, direction, rel_type) {
-                *counts.entry(t).or_default() += 1;
-            }
+        // Count into a thread-local dense buffer keyed by target id instead of a
+        // growing HashMap: a direct index avoids per-target hashing and the map's
+        // doubling reallocs. A per-call generation stamp means no O(n) clear, and
+        // thread-local storage means parallel callers never contend. The hot loop
+        // also hoists the rel-type resolution out (resolve once, not per source).
+        #[derive(Default)]
+        struct CountScratch {
+            val: Vec<u32>,
+            gen: Vec<u32>,
+            cur: u32,
+            touched: Vec<NodeId>,
         }
-        counts
+        thread_local! {
+            static COUNT_SCRATCH: std::cell::RefCell<CountScratch> =
+                std::cell::RefCell::new(CountScratch::default());
+        }
+
+        let matcher = rel_type.into_match(self);
+        let n = self.node_count() as usize;
+        COUNT_SCRATCH.with(|cell| {
+            let mut s = cell.borrow_mut();
+            if s.val.len() < n {
+                s.val.resize(n, 0);
+                s.gen.resize(n, 0);
+            }
+            s.cur = s.cur.wrapping_add(1);
+            if s.cur == 0 {
+                s.gen.iter_mut().for_each(|g| *g = 0);
+                s.cur = 1;
+            }
+            let cur = s.cur;
+            s.touched.clear();
+
+            for src in sources {
+                for t in self.neighbors_with(src, direction, matcher.clone()) {
+                    let ti = t as usize;
+                    if s.gen[ti] != cur {
+                        s.gen[ti] = cur;
+                        s.val[ti] = 0;
+                        s.touched.push(t);
+                    }
+                    s.val[ti] += 1;
+                }
+            }
+
+            let mut counts: HashMap<NodeId, usize> = HashMap::with_capacity(s.touched.len());
+            for i in 0..s.touched.len() {
+                let t = s.touched[i];
+                counts.insert(t, s.val[t as usize] as usize);
+            }
+            counts
+        })
     }
 
     /// Full-text search: nodes of `label` whose `key` string property contains
@@ -2555,6 +2600,40 @@ mod tests {
             .map(|n| n as u64)
             .sum();
         assert_eq!(sum, seq);
+    }
+
+    #[test]
+    fn test_neighbor_counts() {
+        let mut b = GraphBuilder::new(Some(20), Some(20));
+        for i in 0..6 {
+            b.add_node(Some(i), &["P"]).unwrap();
+        }
+        // sources {0,1,2} fan into shared targets with varying multiplicity.
+        b.add_relationship(0, 3, "K").unwrap();
+        b.add_relationship(1, 3, "K").unwrap();
+        b.add_relationship(2, 3, "K").unwrap();
+        b.add_relationship(0, 4, "K").unwrap();
+        b.add_relationship(1, 4, "K").unwrap();
+        b.add_relationship(2, 5, "K").unwrap();
+        let g = b.finalize(None);
+
+        let counts = g.neighbor_counts([0u32, 1, 2], Direction::Outgoing, "K");
+        assert_eq!(counts.get(&3), Some(&3));
+        assert_eq!(counts.get(&4), Some(&2));
+        assert_eq!(counts.get(&5), Some(&1));
+        assert_eq!(counts.len(), 3);
+
+        // A second call must reuse the scratch independently (generation stamp),
+        // not carry over the first call's counts.
+        let again = g.neighbor_counts([2u32], Direction::Outgoing, "K");
+        assert_eq!(again.get(&3), Some(&1));
+        assert_eq!(again.get(&5), Some(&1));
+        assert_eq!(again.len(), 2);
+
+        // Unknown rel type matches nothing.
+        assert!(g
+            .neighbor_counts([0u32, 1, 2], Direction::Outgoing, "NOPE")
+            .is_empty());
     }
 
     #[test]
