@@ -30,4 +30,13 @@ kill the per-call churn while leaving the hashing CPU in place.
   AFTER ~17 ms) sat in the same load-dominated band → no regression. By
   construction the change only removes allocation; re-measure on a quiet machine.
 
-**Status: done** (wall-clock confirmation pending a quiet window).
+## Open
+
+- [ ] **Re-run the IC14 wall-clock A/B on a quiet machine.** The deterministic
+  win (1.08 MB → 0 alloc, value-identical) is verified; only the wall-clock
+  number is missing because a concurrent benchmark run pinned the machine at
+  load 70–165 during measurement. Command: revert via `/tmp/wsp.patch` (or
+  `git show 45c883b`) for the BEFORE, `--only ic14 --repeat 120`, take min.
+
+**Status: in progress** — implementation committed (`45c883b`) and value-verified;
+wall-clock retest pending a quiet machine.
