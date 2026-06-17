@@ -2103,6 +2103,23 @@ impl GraphSnapshot {
         entry.get(&value_id).and_then(|ns| ns.iter().next())
     }
 
+    /// Find a single node with `label` whose property `key` equals `value` — the
+    /// label-scoped sibling of [`node_by_property`](Self::node_by_property), returning
+    /// the smallest matching node id (or `None`). Use this where the key is unique only
+    /// *within* a label (a `name` shared across labels, a per-type LDBC id), so the
+    /// label-free [`node_by_property`] could match a node of a different label. Reuses
+    /// the cached `(label, key)` property index from
+    /// [`nodes_with_property`](Self::nodes_with_property).
+    pub fn node_by_label_property<V: IntoValueId>(
+        &self,
+        label: &str,
+        key: &str,
+        value: V,
+    ) -> Option<NodeId> {
+        self.nodes_with_property(label, key, value)
+            .and_then(|ns| ns.iter().next())
+    }
+
     /// Histogram of the neighbour nodes reached from `sources` via `rel_type` in
     /// `direction` (how many of the sources point to each neighbour) — the
     /// "count edges into each neighbour" aggregation behind many group-by-count
@@ -3464,6 +3481,24 @@ mod tests {
         assert_eq!(g.str_prop(0, "name"), Some("Alice"));
         assert_eq!(g.str_prop(1, "name"), None); // empty dense slot reads back as absent
         assert_eq!(g.str_prop(0, "missing"), None);
+    }
+
+    #[test]
+    fn test_node_by_label_property_is_label_scoped() {
+        // The same `name` on two different labels: a Tag and a Country both "X".
+        let mut b = GraphBuilder::new(Some(2), Some(0));
+        b.add_node(Some(0), &["Tag"]).unwrap();
+        b.add_node(Some(1), &["Country"]).unwrap();
+        b.set_prop_str(0, "name", "X").unwrap();
+        b.set_prop_str(1, "name", "X").unwrap();
+        let g = b.finalize(None);
+
+        // Label-scoped: resolves to the node of the requested label, not the global first.
+        assert_eq!(g.node_by_label_property("Country", "name", "X"), Some(1));
+        assert_eq!(g.node_by_label_property("Tag", "name", "X"), Some(0));
+        // Unknown label or value -> None.
+        assert_eq!(g.node_by_label_property("Person", "name", "X"), None);
+        assert_eq!(g.node_by_label_property("Country", "name", "Y"), None);
     }
 
     #[test]
