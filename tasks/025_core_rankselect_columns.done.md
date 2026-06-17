@@ -47,5 +47,16 @@ measurably faster. Sign-off received on the `RankI64` Column shape.
   - IC7 (`ld`): ~1.52 → ~1.27 ms. IC14: unchanged (weight read via map, not column).
   - BI: no regression (noise-level; edge-prop readers Q11 4.0→3.3, Q19 6.4→5.8 a bit faster).
 
-Done for i64 rel columns. Follow-ups (separate tasks): f64/bool/str rel columns,
-node columns, and a Roaring-backed presence for very-sparse (<1.5%) columns.
+### Extension (f64/bool/str + node columns)
+
+- Added `RankF64`/`RankBool`/`RankStr` variants; routed both edge and node column
+  construction through shared `column_from_pairs_{i64,f64,bool,str}` helpers that
+  pick dense / rank-select / sparse by fill and span (per-type memory crossover:
+  i64/f64 ~1/64, str ~1/32, bool ~1/63). 299 core tests pass (+f64/bool/str parity).
+- Re-verified vs the **original** pre-change baselines: SF1 BI 23/23 and IC 21/21
+  **byte-identical**. IC5 holds at ~273 ms (i64 win preserved through the refactor).
+- BI: no regression; several node-prop-heavy queries faster (Q12 55.6→37.3,
+  Q6 130→94, Q4 249→212, BI4 66→34 ms) — node columns now O(1) instead of
+  binary search.
+
+Follow-up (separate task): Roaring-backed presence for very-sparse (<1.5%) columns.
