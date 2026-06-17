@@ -1926,19 +1926,21 @@ impl GraphSnapshot {
             .is_some_and(|ns| ns.contains(node))
     }
 
-    /// Neighbours of `node` via `rel_type` in `direction` that also carry
-    /// `label` — the typed-traversal-then-label-filter pattern, as a bitmap
-    /// membership test against the label's node set.
-    pub fn neighbors_with_label<'a>(
+    /// Neighbours of `node` via `rel_type` in `direction` that are members of
+    /// `set` — the typed traversal filtered by a node set, as a bitmap membership
+    /// test. `set` can be a label's nodes ([`nodes_with_label`](Self::nodes_with_label)),
+    /// an [`fts`](Self::fts) / geo result, or any precomputed [`NodeSet`]; this
+    /// generalizes "typed neighbours carrying a label" and the per-candidate set
+    /// intersections in co-occurrence queries. Duplicate edges are preserved, so
+    /// it still composes with counting.
+    pub fn neighbors_in<'a>(
         &'a self,
         node: NodeId,
         direction: Direction,
         rel_type: &str,
-        label: &str,
+        set: &'a NodeSet,
     ) -> impl Iterator<Item = NodeId> + 'a {
-        let label_set = self.label_from_str(label).and_then(|l| self.nodes_with_label_id(l));
-        self.neighbors_by_type(node, direction, rel_type)
-            .filter(move |&n| label_set.is_some_and(|ns| ns.contains(n)))
+        self.neighbors_by_type(node, direction, rel_type).filter(move |&n| set.contains(n))
     }
 
     /// Find a single node by a property value across ALL labels (unlike
@@ -1963,11 +1965,11 @@ impl GraphSnapshot {
         entry.get(&value_id).and_then(|ns| ns.iter().next())
     }
 
-    /// Histogram of the target nodes reached from `sources` via `rel_type` in
-    /// `direction` (how many of the sources point to each target) — the
+    /// Histogram of the neighbour nodes reached from `sources` via `rel_type` in
+    /// `direction` (how many of the sources point to each neighbour) — the
     /// "count edges into each neighbour" aggregation behind many group-by-count
     /// queries.
-    pub fn target_counts(
+    pub fn neighbor_counts(
         &self,
         sources: impl IntoIterator<Item = NodeId>,
         direction: Direction,
@@ -3768,17 +3770,10 @@ mod tests {
 
 /// How a relationship-type filter matches an edge's [`RelationshipType`].
 ///
-/// Produced from a [`RelTypeFilter`] argument; the `All` and `One` cases are
-/// allocation-free.
-/// Number of relationship types a [`RelMatch`] holds inline before spilling to a
-/// heap `Vec`. Most traversal filters name a single type, so the common case is
-/// allocation-free.
-const REL_MATCH_INLINE: usize = 4;
-
-/// A resolved relationship-type filter. Opaque: filters of up to
-/// [`REL_MATCH_INLINE`] types are stored inline (no allocation); larger filters
-/// spill to a `Vec`. Build one from already-resolved types with `collect()`, or
-/// from [`RelMatch::all`] / [`RelMatch::one`].
+/// Opaque, produced from a [`RelTypeFilter`] argument. The common single-type
+/// filter is stored as one value (no allocation, single-compare matching); two or
+/// more types spill to a `Vec`. Build from already-resolved types with
+/// `collect()`, or via [`RelMatch::all`] / [`RelMatch::one`].
 #[derive(Clone, Debug)]
 pub struct RelMatch(RelMatchRepr);
 
@@ -3786,9 +3781,9 @@ pub struct RelMatch(RelMatchRepr);
 enum RelMatchRepr {
     /// Match every relationship type (an empty filter).
     All,
-    /// Up to `REL_MATCH_INLINE` resolved types, stored without allocating.
-    Inline([Option<RelationshipType>; REL_MATCH_INLINE]),
-    /// `REL_MATCH_INLINE + 1` or more resolved types.
+    /// A single resolved type — the common case, allocation-free.
+    One(RelationshipType),
+    /// Two or more resolved types (or zero = match nothing).
     Heap(Vec<RelationshipType>),
 }
 
@@ -3802,42 +3797,37 @@ impl RelMatch {
     /// A filter matching a single resolved type (no allocation).
     #[inline]
     pub fn one(rt: RelationshipType) -> RelMatch {
-        let mut inline = [None; REL_MATCH_INLINE];
-        inline[0] = Some(rt);
-        RelMatch(RelMatchRepr::Inline(inline))
+        RelMatch(RelMatchRepr::One(rt))
     }
 
     #[inline]
     fn matches(&self, rt: RelationshipType) -> bool {
         match &self.0 {
             RelMatchRepr::All => true,
-            RelMatchRepr::Inline(types) => types.iter().flatten().any(|&t| t == rt),
+            RelMatchRepr::One(t) => *t == rt,
             RelMatchRepr::Heap(v) => v.contains(&rt),
         }
     }
 }
 
-/// Build a filter from already-resolved types: up to [`REL_MATCH_INLINE`] are
-/// kept inline (no allocation), more spill to a `Vec`. An empty iterator matches
-/// nothing — use [`RelMatch::all`] for "match every type".
+/// Build a filter from already-resolved types: a single type stays inline (no
+/// allocation), two or more spill to a `Vec`. An empty iterator matches nothing —
+/// use [`RelMatch::all`] for "match every type".
 impl FromIterator<RelationshipType> for RelMatch {
     fn from_iter<I: IntoIterator<Item = RelationshipType>>(iter: I) -> Self {
-        let mut inline: [Option<RelationshipType>; REL_MATCH_INLINE] = [None; REL_MATCH_INLINE];
         let mut it = iter.into_iter();
-        for slot in inline.iter_mut() {
-            match it.next() {
-                Some(rt) => *slot = Some(rt),
-                None => return RelMatch(RelMatchRepr::Inline(inline)),
-            }
-        }
         match it.next() {
-            None => RelMatch(RelMatchRepr::Inline(inline)),
-            Some(rt) => {
-                let mut v: Vec<RelationshipType> = inline.iter().flatten().copied().collect();
-                v.push(rt);
-                v.extend(it);
-                RelMatch(RelMatchRepr::Heap(v))
-            }
+            None => RelMatch(RelMatchRepr::Heap(Vec::new())),
+            Some(first) => match it.next() {
+                None => RelMatch(RelMatchRepr::One(first)),
+                Some(second) => {
+                    let mut v = Vec::with_capacity(2 + it.size_hint().0);
+                    v.push(first);
+                    v.push(second);
+                    v.extend(it);
+                    RelMatch(RelMatchRepr::Heap(v))
+                }
+            },
         }
     }
 }
