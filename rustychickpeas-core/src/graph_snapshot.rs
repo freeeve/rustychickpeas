@@ -1743,29 +1743,72 @@ impl GraphSnapshot {
         rel_types: impl RelTypeFilter,
         max_depth: Option<u32>,
     ) -> HashMap<NodeId, u32> {
+        // The visited/distance set is the BFS hot path. A `HashMap` hashes and
+        // probes on every neighbor; a dense `Vec<u32>` indexed by node id is a
+        // direct O(1) access instead. To avoid an O(n) clear (or a per-call
+        // multi-MB memset) we stamp each run with a generation counter: a node
+        // counts as visited this run iff `gen[node] == cur`. The scratch is
+        // thread-local so parallel callers never contend on it. The returned map
+        // is unchanged (built pre-sized from only the visited nodes).
+        #[derive(Default)]
+        struct BfsScratch {
+            gen: Vec<u32>,
+            dist: Vec<u32>,
+            cur: u32,
+        }
+        thread_local! {
+            static BFS_SCRATCH: std::cell::RefCell<BfsScratch> =
+                std::cell::RefCell::new(BfsScratch::default());
+        }
+
         let matcher = rel_types.into_match(self);
-        let mut dist: HashMap<NodeId, u32> = HashMap::new();
-        dist.insert(start, 0);
-        let mut frontier: Vec<NodeId> = vec![start];
-        let mut depth = 0u32;
-        while !frontier.is_empty() {
-            if max_depth.is_some_and(|max| depth >= max) {
-                break;
+        let n = self.node_count() as usize;
+        BFS_SCRATCH.with(|cell| {
+            let mut s = cell.borrow_mut();
+            if s.gen.len() < n {
+                s.gen.resize(n, 0);
+                s.dist.resize(n, 0);
             }
-            let next_depth = depth + 1;
-            let mut next: Vec<NodeId> = Vec::new();
-            for &node in &frontier {
-                for neighbor in self.neighbors_with(node, direction, matcher.clone()) {
-                    if !dist.contains_key(&neighbor) {
-                        dist.insert(neighbor, next_depth);
-                        next.push(neighbor);
+            // Bump the run stamp; reset once on the (4-billion-call) wrap.
+            s.cur = s.cur.wrapping_add(1);
+            if s.cur == 0 {
+                s.gen.iter_mut().for_each(|g| *g = 0);
+                s.cur = 1;
+            }
+            let cur = s.cur;
+
+            s.gen[start as usize] = cur;
+            s.dist[start as usize] = 0;
+            let mut touched: Vec<NodeId> = vec![start];
+            let mut frontier: Vec<NodeId> = vec![start];
+            let mut depth = 0u32;
+            while !frontier.is_empty() {
+                if max_depth.is_some_and(|max| depth >= max) {
+                    break;
+                }
+                let next_depth = depth + 1;
+                let mut next: Vec<NodeId> = Vec::new();
+                for &node in &frontier {
+                    for neighbor in self.neighbors_with(node, direction, matcher.clone()) {
+                        let ni = neighbor as usize;
+                        if s.gen[ni] != cur {
+                            s.gen[ni] = cur;
+                            s.dist[ni] = next_depth;
+                            next.push(neighbor);
+                            touched.push(neighbor);
+                        }
                     }
                 }
+                frontier = next;
+                depth = next_depth;
             }
-            frontier = next;
-            depth = next_depth;
-        }
-        dist
+
+            let mut dist: HashMap<NodeId, u32> = HashMap::with_capacity(touched.len());
+            for node in touched {
+                dist.insert(node, s.dist[node as usize]);
+            }
+            dist
+        })
     }
 
     /// Get nodes with a specific label
