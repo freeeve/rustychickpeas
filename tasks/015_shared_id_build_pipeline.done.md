@@ -52,11 +52,16 @@ OpenAlex ingest is a thin follow-up adapter over the same `Document` model.
   `WasmRecordIndex`; demo JS method names verified against the bindings.
 - Artifacts regenerate with correct magic (RRSI / RCPG / RRSR).
 
-## Still open
-The rel-property-filter design point is **resolved** in
-[028](028_reader_rel_property_accessors.done.md) via option (a) — resident rel
-columns with `GraphReader::out_edges` + `rel_prop` (a rel-records store stays a
-future option for heavy edge payloads). Real OpenAlex ingest (S3/gzip/Work schema
-→ `Document`) is the remaining follow-up.
+## Follow-ups
+- rel-property filters — **resolved** in
+  [028](028_reader_rel_property_accessors.done.md) via option (a): resident rel
+  columns with `GraphReader::out_edges` + `rel_prop` (a rel-records store stays a
+  future option for heavy edge payloads).
+- OpenAlex ingest — **done (MVP)** in the sibling `openalex-graph-demo` repo (kept
+  separate so the ingest-only deps `serde_json`/`flate2` stay out of this
+  workspace). Maps OpenAlex works → the `Document` model, top-N-cited slicing via
+  a bounded heap, reads `.jsonl[.gz]`, in-slice edge filtering; tested on a
+  synthetic sample + an end-to-end run. Future ("full") work: S3 streaming,
+  topic/concept slicing, abstract reconstruction.
 
 **Status: done.**
