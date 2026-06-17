@@ -283,6 +283,24 @@ impl GraphSnapshot {
             .collect())
     }
 
+    /// Histogram of the neighbours reached from `sources` via `rel_type` edges in
+    /// `direction`: for each source node, count how many of its `rel_type`
+    /// neighbours land on each target. Returns a dict mapping target node id to
+    /// count. The whole aggregation runs in Rust on a single call, so it is far
+    /// faster than counting neighbours in a Python loop.
+    fn neighbor_counts(
+        &self,
+        sources: Vec<u32>,
+        direction: Direction,
+        rel_type: &str,
+    ) -> std::collections::HashMap<u32, usize> {
+        // Core returns a hashbrown map; collect into a std map so PyO3 hands Python a dict.
+        self.snapshot
+            .neighbor_counts(sources, direction.into(), rel_type)
+            .into_iter()
+            .collect()
+    }
+
     /// Get neighbors of a node as Node objects
     /// Returns a list of Node objects for neighbors in the specified direction
     #[pyo3(signature = (node_id, direction, rel_types=None))]
@@ -462,6 +480,14 @@ impl GraphSnapshot {
                 rustychickpeas_core::Column::SparseStr(pairs) => {
                     for (node_id, _) in pairs {
                         nodes.insert(*node_id);
+                    }
+                }
+                rustychickpeas_core::Column::RankI64 { present, .. }
+                | rustychickpeas_core::Column::RankF64 { present, .. }
+                | rustychickpeas_core::Column::RankBool { present, .. }
+                | rustychickpeas_core::Column::RankStr { present, .. } => {
+                    for pos in present.iter_ones() {
+                        nodes.insert(pos as u32);
                     }
                 }
             }
