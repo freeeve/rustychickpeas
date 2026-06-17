@@ -491,12 +491,17 @@ mod tests {
             in_types: vec![2],
             atoms: vec![
                 String::new(),        // 0
-                "weight".to_string(), // 1 = rel-prop key
+                "weight".to_string(), // 1 = int rel-prop key
                 "CITES".to_string(),  // 2 = rel type
+                "score".to_string(),  // 3 = float rel-prop key
             ],
             ..Default::default()
         };
-        g.rel_columns = vec![(1, ColumnData::DenseI64(vec![42]))];
+        // rel columns are sorted by key atom: weight(1) then score(3).
+        g.rel_columns = vec![
+            (1, ColumnData::DenseI64(vec![42])),
+            (3, ColumnData::DenseF64(vec![0.75])),
+        ];
         let mut bytes = Vec::new();
         rcpg::write(&g, &mut bytes).unwrap();
         let r = GraphReader::from_rcpg_bytes(&bytes).unwrap();
@@ -504,8 +509,9 @@ mod tests {
         // out_edges yields (neighbor, csr_pos); the only edge is at position 0.
         assert_eq!(r.out_edges(0), vec![(1, 0)]);
         assert_eq!(r.out_edges(1), Vec::new());
-        // rel_prop reads the edge's "weight" at that position.
+        // rel_prop reads the edge's properties at that position — int and float.
         assert_eq!(r.rel_prop(0, "weight"), Some(PropValue::Int(42)));
+        assert_eq!(r.rel_prop(0, "score"), Some(PropValue::Float(0.75)));
         assert_eq!(r.rel_prop(0, "missing"), None);
 
         // topology_only drops rel columns, but the topology (out_edges) stays.
