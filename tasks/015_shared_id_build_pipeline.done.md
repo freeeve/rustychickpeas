@@ -53,9 +53,10 @@ OpenAlex ingest is a thin follow-up adapter over the same `Document` model.
 - Artifacts regenerate with correct magic (RRSI / RCPG / RRSR).
 
 ## Still open
-The rel-property-filter design point is unresolved but not blocking: citation
-edges are property-less. When a graph needs edge-property filters in the browser,
-choose between opt-in rel columns and a rel-records store keyed by outgoing-CSR
-position. Real OpenAlex ingest (S3/gzip/Work schema → `Document`) is a follow-up.
+The rel-property-filter design point is **resolved** in
+[028](028_reader_rel_property_accessors.done.md) via option (a) — resident rel
+columns with `GraphReader::out_edges` + `rel_prop` (a rel-records store stays a
+future option for heavy edge payloads). Real OpenAlex ingest (S3/gzip/Work schema
+→ `Document`) is the remaining follow-up.
 
 **Status: done.**

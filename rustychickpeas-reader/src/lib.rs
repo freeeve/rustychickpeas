@@ -223,6 +223,42 @@ impl GraphReader {
         }
     }
 
+    /// Outgoing edges of `node_id` as `(neighbor, csr_pos)` pairs. `csr_pos` is
+    /// the outgoing-CSR position that keys relationship-property columns, so
+    /// pair it with [`GraphReader::rel_prop`] to filter traversal by an edge
+    /// property. Empty for IDs outside the CSR space.
+    pub fn out_edges(&self, node_id: u32) -> Vec<(u32, u32)> {
+        let i = node_id as usize;
+        let offsets = &self.graph.out_offsets;
+        if i + 1 >= offsets.len() {
+            return Vec::new();
+        }
+        let (start, end) = (offsets[i] as usize, offsets[i + 1] as usize);
+        if start > end || end > self.graph.out_nbrs.len() {
+            return Vec::new();
+        }
+        (start..end)
+            .map(|p| (self.graph.out_nbrs[p], p as u32))
+            .collect()
+    }
+
+    /// Value of relationship property `key` at outgoing-CSR position `csr_pos`
+    /// (from [`GraphReader::out_edges`]), or `None` when the key is unknown, the
+    /// column wasn't loaded (e.g. parsed via [`GraphReader::topology_only`]), or
+    /// the edge has no value in a sparse column. Relationship properties are
+    /// keyed by outgoing-CSR position, so incoming-side lookups aren't
+    /// addressable here. Resolves string atoms, mirroring [`GraphReader::node_prop`].
+    pub fn rel_prop(&self, csr_pos: u32, key: &str) -> Option<PropValue<'_>> {
+        let key_atom = self.atom_id(key)?;
+        let col = self
+            .graph
+            .rel_columns
+            .binary_search_by_key(&key_atom, |(k, _)| *k)
+            .ok()
+            .map(|i| &self.graph.rel_columns[i].1)?;
+        self.column_value(col, csr_pos)
+    }
+
     /// Node IDs carrying a label.
     pub fn nodes_with_label(&self, label: &str) -> Option<&RoaringBitmap> {
         let atom = self.atom_id(label)?;
@@ -439,5 +475,42 @@ mod tests {
         let hits = search.search("graph database", 10);
         assert!(hits.contains(&0), "expected doc 0 in {hits:?}");
         assert!(!hits.contains(&1), "doc 1 should not match, got {hits:?}");
+    }
+
+    #[test]
+    fn rel_prop_over_resident_rel_columns() {
+        // Two nodes, one edge 0->1 (CITES) carrying a "weight" property = 42.
+        let mut g = GraphSection {
+            n_nodes: 2,
+            n_rels: 1,
+            out_offsets: vec![0, 1, 1],
+            out_nbrs: vec![1],
+            out_types: vec![2], // atom 2 = "CITES"
+            in_offsets: vec![0, 0, 1],
+            in_nbrs: vec![0],
+            in_types: vec![2],
+            atoms: vec![
+                String::new(),        // 0
+                "weight".to_string(), // 1 = rel-prop key
+                "CITES".to_string(),  // 2 = rel type
+            ],
+            ..Default::default()
+        };
+        g.rel_columns = vec![(1, ColumnData::DenseI64(vec![42]))];
+        let mut bytes = Vec::new();
+        rcpg::write(&g, &mut bytes).unwrap();
+        let r = GraphReader::from_rcpg_bytes(&bytes).unwrap();
+
+        // out_edges yields (neighbor, csr_pos); the only edge is at position 0.
+        assert_eq!(r.out_edges(0), vec![(1, 0)]);
+        assert_eq!(r.out_edges(1), Vec::new());
+        // rel_prop reads the edge's "weight" at that position.
+        assert_eq!(r.rel_prop(0, "weight"), Some(PropValue::Int(42)));
+        assert_eq!(r.rel_prop(0, "missing"), None);
+
+        // topology_only drops rel columns, but the topology (out_edges) stays.
+        let r2 = GraphReader::topology_only(&bytes).unwrap();
+        assert_eq!(r2.rel_prop(0, "weight"), None);
+        assert_eq!(r2.out_edges(0), vec![(1, 0)]);
     }
 }
