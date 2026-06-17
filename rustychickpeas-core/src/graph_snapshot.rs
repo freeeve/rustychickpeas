@@ -2077,8 +2077,8 @@ impl GraphSnapshot {
 
     /// Whether `node` has at least one `rel_types` neighbour in `direction` — the
     /// existence predicate (`neighbors_by_type(..).next().is_some()`) behind facet
-    /// "has any X edge" checks.
-    pub fn has_edge(&self, node: NodeId, direction: Direction, rel_types: impl RelTypeFilter) -> bool {
+    /// "has any X rel" checks.
+    pub fn has_rel(&self, node: NodeId, direction: Direction, rel_types: impl RelTypeFilter) -> bool {
         self.first_neighbor(node, direction, rel_types).is_some()
     }
 
@@ -3533,7 +3533,7 @@ mod tests {
     }
 
     #[test]
-    fn test_has_edge_and_neighbor_property() {
+    fn test_has_rel_and_neighbor_property() {
         // work0 -about-> entity1 (uri "u:x"); work0 -category-> cat2 (uri "u:cat").
         let mut b = GraphBuilder::new(Some(3), Some(2));
         b.add_node(Some(0), &["Work"]).unwrap();
@@ -3545,10 +3545,10 @@ mod tests {
         b.add_relationship(0, 2, "category").unwrap();
         let g = b.finalize(None);
 
-        // has_edge: existence of an outgoing edge of a given type.
-        assert!(g.has_edge(0, Direction::Outgoing, "about"));
-        assert!(!g.has_edge(0, Direction::Outgoing, "mentions"));
-        assert!(!g.has_edge(1, Direction::Outgoing, "about"));
+        // has_rel: existence of an outgoing rel of a given type.
+        assert!(g.has_rel(0, Direction::Outgoing, "about"));
+        assert!(!g.has_rel(0, Direction::Outgoing, "mentions"));
+        assert!(!g.has_rel(1, Direction::Outgoing, "about"));
 
         // has_neighbor_with_property: a neighbour reached by `edge` has `key` == value.
         assert!(g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:x"));
