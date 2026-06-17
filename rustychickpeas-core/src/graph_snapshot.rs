@@ -534,7 +534,7 @@ pub type ChainRoots = Arc<[NodeId]>;
 /// [`I64Col::get`] reads a position via the dense `Vec<i64>` fast path when the
 /// column is dense, else the general column lookup. Build with
 /// [`GraphSnapshot::i64_col`] (node columns, indexed by node id) or
-/// [`GraphSnapshot::i64_edge_col`] (relationship columns, indexed by CSR position).
+/// [`GraphSnapshot::i64_rel_col`] (relationship columns, indexed by CSR position).
 #[derive(Clone, Copy)]
 pub struct I64Col<'a> {
     inner: I64ColInner<'a>,
@@ -2553,9 +2553,9 @@ impl GraphSnapshot {
     }
 
     /// A typed reader for the `i64` relationship property `key`, indexed by CSR
-    /// position (the edge analogue of [`i64_col`](Self::i64_col); see
+    /// position (the relationship analogue of [`i64_col`](Self::i64_col); see
     /// [`relationship_property`](Self::relationship_property) for the position).
-    pub fn i64_edge_col(&self, key: &str) -> Option<I64Col<'_>> {
+    pub fn i64_rel_col(&self, key: &str) -> Option<I64Col<'_>> {
         let col = self.rel_columns.get(&self.property_key_from_str(key)?)?;
         Some(I64Col {
             inner: match col.as_i64_slice() {
