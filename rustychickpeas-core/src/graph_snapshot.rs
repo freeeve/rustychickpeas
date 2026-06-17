@@ -1926,21 +1926,22 @@ impl GraphSnapshot {
             .is_some_and(|ns| ns.contains(node))
     }
 
-    /// Neighbours of `node` via `rel_type` in `direction` that are members of
+    /// Neighbours of `node` via `rel_types` in `direction` that are members of
     /// `set` — the typed traversal filtered by a node set, as a bitmap membership
     /// test. `set` can be a label's nodes ([`nodes_with_label`](Self::nodes_with_label)),
     /// an [`fts`](Self::fts) / geo result, or any precomputed [`NodeSet`]; this
     /// generalizes "typed neighbours carrying a label" and the per-candidate set
     /// intersections in co-occurrence queries. Duplicate edges are preserved, so
-    /// it still composes with counting.
-    pub fn neighbors_in<'a>(
+    /// it still composes with counting. `rel_types` accepts a single type, a slice
+    /// of types, or `None` for any type (see [`RelTypeFilter`]).
+    pub fn neighbors_in_set<'a>(
         &'a self,
         node: NodeId,
         direction: Direction,
-        rel_type: &str,
+        rel_types: impl RelTypeFilter,
         set: &'a NodeSet,
     ) -> impl Iterator<Item = NodeId> + 'a {
-        self.neighbors_by_type(node, direction, rel_type).filter(move |&n| set.contains(n))
+        self.neighbors_by_type(node, direction, rel_types).filter(move |&n| set.contains(n))
     }
 
     /// Find a single node by a property value across ALL labels (unlike
@@ -1973,7 +1974,7 @@ impl GraphSnapshot {
         &self,
         sources: impl IntoIterator<Item = NodeId>,
         direction: Direction,
-        rel_type: &str,
+        rel_type: impl RelTypeFilter,
     ) -> HashMap<NodeId, usize> {
         // Count into a thread-local dense buffer keyed by target id instead of a
         // growing HashMap: a direct index avoids per-target hashing and the map's
@@ -3974,6 +3975,19 @@ impl<const N: usize> RelTypeFilter for &[RelationshipType; N] {
     #[inline]
     fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
         self.as_slice().into_match(graph)
+    }
+}
+
+impl<T: RelTypeFilter> RelTypeFilter for Option<T> {
+    /// `None` matches any relationship type; `Some(t)` defers to `t`. Lets a
+    /// caller thread an optional type constraint through the whole neighbour /
+    /// counting family without a separate "all types" entry point.
+    #[inline]
+    fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
+        match self {
+            Some(t) => t.into_match(graph),
+            None => RelMatch::all(),
+        }
     }
 }
 
