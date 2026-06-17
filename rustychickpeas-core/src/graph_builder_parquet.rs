@@ -2424,7 +2424,7 @@ mod tests {
         // Verify properties were set
         let snapshot = builder.finalize(None);
         // Check first relationship (CSR position 0)
-        let weight_prop = snapshot.relationship_property(0, "weight");
+        let weight_prop = snapshot.rel_prop(0, "weight");
         assert!(weight_prop.is_some());
     }
 
@@ -3318,10 +3318,10 @@ mod tests {
         // Verify all property types were set
         let snapshot = builder.finalize(None);
         let csr_pos = 0u32;
-        assert!(snapshot.relationship_property(csr_pos, "name").is_some());
-        assert!(snapshot.relationship_property(csr_pos, "weight").is_some());
-        assert!(snapshot.relationship_property(csr_pos, "count").is_some());
-        assert!(snapshot.relationship_property(csr_pos, "active").is_some());
+        assert!(snapshot.rel_prop(csr_pos, "name").is_some());
+        assert!(snapshot.rel_prop(csr_pos, "weight").is_some());
+        assert!(snapshot.rel_prop(csr_pos, "count").is_some());
+        assert!(snapshot.rel_prop(csr_pos, "active").is_some());
     }
 
     #[test]

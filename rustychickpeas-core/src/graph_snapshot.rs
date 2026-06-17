@@ -2522,14 +2522,18 @@ impl GraphSnapshot {
         self.columns.get(&key)?.get(node_id)
     }
 
-    /// Get property value for a relationship
-    ///
-    /// # Arguments
-    /// * `rel_csr_pos` - Relationship position in the outgoing CSR array (0 to n_rels-1)
-    /// * `key` - The property key name (e.g., "verified")
-    pub fn relationship_property(&self, rel_csr_pos: u32, key: &str) -> Option<ValueId> {
+    /// Read a relationship property value by CSR position — the relationship
+    /// analogue of [`prop`](Self::prop) for nodes. `rel_csr_pos` is the position in
+    /// the outgoing CSR array (0..n_rels), as carried by `RelationshipRef::pos`.
+    pub fn rel_prop(&self, rel_csr_pos: u32, key: &str) -> Option<ValueId> {
         let key_id = self.property_key_from_str(key)?;
         self.relationship_property_id(rel_csr_pos, key_id)
+    }
+
+    /// Verbose alias of [`rel_prop`](Self::rel_prop), retained for backward
+    /// compatibility; prefer `rel_prop`.
+    pub fn relationship_property(&self, rel_csr_pos: u32, key: &str) -> Option<ValueId> {
+        self.rel_prop(rel_csr_pos, key)
     }
 
     /// Get property value for a relationship (internal ID-based version)
