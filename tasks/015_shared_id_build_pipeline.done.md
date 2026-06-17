@@ -57,7 +57,7 @@ OpenAlex ingest is a thin follow-up adapter over the same `Document` model.
   [028](028_reader_rel_property_accessors.done.md) via option (a): resident rel
   columns with `GraphReader::out_edges` + `rel_prop` (a rel-records store stays a
   future option for heavy edge payloads).
-- OpenAlex ingest — **done (MVP)** in the sibling `openalex-graph-demo` repo (kept
+- OpenAlex ingest — **done (MVP)** in the sibling `rustychickpeas-openalex` repo (kept
   separate so the ingest-only deps `serde_json`/`flate2` stay out of this
   workspace). Maps OpenAlex works → the `Document` model, top-N-cited slicing via
   a bounded heap, reads `.jsonl[.gz]`, in-slice edge filtering; tested on a
