@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use roaring::RoaringBitmap;
-use rustychickpeas_format::{rcpg, FormatError, GraphSection};
+use rustychickpeas_format::{rcpg, ColumnData, FormatError, GraphSection};
 
 pub mod records;
 
@@ -34,6 +34,16 @@ pub enum Direction {
     Outgoing,
     Incoming,
     Both,
+}
+
+/// A property value read from a resident column. String values are resolved
+/// from atom IDs to borrowed strings, so the lifetime is tied to the reader.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PropValue<'a> {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(&'a str),
 }
 
 /// Resident, read-only graph parsed from RCPG bytes.
@@ -178,6 +188,41 @@ impl GraphReader {
             .collect()
     }
 
+    /// Value of node property `key` for `node_id`, or `None` when the key is
+    /// unknown, its column wasn't loaded (e.g. parsed via
+    /// [`GraphReader::topology_only`]), or the node carries no value in a
+    /// sparse column. String values resolve from atom IDs to borrowed strings.
+    /// Mirrors core's `Column::get` — dense columns index directly, sparse
+    /// columns binary-search the sorted `(id, value)` pairs.
+    pub fn node_prop(&self, node_id: u32, key: &str) -> Option<PropValue<'_>> {
+        let key_atom = self.atom_id(key)?;
+        let col = self
+            .graph
+            .node_columns
+            .binary_search_by_key(&key_atom, |(k, _)| *k)
+            .ok()
+            .map(|i| &self.graph.node_columns[i].1)?;
+        self.column_value(col, node_id)
+    }
+
+    /// Read the value at `id` from a resident column, resolving string atoms.
+    fn column_value(&self, col: &ColumnData, id: u32) -> Option<PropValue<'_>> {
+        let i = id as usize;
+        let atoms = &self.graph.atoms;
+        match col {
+            ColumnData::DenseI64(v) => v.get(i).map(|&x| PropValue::Int(x)),
+            ColumnData::DenseF64(v) => v.get(i).map(|&x| PropValue::Float(x)),
+            ColumnData::DenseBool(b) => b.get(i).map(|bit| PropValue::Bool(*bit)),
+            ColumnData::DenseStr(v) => v.get(i).map(|&a| PropValue::Str(atom_str(atoms, a))),
+            ColumnData::SparseI64(p) => sparse_get(p, id).map(PropValue::Int),
+            ColumnData::SparseF64(p) => sparse_get(p, id).map(PropValue::Float),
+            ColumnData::SparseBool(p) => sparse_get(p, id).map(PropValue::Bool),
+            ColumnData::SparseStr(p) => {
+                sparse_get(p, id).map(|a| PropValue::Str(atom_str(atoms, a)))
+            }
+        }
+    }
+
     /// Node IDs carrying a label.
     pub fn nodes_with_label(&self, label: &str) -> Option<&RoaringBitmap> {
         let atom = self.atom_id(label)?;
@@ -245,5 +290,79 @@ impl GraphReader {
             frontier = next;
         }
         order
+    }
+}
+
+/// Binary-search a sorted `(id, value)` sparse column for `id`.
+fn sparse_get<V: Copy>(pairs: &[(u32, V)], id: u32) -> Option<V> {
+    pairs
+        .binary_search_by_key(&id, |(k, _)| *k)
+        .ok()
+        .map(|i| pairs[i].1)
+}
+
+/// Resolve a string atom, falling back to "" for out-of-range atom IDs.
+fn atom_str(atoms: &[String], atom: u32) -> &str {
+    atoms.get(atom as usize).map_or("", String::as_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three nodes; one dense i64 column ("year") and one sparse str column
+    /// ("name") present on nodes 0 and 2. Round-tripped through the RCPG codec
+    /// so the test exercises the real parse path, not a hand-built reader.
+    fn reader() -> GraphReader {
+        let mut g = GraphSection {
+            n_nodes: 3,
+            out_offsets: vec![0, 0, 0, 0],
+            in_offsets: vec![0, 0, 0, 0],
+            atoms: vec![
+                String::new(),       // 0 = ""
+                "year".to_string(),  // 1 = key
+                "name".to_string(),  // 2 = key
+                "Alice".to_string(), // 3 = value
+                "Bob".to_string(),   // 4 = value
+            ],
+            ..Default::default()
+        };
+        g.node_columns = vec![
+            (1, ColumnData::DenseI64(vec![2001, 2002, 2003])),
+            (2, ColumnData::SparseStr(vec![(0, 3), (2, 4)])),
+        ];
+        let mut bytes = Vec::new();
+        rcpg::write(&g, &mut bytes).unwrap();
+        GraphReader::from_rcpg_bytes(&bytes).unwrap()
+    }
+
+    #[test]
+    fn node_prop_dense_and_sparse() {
+        let r = reader();
+        assert_eq!(r.node_prop(0, "year"), Some(PropValue::Int(2001)));
+        assert_eq!(r.node_prop(2, "year"), Some(PropValue::Int(2003)));
+        assert_eq!(r.node_prop(0, "name"), Some(PropValue::Str("Alice")));
+        assert_eq!(r.node_prop(2, "name"), Some(PropValue::Str("Bob")));
+        // node 1 has no entry in the sparse "name" column
+        assert_eq!(r.node_prop(1, "name"), None);
+        // unknown key resolves to no column
+        assert_eq!(r.node_prop(0, "missing"), None);
+    }
+
+    #[test]
+    fn node_prop_none_when_topology_only() {
+        let mut g = GraphSection {
+            n_nodes: 1,
+            out_offsets: vec![0, 0],
+            in_offsets: vec![0, 0],
+            atoms: vec![String::new(), "year".to_string()],
+            ..Default::default()
+        };
+        g.node_columns = vec![(1, ColumnData::DenseI64(vec![2001]))];
+        let mut bytes = Vec::new();
+        rcpg::write(&g, &mut bytes).unwrap();
+        let r = GraphReader::topology_only(&bytes).unwrap();
+        // property columns are skipped, so even a present key returns None
+        assert_eq!(r.node_prop(0, "year"), None);
     }
 }

@@ -14,7 +14,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::{Direction, GraphReader};
+use crate::{Direction, GraphReader, PropValue};
 use rustychickpeas_format::rrsr::RecordIndex;
 
 /// Resident graph: construct from the full RCPG file bytes.
@@ -110,6 +110,21 @@ impl WasmGraph {
 
     pub fn atom(&self, id: u32) -> Option<String> {
         self.inner.atom(id).map(str::to_string)
+    }
+
+    /// Value of node property `key` for `nodeId`, or `undefined` when absent
+    /// (unknown key, properties not loaded, or no value for this node). Comes
+    /// back as the natural JS type — number (i64 via f64, exact to 2^53-1),
+    /// boolean, or string — ready for property-dependent traversal filters.
+    #[wasm_bindgen(js_name = nodeProp)]
+    pub fn node_prop(&self, node_id: u32, key: &str) -> JsValue {
+        match self.inner.node_prop(node_id, key) {
+            Some(PropValue::Int(i)) => JsValue::from_f64(i as f64),
+            Some(PropValue::Float(f)) => JsValue::from_f64(f),
+            Some(PropValue::Bool(b)) => JsValue::from_bool(b),
+            Some(PropValue::Str(s)) => JsValue::from_str(s),
+            None => JsValue::UNDEFINED,
+        }
     }
 }
 
