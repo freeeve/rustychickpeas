@@ -1160,60 +1160,85 @@ impl GraphSnapshot {
         }
         let matcher = rel_types.into_match(self);
         let rev = Self::reverse_direction(direction);
-        let mut dist_f: HashMap<NodeId, f64> = HashMap::new();
-        let mut dist_b: HashMap<NodeId, f64> = HashMap::new();
-        dist_f.insert(source, 0.0);
-        dist_b.insert(target, 0.0);
-        let mut heap_f = std::collections::BinaryHeap::new();
-        let mut heap_b = std::collections::BinaryHeap::new();
-        heap_f.push(DijkstraState {
-            cost: 0.0,
-            node: source,
-        });
-        heap_b.push(DijkstraState {
-            cost: 0.0,
-            node: target,
-        });
-        // Best meeting cost found so far; the frontiers can't beat `top_f + top_b`.
-        let mut best = f64::INFINITY;
 
-        while !heap_f.is_empty() || !heap_b.is_empty() {
-            let top_f = heap_f.peek().map_or(f64::INFINITY, |s| s.cost);
-            let top_b = heap_b.peek().map_or(f64::INFINITY, |s| s.cost);
-            if top_f + top_b >= best {
-                break;
-            }
-            // Expand whichever frontier is currently smaller.
-            let (heap, dist, other, dir) = if top_f <= top_b {
-                (&mut heap_f, &mut dist_f, &dist_b, direction)
-            } else {
-                (&mut heap_b, &mut dist_b, &dist_f, rev)
-            };
-            let Some(DijkstraState { cost, node }) = heap.pop() else {
-                continue;
-            };
-            if cost > *dist.get(&node).unwrap_or(&f64::INFINITY) {
-                continue; // stale heap entry
-            }
-            // `node` is settled on this side; if the other side reached it too, the
-            // two halves form a candidate path.
-            if let Some(&other_cost) = other.get(&node) {
-                if cost + other_cost < best {
-                    best = cost + other_cost;
-                }
-            }
-            for rel in self.relationships_with(node, dir, matcher.clone()) {
-                let next = cost + weight(node, &rel);
-                if next < *dist.get(&rel.neighbor).unwrap_or(&f64::INFINITY) {
-                    dist.insert(rel.neighbor, next);
-                    heap.push(DijkstraState {
-                        cost: next,
-                        node: rel.neighbor,
-                    });
-                }
-            }
+        // The two `dist` maps and `heap` frontiers are pure working state: a fresh
+        // pair of `HashMap`s and `BinaryHeap`s every call churned ~1 MB on a deep
+        // weighted search. They're reused from a thread-local scratch instead and
+        // `clear()`ed (which keeps capacity) at the top of each call, so steady
+        // state allocates nothing. Thread-local so parallel callers never contend.
+        #[derive(Default)]
+        struct WspScratch {
+            dist_f: HashMap<NodeId, f64>,
+            dist_b: HashMap<NodeId, f64>,
+            heap_f: std::collections::BinaryHeap<DijkstraState>,
+            heap_b: std::collections::BinaryHeap<DijkstraState>,
         }
-        best.is_finite().then_some(best)
+        thread_local! {
+            static WSP_SCRATCH: std::cell::RefCell<WspScratch> =
+                std::cell::RefCell::new(WspScratch::default());
+        }
+
+        WSP_SCRATCH.with(|cell| {
+            // Deref the guard once to a `&mut WspScratch` so the borrow checker can
+            // split-borrow disjoint fields (`heap_f`/`dist_f`/`dist_b`) below.
+            let mut guard = cell.borrow_mut();
+            let s = &mut *guard;
+            s.dist_f.clear();
+            s.dist_b.clear();
+            s.heap_f.clear();
+            s.heap_b.clear();
+
+            s.dist_f.insert(source, 0.0);
+            s.dist_b.insert(target, 0.0);
+            s.heap_f.push(DijkstraState {
+                cost: 0.0,
+                node: source,
+            });
+            s.heap_b.push(DijkstraState {
+                cost: 0.0,
+                node: target,
+            });
+            // Best meeting cost found so far; the frontiers can't beat `top_f + top_b`.
+            let mut best = f64::INFINITY;
+
+            while !s.heap_f.is_empty() || !s.heap_b.is_empty() {
+                let top_f = s.heap_f.peek().map_or(f64::INFINITY, |st| st.cost);
+                let top_b = s.heap_b.peek().map_or(f64::INFINITY, |st| st.cost);
+                if top_f + top_b >= best {
+                    break;
+                }
+                // Expand whichever frontier is currently smaller.
+                let (heap, dist, other, dir) = if top_f <= top_b {
+                    (&mut s.heap_f, &mut s.dist_f, &s.dist_b, direction)
+                } else {
+                    (&mut s.heap_b, &mut s.dist_b, &s.dist_f, rev)
+                };
+                let Some(DijkstraState { cost, node }) = heap.pop() else {
+                    continue;
+                };
+                if cost > *dist.get(&node).unwrap_or(&f64::INFINITY) {
+                    continue; // stale heap entry
+                }
+                // `node` is settled on this side; if the other side reached it too,
+                // the two halves form a candidate path.
+                if let Some(&other_cost) = other.get(&node) {
+                    if cost + other_cost < best {
+                        best = cost + other_cost;
+                    }
+                }
+                for rel in self.relationships_with(node, dir, matcher.clone()) {
+                    let next = cost + weight(node, &rel);
+                    if next < *dist.get(&rel.neighbor).unwrap_or(&f64::INFINITY) {
+                        dist.insert(rel.neighbor, next);
+                        heap.push(DijkstraState {
+                            cost: next,
+                            node: rel.neighbor,
+                        });
+                    }
+                }
+            }
+            best.is_finite().then_some(best)
+        })
     }
 
     /// Check if one node can reach another via traversal
