@@ -1915,6 +1915,78 @@ impl GraphSnapshot {
         })
     }
 
+    /// The set of nodes whose hop-distance from `seed` (along `rel_types` in
+    /// `direction`) lies in `hops` — the bounded **neighborhood** around `seed`,
+    /// returned as a [`NodeSet`] so downstream membership is O(1) and intersecting
+    /// it with another set (e.g. "2-hop friends ∩ members of a country") is one
+    /// bitmap op. `hops` is a closed range: `1..=2` is "one or two hops out"
+    /// (excludes `seed`), `0..=2` includes `seed`, `2..=2` is exactly two hops.
+    /// A bounded level-synchronous BFS that collects straight into the set (no
+    /// intermediate distance map); the visited scratch is thread-local, mirroring
+    /// [`bfs_distances`](Self::bfs_distances).
+    pub fn neighborhood(
+        &self,
+        seed: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+        hops: std::ops::RangeInclusive<u32>,
+    ) -> NodeSet {
+        let (lo, hi) = (*hops.start(), *hops.end());
+        let mut result = NodeSet::empty();
+        if lo > hi {
+            return result;
+        }
+        // Gen-stamped visited scratch (the bfs_distances pattern): a node counts as
+        // visited this run iff `gen[node] == cur`, avoiding an O(n) clear per call.
+        #[derive(Default)]
+        struct NbhdScratch {
+            gen: Vec<u32>,
+            cur: u32,
+        }
+        thread_local! {
+            static NBHD_SCRATCH: std::cell::RefCell<NbhdScratch> =
+                std::cell::RefCell::new(NbhdScratch::default());
+        }
+        let matcher = rel_types.into_match(self);
+        let n = self.node_count() as usize;
+        NBHD_SCRATCH.with(|cell| {
+            let mut s = cell.borrow_mut();
+            if s.gen.len() < n {
+                s.gen.resize(n, 0);
+            }
+            s.cur = s.cur.wrapping_add(1);
+            if s.cur == 0 {
+                s.gen.iter_mut().for_each(|g| *g = 0);
+                s.cur = 1;
+            }
+            let cur = s.cur;
+            s.gen[seed as usize] = cur;
+            if lo == 0 {
+                result.insert(seed);
+            }
+            let mut frontier: Vec<NodeId> = vec![seed];
+            let mut depth = 0u32;
+            while depth < hi && !frontier.is_empty() {
+                depth += 1;
+                let mut next: Vec<NodeId> = Vec::new();
+                for &node in &frontier {
+                    for neighbor in self.neighbors_with(node, direction, matcher.clone()) {
+                        let ni = neighbor as usize;
+                        if s.gen[ni] != cur {
+                            s.gen[ni] = cur;
+                            next.push(neighbor);
+                            if depth >= lo {
+                                result.insert(neighbor);
+                            }
+                        }
+                    }
+                }
+                frontier = next;
+            }
+        });
+        result
+    }
+
     /// Get nodes with a specific label
     ///
     /// # Arguments
@@ -3572,6 +3644,32 @@ mod tests {
         assert!(!g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:cat"));
         // A value absent from the graph -> false (no node interns it).
         assert!(!g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:none"));
+    }
+
+    #[test]
+    fn test_neighborhood_bounded_hops() {
+        // path 0->1->2->3 plus a 1-hop branch 0->4 (all `knows`).
+        let mut b = GraphBuilder::new(Some(5), Some(4));
+        for i in 0..5 {
+            b.add_node(Some(i), &["Person"]).unwrap();
+        }
+        b.add_relationship(0, 1, "knows").unwrap();
+        b.add_relationship(1, 2, "knows").unwrap();
+        b.add_relationship(2, 3, "knows").unwrap();
+        b.add_relationship(0, 4, "knows").unwrap();
+        let g = b.finalize(None);
+
+        let sorted = |ns: NodeSet| {
+            let mut v: Vec<u32> = ns.iter().collect();
+            v.sort_unstable();
+            v
+        };
+        let out = Direction::Outgoing;
+        assert_eq!(sorted(g.neighborhood(0, out, "knows", 1..=1)), vec![1, 4]); // exactly 1 hop
+        assert_eq!(sorted(g.neighborhood(0, out, "knows", 2..=2)), vec![2]); // exactly 2 hops
+        assert_eq!(sorted(g.neighborhood(0, out, "knows", 1..=2)), vec![1, 2, 4]); // 1 or 2 hops
+        assert_eq!(sorted(g.neighborhood(0, out, "knows", 0..=2)), vec![0, 1, 2, 4]); // includes seed
+        assert!(g.neighborhood(0, out, "knows", 2..=1).iter().next().is_none()); // empty range
     }
 
     #[test]
