@@ -78,7 +78,7 @@ impl GeoIndex {
         for p in found {
             out.insert(self.nodes[p]);
         }
-        NodeSet::new(out)
+        NodeSet::from(out)
     }
 
     /// Up to `k` nearest nodes to `(lat, lon)` as `(node, distance_km)`, sorted
@@ -118,7 +118,7 @@ impl GeoIndex {
                 out.insert(self.nodes[i]);
             }
         }
-        NodeSet::new(out)
+        NodeSet::from(out)
     }
 
     /// Number of indexed points.
@@ -132,7 +132,14 @@ impl GeoIndex {
     }
 
     /// Recursive range search: collect point indices within `r_sq` chord².
-    fn range(&self, node: Option<&KdNode>, q: &[f64; 3], r_sq: f64, axis: usize, out: &mut Vec<usize>) {
+    fn range(
+        &self,
+        node: Option<&KdNode>,
+        q: &[f64; 3],
+        r_sq: f64,
+        axis: usize,
+        out: &mut Vec<usize>,
+    ) {
         let Some(n) = node else {
             return;
         };
@@ -154,7 +161,14 @@ impl GeoIndex {
     }
 
     /// Recursive k-NN search maintaining a bounded max-heap of the k closest.
-    fn nn(&self, node: Option<&KdNode>, q: &[f64; 3], k: usize, axis: usize, heap: &mut BinaryHeap<Neighbor>) {
+    fn nn(
+        &self,
+        node: Option<&KdNode>,
+        q: &[f64; 3],
+        k: usize,
+        axis: usize,
+        heap: &mut BinaryHeap<Neighbor>,
+    ) {
         let Some(n) = node else {
             return;
         };
@@ -228,7 +242,11 @@ fn build_kd(xyz: &[[f64; 3]], indices: &mut [usize], depth: usize) -> Option<Box
         return None;
     }
     let axis = depth % 3;
-    indices.sort_by(|&a, &b| xyz[a][axis].partial_cmp(&xyz[b][axis]).unwrap_or(Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        xyz[a][axis]
+            .partial_cmp(&xyz[b][axis])
+            .unwrap_or(Ordering::Equal)
+    });
     let mid = indices.len() / 2;
     let point = indices[mid];
     let (left, rest) = indices.split_at_mut(mid);
@@ -309,7 +327,10 @@ mod tests {
         // Tighten below the London–Paris distance: only London remains.
         assert_eq!(sorted(g.within_radius(LONDON.1, LONDON.2, 100.0)), [1]);
         // Huge radius covers everything.
-        assert_eq!(sorted(g.within_radius(LONDON.1, LONDON.2, 20_000.0)), [1, 2, 3, 4]);
+        assert_eq!(
+            sorted(g.within_radius(LONDON.1, LONDON.2, 20_000.0)),
+            [1, 2, 3, 4]
+        );
     }
 
     #[test]
@@ -324,7 +345,10 @@ mod tests {
         // k larger than the set returns all four, nearest first.
         let all = g.knn(LONDON.1, LONDON.2, 10);
         assert_eq!(all.len(), 4);
-        assert_eq!(all.iter().map(|(n, _)| *n).collect::<Vec<_>>(), [1, 2, 3, 4]);
+        assert_eq!(
+            all.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
     }
 
     #[test]
@@ -337,7 +361,10 @@ mod tests {
                 .find(|c| c.0 == node)
                 .unwrap();
             let expected = haversine_km(LONDON.1, LONDON.2, city.1, city.2);
-            assert!((km - expected).abs() < 0.5, "node {node}: {km} vs {expected}");
+            assert!(
+                (km - expected).abs() < 0.5,
+                "node {node}: {km} vs {expected}"
+            );
         }
     }
 

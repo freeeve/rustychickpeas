@@ -2,7 +2,7 @@
 //!
 //! A lazy, label-scoped inverted index that mirrors the equality `prop_index`
 //! on [`GraphSnapshot`](crate::graph_snapshot::GraphSnapshot): the first
-//! `fts`/`fts_ranked` call for a `(label, key)` pair tokenizes that column's
+//! `full_text_search`/`full_text_search_ranked` call for a `(label, key)` pair tokenizes that column's
 //! strings into postings and caches the result; later queries reuse it.
 //!
 //! Each term's postings carry both a membership [`RoaringBitmap`] (surfaced as a
@@ -92,7 +92,7 @@ impl FullTextField {
             }
         }
         if saw_token {
-            NodeSet::new(acc.unwrap_or_default())
+            NodeSet::from(acc.unwrap_or_default())
         } else {
             NodeSet::empty()
         }
@@ -169,7 +169,10 @@ mod tests {
     }
 
     fn ranked_ids(f: &FullTextField, query: &str, k: usize) -> Vec<u32> {
-        f.query_ranked(query, k).into_iter().map(|(n, _)| n).collect()
+        f.query_ranked(query, k)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect()
     }
 
     // ---- tokenizer + boolean retrieval ----
@@ -182,14 +185,22 @@ mod tests {
 
     #[test]
     fn single_term_returns_matching_nodes() {
-        let f = field(&[(1, "the quick brown fox"), (2, "brown bear"), (3, "red fox")]);
+        let f = field(&[
+            (1, "the quick brown fox"),
+            (2, "brown bear"),
+            (3, "red fox"),
+        ]);
         assert_eq!(sorted_hits(&f, "brown"), [1, 2]);
         assert_eq!(sorted_hits(&f, "fox"), [1, 3]);
     }
 
     #[test]
     fn multi_term_query_is_conjunctive() {
-        let f = field(&[(1, "quick brown fox"), (2, "brown bear"), (3, "quick red fox")]);
+        let f = field(&[
+            (1, "quick brown fox"),
+            (2, "brown bear"),
+            (3, "quick red fox"),
+        ]);
         assert_eq!(sorted_hits(&f, "quick fox"), [1, 3]);
         assert_eq!(sorted_hits(&f, "brown bear"), [2]);
     }
@@ -236,7 +247,11 @@ mod tests {
     #[test]
     fn ranked_orders_by_term_frequency() {
         // Doc 1 mentions "apple" twice, doc 2 once -> doc 1 ranks first.
-        let f = field(&[(1, "apple apple banana"), (2, "apple cherry"), (3, "banana date")]);
+        let f = field(&[
+            (1, "apple apple banana"),
+            (2, "apple cherry"),
+            (3, "banana date"),
+        ]);
         assert_eq!(ranked_ids(&f, "apple", 10), [1, 2]);
     }
 
@@ -271,7 +286,10 @@ mod tests {
         ]);
         let zebra = f.query_ranked("zebra", 10)[0].1;
         let common = f.query_ranked("common", 10)[0].1;
-        assert!(zebra > common, "rare zebra {zebra} should outscore common {common}");
+        assert!(
+            zebra > common,
+            "rare zebra {zebra} should outscore common {common}"
+        );
     }
 
     #[test]

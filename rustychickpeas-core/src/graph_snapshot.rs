@@ -718,7 +718,7 @@ pub struct GraphSnapshot {
 
     // --- Full-text index (lazy-initialized) ---
     /// Lazy boolean inverted index: (label, property_key) -> token postings,
-    /// built per field on first `fts` call. See [`crate::fulltext`].
+    /// built per field on first `full_text_search` call. See [`crate::fulltext`].
     pub fulltext_index: Mutex<HashMap<(Label, PropertyKey), FullTextField>>,
 
     // --- Geo-spatial index (lazy-initialized) ---
@@ -814,7 +814,7 @@ impl GraphSnapshot {
                 node_ids.sort_unstable();
                 node_ids.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(node_ids).unwrap();
-                (val_id, NodeSet::new(bitmap))
+                (val_id, NodeSet::from(bitmap))
             })
             .collect()
     }
@@ -1481,8 +1481,8 @@ impl GraphSnapshot {
     /// let snapshot = builder.finalize(None);
     ///
     /// // Simple bidirectional search (default: Outgoing for forward, Incoming for backward)
-    /// let source = NodeSet::new(RoaringBitmap::from_iter([0, 1]));
-    /// let target = NodeSet::new(RoaringBitmap::from_iter([10, 11]));
+    /// let source = NodeSet::from(RoaringBitmap::from_iter([0, 1]));
+    /// let target = NodeSet::from(RoaringBitmap::from_iter([10, 11]));
     /// type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
     /// type RelFilter = fn(u32, u32, rustychickpeas_core::types::RelationshipType, u32, &GraphSnapshot) -> bool;
     /// let (nodes, rels) = snapshot.bidirectional_bfs::<NodeFilter, RelFilter>(
@@ -1685,7 +1685,7 @@ impl GraphSnapshot {
     /// let snapshot = builder.finalize(None);
     ///
     /// // Simple BFS from a single node
-    /// let start = NodeSet::new(RoaringBitmap::from_iter([0]));
+    /// let start = NodeSet::from(RoaringBitmap::from_iter([0]));
     /// type NodeFilter = fn(u32, &GraphSnapshot) -> bool;
     /// type RelFilter = fn(u32, u32, rustychickpeas_core::types::RelationshipType, u32, &GraphSnapshot) -> bool;
     /// let (nodes, rels) = snapshot.bfs::<NodeFilter, RelFilter>(
@@ -2141,7 +2141,7 @@ impl GraphSnapshot {
     /// Neighbours of `node` via `rel_types` in `direction` that are members of
     /// `set` — the typed traversal filtered by a node set, as a bitmap membership
     /// test. `set` can be a label's nodes ([`nodes_with_label`](Self::nodes_with_label)),
-    /// an [`fts`](Self::fts) / geo result, or any precomputed [`NodeSet`]; this
+    /// an [`full_text_search`](Self::full_text_search) / geo result, or any precomputed [`NodeSet`]; this
     /// generalizes "typed neighbours carrying a label" and the per-candidate set
     /// intersections in co-occurrence queries. Duplicate edges are preserved, so
     /// it still composes with counting. `rel_types` accepts a single type, a slice
@@ -2219,7 +2219,7 @@ impl GraphSnapshot {
     /// Useful for a unique key such as a `uri`; returns the smallest matching node
     /// id. The label-free `(key, value)` index is built lazily on first call and
     /// cached under a reserved sentinel label.
-    pub fn node_by_property<V: IntoValueId>(&self, key: &str, value: V) -> Option<NodeId> {
+    pub fn node_with_property<V: IntoValueId>(&self, key: &str, value: V) -> Option<NodeId> {
         let any = Label::new(u32::MAX);
         let key_id = self.property_key_from_str(key)?;
         let value_id = value.into_value_id(self)?;
@@ -2243,14 +2243,14 @@ impl GraphSnapshot {
     }
 
     /// Find a single node with `label` whose property `key` equals `value` — the
-    /// label-scoped sibling of [`node_by_property`](Self::node_by_property), returning
+    /// label-scoped sibling of [`node_with_property`](Self::node_with_property), returning
     /// the smallest matching node id (or `None`). Use this where the key is unique only
     /// *within* a label (a `name` shared across labels, a per-type LDBC id), so the
-    /// label-free [`node_by_property`] could match a node of a different label. Reuses
+    /// label-free [`node_with_property`] could match a node of a different label. Reuses
     /// the cached `(label, key)` index that [`nodes_with_property`](Self::nodes_with_property)
     /// builds, but takes the first matching node directly — without cloning the value's
     /// `NodeSet` (the single-node analog of `nodes_with_property`).
-    pub fn node_by_label_property<V: IntoValueId>(
+    pub fn node_with_label_property<V: IntoValueId>(
         &self,
         label: &str,
         key: &str,
@@ -2347,7 +2347,7 @@ impl GraphSnapshot {
     /// index). The result is a [`NodeSet`], so it composes with
     /// [`nodes_with_label`](Self::nodes_with_label) and other node sets via
     /// `&`/`|`/`-`.
-    pub fn fts(&self, label: &str, key: &str, query: &str) -> NodeSet {
+    pub fn full_text_search(&self, label: &str, key: &str, query: &str) -> NodeSet {
         let (Some(label_id), Some(key_id)) =
             (self.label_from_str(label), self.property_key_from_str(key))
         else {
@@ -2381,8 +2381,8 @@ impl GraphSnapshot {
     /// of their `key` string property to `query` (disjunctive — a node scores
     /// for every query token it contains). Returns `(node, score)` pairs sorted
     /// by score descending, ties broken by ascending node id. Shares the same
-    /// lazily built `(label, key)` index as [`fts`](Self::fts).
-    pub fn fts_ranked(&self, label: &str, key: &str, query: &str, k: usize) -> Vec<(NodeId, f32)> {
+    /// lazily built `(label, key)` index as [`full_text_search`](Self::full_text_search).
+    pub fn full_text_search_ranked(&self, label: &str, key: &str, query: &str, k: usize) -> Vec<(NodeId, f32)> {
         let (Some(label_id), Some(key_id)) =
             (self.label_from_str(label), self.property_key_from_str(key))
         else {
@@ -2432,7 +2432,7 @@ impl GraphSnapshot {
 
     /// Geo-spatial search: nodes of `label` within `km` great-circle distance of
     /// `(lat, lon)`, using the `lat_key`/`lon_key` f64 properties. The result is
-    /// a [`NodeSet`], composing with [`fts`](Self::fts) and
+    /// a [`NodeSet`], composing with [`full_text_search`](Self::full_text_search) and
     /// [`nodes_with_label`](Self::nodes_with_label) via `&`/`|`/`-`. The
     /// per-`(label, lat_key, lon_key)` index is built lazily and cached.
     pub fn geo_within_radius(
@@ -2601,7 +2601,7 @@ impl GraphSnapshot {
     /// The string node property `key` for `node`, or `None` when absent **or
     /// empty**. Dense string columns store a missing value as `""`, so callers
     /// otherwise repeat `prop(..).filter(|s| !s.is_empty())`; this folds that in.
-    pub fn str_prop(&self, node: NodeId, key: &str) -> Option<&str> {
+    pub fn prop_str(&self, node: NodeId, key: &str) -> Option<&str> {
         match self.prop(node, key) {
             Some(ValueId::Str(id)) => match self.resolve_string(id) {
                 Some(s) if !s.is_empty() => Some(s),
@@ -2767,7 +2767,7 @@ mod tests {
                 nodes.sort_unstable();
                 nodes.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(nodes).unwrap();
-                (label, NodeSet::new(bitmap))
+                (label, NodeSet::from(bitmap))
             })
             .collect();
 
@@ -2785,7 +2785,7 @@ mod tests {
                 rel_ids.sort_unstable();
                 rel_ids.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(rel_ids).unwrap();
-                (rel_type, NodeSet::new(bitmap))
+                (rel_type, NodeSet::from(bitmap))
             })
             .collect();
 
@@ -3579,7 +3579,7 @@ mod tests {
         b.set_prop_i64(0, "plid", 100).unwrap();
         b.set_prop_bool(0, "active", true).unwrap();
         b.set_prop_str(0, "name", "Alice").unwrap();
-        b.set_prop_str(1, "name", "").unwrap(); // empty string -> str_prop treats as absent
+        b.set_prop_str(1, "name", "").unwrap(); // empty string -> prop_str treats as absent
         b.add_relationship(0, 1, "knows").unwrap();
         b.add_relationship(0, 2, "isLocatedIn").unwrap();
         b.add_relationship(2, 3, "isPartOf").unwrap();
@@ -3616,10 +3616,10 @@ mod tests {
         assert!(g.col("nonexistent").is_none());
         assert_eq!(g.col("active").unwrap().bool().get(0), Some(true));
 
-        // str_prop: present value, empty-as-absent, and missing key all distinguished.
-        assert_eq!(g.str_prop(0, "name"), Some("Alice"));
-        assert_eq!(g.str_prop(1, "name"), None); // empty dense slot reads back as absent
-        assert_eq!(g.str_prop(0, "missing"), None);
+        // prop_str: present value, empty-as-absent, and missing key all distinguished.
+        assert_eq!(g.prop_str(0, "name"), Some("Alice"));
+        assert_eq!(g.prop_str(1, "name"), None); // empty dense slot reads back as absent
+        assert_eq!(g.prop_str(0, "missing"), None);
     }
 
     #[test]
@@ -3633,11 +3633,11 @@ mod tests {
         let g = b.finalize(None);
 
         // Label-scoped: resolves to the node of the requested label, not the global first.
-        assert_eq!(g.node_by_label_property("Country", "name", "X"), Some(1));
-        assert_eq!(g.node_by_label_property("Tag", "name", "X"), Some(0));
+        assert_eq!(g.node_with_label_property("Country", "name", "X"), Some(1));
+        assert_eq!(g.node_with_label_property("Tag", "name", "X"), Some(0));
         // Unknown label or value -> None.
-        assert_eq!(g.node_by_label_property("Person", "name", "X"), None);
-        assert_eq!(g.node_by_label_property("Country", "name", "Y"), None);
+        assert_eq!(g.node_with_label_property("Person", "name", "X"), None);
+        assert_eq!(g.node_with_label_property("Country", "name", "Y"), None);
     }
 
     #[test]
@@ -3801,8 +3801,8 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: find paths from node 0 to node 3
-        let source = NodeSet::new(RoaringBitmap::from_iter([0]));
-        let target = NodeSet::new(RoaringBitmap::from_iter([3]));
+        let source = NodeSet::from(RoaringBitmap::from_iter([0]));
+        let target = NodeSet::from(RoaringBitmap::from_iter([3]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -3836,8 +3836,8 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: no path from node 3 to node 0 (reverse direction)
-        let source = NodeSet::new(RoaringBitmap::from_iter([3]));
-        let target = NodeSet::new(RoaringBitmap::from_iter([0]));
+        let source = NodeSet::from(RoaringBitmap::from_iter([3]));
+        let target = NodeSet::from(RoaringBitmap::from_iter([0]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -3866,8 +3866,8 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: filter by relationship type
-        let source = NodeSet::new(RoaringBitmap::from_iter([0]));
-        let target = NodeSet::new(RoaringBitmap::from_iter([3]));
+        let source = NodeSet::from(RoaringBitmap::from_iter([0]));
+        let target = NodeSet::from(RoaringBitmap::from_iter([3]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -3894,8 +3894,8 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: filter nodes by label
-        let source = NodeSet::new(RoaringBitmap::from_iter([0]));
-        let target = NodeSet::new(RoaringBitmap::from_iter([3]));
+        let source = NodeSet::from(RoaringBitmap::from_iter([0]));
+        let target = NodeSet::from(RoaringBitmap::from_iter([3]));
 
         let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
             snapshot
@@ -3927,8 +3927,8 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: max depth limits traversal
-        let source = NodeSet::new(RoaringBitmap::from_iter([0]));
-        let target = NodeSet::new(RoaringBitmap::from_iter([3]));
+        let source = NodeSet::from(RoaringBitmap::from_iter([0]));
+        let target = NodeSet::from(RoaringBitmap::from_iter([3]));
 
         // With depth 1, should not reach node 3
         // Type annotations needed for None filters
@@ -3969,8 +3969,8 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: multiple source and target nodes
-        let source = NodeSet::new(RoaringBitmap::from_iter([0, 1]));
-        let target = NodeSet::new(RoaringBitmap::from_iter([2, 3]));
+        let source = NodeSet::from(RoaringBitmap::from_iter([0, 1]));
+        let target = NodeSet::from(RoaringBitmap::from_iter([2, 3]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -4018,7 +4018,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: BFS from node 0, outgoing direction
-        let start = NodeSet::new(RoaringBitmap::from_iter([0]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([0]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -4049,7 +4049,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: filter by relationship type "KNOWS" only
-        let start = NodeSet::new(RoaringBitmap::from_iter([0]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([0]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -4080,7 +4080,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: filter by node label "Person"
-        let start = NodeSet::new(RoaringBitmap::from_iter([0]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([0]));
 
         let node_filter = |node_id: NodeId, snapshot: &GraphSnapshot| -> bool {
             snapshot
@@ -4116,7 +4116,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: max depth limits traversal
-        let start = NodeSet::new(RoaringBitmap::from_iter([0]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([0]));
 
         // With depth 1, should only reach direct neighbors
         // Type annotations needed for None filters
@@ -4162,7 +4162,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: BFS from node 3, incoming direction (reverse traversal)
-        let start = NodeSet::new(RoaringBitmap::from_iter([3]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([3]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -4191,7 +4191,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: BFS from node 2, both directions
-        let start = NodeSet::new(RoaringBitmap::from_iter([2]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([2]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;
@@ -4214,7 +4214,7 @@ mod tests {
         use roaring::RoaringBitmap;
 
         // Test: BFS from multiple starting nodes
-        let start = NodeSet::new(RoaringBitmap::from_iter([0, 2]));
+        let start = NodeSet::from(RoaringBitmap::from_iter([0, 2]));
 
         // Type annotations needed for None filters
         type NodeFilter = fn(NodeId, &GraphSnapshot) -> bool;

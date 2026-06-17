@@ -12,15 +12,21 @@ pub enum NodeSet {
     Bitset(bitvec::vec::BitVec),
 }
 
-impl NodeSet {
-    pub fn new(bitmap: RoaringBitmap) -> Self {
+impl From<RoaringBitmap> for NodeSet {
+    /// Wrap a `RoaringBitmap` (the representation for large sets).
+    fn from(bitmap: RoaringBitmap) -> Self {
         NodeSet::Roaring(bitmap)
     }
+}
 
-    pub fn new_bitset(bitset: bitvec::vec::BitVec) -> Self {
+impl From<bitvec::vec::BitVec> for NodeSet {
+    /// Wrap a `BitVec` (the representation for ultra-hot small buckets).
+    fn from(bitset: bitvec::vec::BitVec) -> Self {
         NodeSet::Bitset(bitset)
     }
+}
 
+impl NodeSet {
     pub fn empty() -> Self {
         NodeSet::Roaring(RoaringBitmap::new())
     }
@@ -291,7 +297,7 @@ mod tests {
         let mut rb = RoaringBitmap::new();
         rb.insert(1);
         rb.insert(2);
-        let ns = NodeSet::new(rb);
+        let ns = NodeSet::from(rb);
         assert_eq!(ns.len(), 2);
         assert!(!ns.is_empty());
     }
@@ -306,7 +312,7 @@ mod tests {
     #[test]
     fn test_nodeset_min_max_as_range() {
         // Contiguous range [5, 9] -> Some(5..10), min/max exact.
-        let ns = NodeSet::new((5u32..=9).collect());
+        let ns = NodeSet::from((5u32..=9).collect::<RoaringBitmap>());
         assert_eq!(ns.min(), Some(5));
         assert_eq!(ns.max(), Some(9));
         assert_eq!(ns.as_range(), Some(5..10));
@@ -316,7 +322,7 @@ mod tests {
         for id in [5u32, 6, 7, 9] {
             rb.insert(id);
         }
-        let sparse = NodeSet::new(rb);
+        let sparse = NodeSet::from(rb);
         assert_eq!(sparse.min(), Some(5));
         assert_eq!(sparse.max(), Some(9));
         assert_eq!(sparse.as_range(), None);
@@ -327,7 +333,7 @@ mod tests {
         assert_eq!(empty.as_range(), None);
 
         // Single element is a one-wide range.
-        let one = NodeSet::new(RoaringBitmap::from_iter([42u32]));
+        let one = NodeSet::from(RoaringBitmap::from_iter([42u32]));
         assert_eq!(one.as_range(), Some(42..43));
 
         // Bitset backing behaves the same for a contiguous run.
@@ -335,7 +341,7 @@ mod tests {
         for i in 2..=5 {
             bv.set(i, true);
         }
-        let bitset = NodeSet::new_bitset(bv);
+        let bitset = NodeSet::from(bv);
         assert_eq!(bitset.min(), Some(2));
         assert_eq!(bitset.max(), Some(5));
         assert_eq!(bitset.as_range(), Some(2..6));
@@ -343,18 +349,17 @@ mod tests {
 
     #[test]
     fn test_nodeset_par_fold() {
-        let sum_ids = |ns: &NodeSet| -> u64 {
-            ns.par_fold(|| 0u64, |acc, id| acc + id as u64, |a, b| a + b)
-        };
+        let sum_ids =
+            |ns: &NodeSet| -> u64 { ns.par_fold(|| 0u64, |acc, id| acc + id as u64, |a, b| a + b) };
         // Contiguous (range fast path) matches the sequential sum.
-        let contiguous = NodeSet::new((1u32..=1000).collect());
+        let contiguous = NodeSet::from((1u32..=1000).collect::<RoaringBitmap>());
         assert_eq!(sum_ids(&contiguous), (1..=1000u64).sum::<u64>());
         // Sparse (collected fallback path) — same arithmetic.
         let mut rb = RoaringBitmap::new();
         for id in [1u32, 2, 3, 1000] {
             rb.insert(id);
         }
-        assert_eq!(sum_ids(&NodeSet::new(rb)), 1 + 2 + 3 + 1000);
+        assert_eq!(sum_ids(&NodeSet::from(rb)), 1 + 2 + 3 + 1000);
         // Empty folds to the identity.
         assert_eq!(sum_ids(&NodeSet::empty()), 0);
     }
@@ -371,7 +376,7 @@ mod tests {
         let mut rb = RoaringBitmap::new();
         rb.insert(1);
         rb.insert(5);
-        let ns = NodeSet::new(rb);
+        let ns = NodeSet::from(rb);
         assert!(ns.contains(1));
         assert!(ns.contains(5));
         assert!(!ns.contains(3));
@@ -380,7 +385,7 @@ mod tests {
     #[test]
     fn test_nodeset_roaring_insert() {
         let rb = RoaringBitmap::new();
-        let mut ns = NodeSet::new(rb);
+        let mut ns = NodeSet::from(rb);
         assert!(!ns.contains(1));
         assert!(ns.insert(1));
         assert!(ns.contains(1));
@@ -391,7 +396,7 @@ mod tests {
     fn test_nodeset_roaring_remove() {
         let mut rb = RoaringBitmap::new();
         rb.insert(1);
-        let mut ns = NodeSet::new(rb);
+        let mut ns = NodeSet::from(rb);
         assert!(ns.contains(1));
         assert!(ns.remove(1));
         assert!(!ns.contains(1));
@@ -404,7 +409,7 @@ mod tests {
         rb.insert(1);
         rb.insert(3);
         rb.insert(5);
-        let ns = NodeSet::new(rb);
+        let ns = NodeSet::from(rb);
         let mut items: Vec<u32> = ns.iter().collect();
         items.sort();
         assert_eq!(items, vec![1, 3, 5]);
@@ -416,7 +421,7 @@ mod tests {
         bv.resize(10, false);
         bv.set(1, true);
         bv.set(3, true);
-        let ns = NodeSet::new_bitset(bv);
+        let ns = NodeSet::from(bv);
         assert_eq!(ns.len(), 2);
         assert!(!ns.is_empty());
         assert!(ns.contains(1));
@@ -427,7 +432,7 @@ mod tests {
     #[test]
     fn test_nodeset_bitset_insert() {
         let bv = bitvec::vec::BitVec::new();
-        let mut ns = NodeSet::new_bitset(bv);
+        let mut ns = NodeSet::from(bv);
         assert!(!ns.contains(5));
         assert!(ns.insert(5));
         assert!(ns.contains(5));
@@ -439,7 +444,7 @@ mod tests {
         let mut bv = bitvec::vec::BitVec::new();
         bv.resize(10, false);
         bv.set(3, true);
-        let mut ns = NodeSet::new_bitset(bv);
+        let mut ns = NodeSet::from(bv);
         assert!(ns.contains(3));
         assert!(ns.remove(3));
         assert!(!ns.contains(3));
@@ -453,7 +458,7 @@ mod tests {
         bv.set(1, true);
         bv.set(3, true);
         bv.set(7, true);
-        let ns = NodeSet::new_bitset(bv);
+        let ns = NodeSet::from(bv);
         let mut items: Vec<u32> = ns.iter().collect();
         items.sort();
         assert_eq!(items, vec![1, 3, 7]);
@@ -465,13 +470,13 @@ mod tests {
         rb1.insert(1);
         rb1.insert(2);
         rb1.insert(3);
-        let ns1 = NodeSet::new(rb1);
+        let ns1 = NodeSet::from(rb1);
 
         let mut rb2 = RoaringBitmap::new();
         rb2.insert(2);
         rb2.insert(3);
         rb2.insert(4);
-        let ns2 = NodeSet::new(rb2);
+        let ns2 = NodeSet::from(rb2);
 
         let result = &ns1 & &ns2;
         assert_eq!(result.len(), 2);
@@ -487,13 +492,13 @@ mod tests {
         bv1.resize(10, false);
         bv1.set(1, true);
         bv1.set(2, true);
-        let ns1 = NodeSet::new_bitset(bv1);
+        let ns1 = NodeSet::from(bv1);
 
         let mut bv2 = bitvec::vec::BitVec::new();
         bv2.resize(10, false);
         bv2.set(2, true);
         bv2.set(3, true);
-        let ns2 = NodeSet::new_bitset(bv2);
+        let ns2 = NodeSet::from(bv2);
 
         let result = &ns1 & &ns2;
         assert_eq!(result.len(), 1);
@@ -505,12 +510,12 @@ mod tests {
         let mut rb1 = RoaringBitmap::new();
         rb1.insert(1);
         rb1.insert(2);
-        let ns1 = NodeSet::new(rb1);
+        let ns1 = NodeSet::from(rb1);
 
         let mut rb2 = RoaringBitmap::new();
         rb2.insert(2);
         rb2.insert(3);
-        let ns2 = NodeSet::new(rb2);
+        let ns2 = NodeSet::from(rb2);
 
         let result = &ns1 | &ns2;
         assert_eq!(result.len(), 3);
@@ -524,12 +529,12 @@ mod tests {
         let mut bv1 = bitvec::vec::BitVec::new();
         bv1.resize(10, false);
         bv1.set(1, true);
-        let ns1 = NodeSet::new_bitset(bv1);
+        let ns1 = NodeSet::from(bv1);
 
         let mut bv2 = bitvec::vec::BitVec::new();
         bv2.resize(10, false);
         bv2.set(2, true);
-        let ns2 = NodeSet::new_bitset(bv2);
+        let ns2 = NodeSet::from(bv2);
 
         let result = &ns1 | &ns2;
         assert_eq!(result.len(), 2);
@@ -543,11 +548,11 @@ mod tests {
         rb1.insert(1);
         rb1.insert(2);
         rb1.insert(3);
-        let ns1 = NodeSet::new(rb1);
+        let ns1 = NodeSet::from(rb1);
 
         let mut rb2 = RoaringBitmap::new();
         rb2.insert(2);
-        let ns2 = NodeSet::new(rb2);
+        let ns2 = NodeSet::from(rb2);
 
         let result = &ns1 - &ns2;
         assert_eq!(result.len(), 2);
@@ -562,12 +567,12 @@ mod tests {
         bv1.resize(10, false);
         bv1.set(1, true);
         bv1.set(2, true);
-        let ns1 = NodeSet::new_bitset(bv1);
+        let ns1 = NodeSet::from(bv1);
 
         let mut bv2 = bitvec::vec::BitVec::new();
         bv2.resize(10, false);
         bv2.set(2, true);
-        let ns2 = NodeSet::new_bitset(bv2);
+        let ns2 = NodeSet::from(bv2);
 
         let result = &ns1 - &ns2;
         assert_eq!(result.len(), 1);
@@ -580,7 +585,7 @@ mod tests {
         let mut bv = bitvec::vec::BitVec::new();
         bv.resize(10, false);
         bv.set(5, true);
-        let mut ns = NodeSet::new_bitset(bv);
+        let mut ns = NodeSet::from(bv);
 
         // Try to remove a node_id that's out of bounds
         assert!(!ns.remove(20));
@@ -595,13 +600,13 @@ mod tests {
         for i in 0..500 {
             rb1.insert(i);
         }
-        let ns1 = NodeSet::new(rb1);
+        let ns1 = NodeSet::from(rb1);
 
         let mut rb2 = RoaringBitmap::new();
         for i in 200..700 {
             rb2.insert(i);
         }
-        let ns2 = NodeSet::new(rb2);
+        let ns2 = NodeSet::from(rb2);
 
         let result = &ns1 & &ns2;
         // Result should be > 256 nodes (intersection of 0..500 and 200..700 = 200..500 = 300 nodes)
@@ -619,13 +624,13 @@ mod tests {
         for i in 0..300 {
             rb1.insert(i);
         }
-        let ns1 = NodeSet::new(rb1);
+        let ns1 = NodeSet::from(rb1);
 
         let mut rb2 = RoaringBitmap::new();
         for i in 300..600 {
             rb2.insert(i);
         }
-        let ns2 = NodeSet::new(rb2);
+        let ns2 = NodeSet::from(rb2);
 
         let result = &ns1 | &ns2;
         // Result should be > 256 nodes, so it should be Roaring
@@ -643,13 +648,13 @@ mod tests {
         for i in 0..500 {
             rb1.insert(i);
         }
-        let ns1 = NodeSet::new(rb1);
+        let ns1 = NodeSet::from(rb1);
 
         let mut rb2 = RoaringBitmap::new();
         for i in 100..200 {
             rb2.insert(i);
         }
-        let ns2 = NodeSet::new(rb2);
+        let ns2 = NodeSet::from(rb2);
 
         let result = &ns1 - &ns2;
         // Result should be > 256 nodes, so it should be Roaring

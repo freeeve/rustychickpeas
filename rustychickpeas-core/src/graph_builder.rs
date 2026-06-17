@@ -931,7 +931,7 @@ impl GraphBuilder {
                 nodes.sort_unstable();
                 nodes.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(nodes).unwrap();
-                (label, NodeSet::new(bitmap))
+                (label, NodeSet::from(bitmap))
             })
             .collect()
     }
@@ -951,7 +951,7 @@ impl GraphBuilder {
                 rel_ids.sort_unstable();
                 rel_ids.dedup();
                 let bitmap = RoaringBitmap::from_sorted_iter(rel_ids).unwrap();
-                (rel_type, NodeSet::new(bitmap))
+                (rel_type, NodeSet::from(bitmap))
             })
             .collect()
     }
@@ -1110,7 +1110,7 @@ impl GraphBuilder {
                             bucket.sort_unstable();
                             bucket.dedup();
                             let bitmap = RoaringBitmap::from_sorted_iter(bucket).unwrap();
-                            key_index.insert(val_id, NodeSet::new(bitmap));
+                            key_index.insert(val_id, NodeSet::from(bitmap));
                         }
 
                         Some(((label, key), key_index))

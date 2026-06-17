@@ -5029,7 +5029,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            Field::new("str_prop", DataType::Utf8, false),
+            Field::new("prop_str", DataType::Utf8, false),
             Field::new("i64_prop", DataType::Int64, false),
             Field::new("f64_prop", DataType::Float64, false),
             Field::new("bool_prop", DataType::Boolean, false),
@@ -5069,14 +5069,14 @@ mod tests {
                 file_path.to_str().unwrap(),
                 Some("id"),
                 None,
-                Some(vec!["str_prop", "i64_prop", "f64_prop", "bool_prop"]),
+                Some(vec!["prop_str", "i64_prop", "f64_prop", "bool_prop"]),
                 None,
                 None,
             )
             .unwrap();
 
         // Verify string property
-        let str_val = builder.prop(1, "str_prop");
+        let str_val = builder.prop(1, "prop_str");
         assert!(str_val.is_some(), "Should have string property");
         if let Some(ValueId::Str(sid)) = str_val {
             assert_eq!(builder.resolve_string(sid), "test_string");
