@@ -14,7 +14,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::{Direction, GraphReader, PropValue};
+use crate::{Direction, GraphReader, PropValue, ResidentSearch};
 use rustychickpeas_format::rrsr::RecordIndex;
 
 /// Resident graph: construct from the full RCPG file bytes.
@@ -125,6 +125,29 @@ impl WasmGraph {
             Some(PropValue::Str(s)) => JsValue::from_str(s),
             None => JsValue::UNDEFINED,
         }
+    }
+}
+
+/// Resident trigram search: construct from the full `.rrs` index bytes, then
+/// `search` for ranked doc IDs. The IDs share the graph's node-ID space, so a
+/// hit feeds straight into `WasmGraph` traversal and `WasmRecordIndex` fetches.
+#[wasm_bindgen]
+pub struct WasmSearch {
+    inner: ResidentSearch,
+}
+
+#[wasm_bindgen]
+impl WasmSearch {
+    #[wasm_bindgen(constructor)]
+    pub fn new(rrs_bytes: &[u8]) -> Result<WasmSearch, JsError> {
+        ResidentSearch::open(rrs_bytes.to_vec())
+            .map(|inner| WasmSearch { inner })
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Doc IDs matching `query`, best-ranked first, up to `limit`.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<u32> {
+        self.inner.search(query, limit)
     }
 }
 

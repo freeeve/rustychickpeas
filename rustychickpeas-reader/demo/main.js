@@ -1,8 +1,11 @@
-// Demo of the split-residency model:
-//  - graph.rcpg is fetched ONCE and lives in wasm memory (traversals are local)
+// Demo of the shared-ID, split-residency model:
+//  - index.rrs (search) and graph.rcpg (topology) are fetched ONCE and live in
+//    wasm memory; search and traversal run locally with no network round trips
 //  - records.idx is fetched once (it's small); records.bin is NEVER fetched
 //    whole — each record read is a coalesced HTTP Range request
-import init, { WasmGraph, WasmRecordIndex } from "../pkg/rustychickpeas_reader.js";
+//  - the same u32 id is the search doc id, the graph node id, and the record id,
+//    so a hit flows search -> traverse -> record with no remapping
+import init, { WasmGraph, WasmSearch, WasmRecordIndex } from "../pkg/rustychickpeas_reader.js";
 
 const $ = (id) => document.getElementById(id);
 const log = (msg) => { $("log").textContent = msg; };
@@ -17,44 +20,77 @@ async function fetchBytes(url, range) {
 await init();
 
 const graph = new WasmGraph(await fetchBytes("graph.rcpg"));
+const search = new WasmSearch(await fetchBytes("index.rrs"));
 const recordIndex = new WasmRecordIndex(await fetchBytes("records.idx"));
 $("stats").textContent =
-  `resident: ${graph.nNodes()} nodes, ${graph.nRels()} rels, ` +
+  `resident: ${graph.nodeCount()} nodes, ${graph.relationshipCount()} rels, ` +
   `labels [${graph.labels().join(", ")}], types [${graph.relationshipTypes().join(", ")}]; ` +
   `${recordIndex.len()} records remote`;
 
-async function fetchRecord(id) {
-  // plan_ranges returns [start0, end0, ...]; a single id yields one range
-  const plan = recordIndex.planRanges(new Uint32Array([id]), 0);
-  if (plan.length === 0) return null;
-  const [start, end] = [plan[0], plan[1]];
-  const bytes = await fetchBytes("records.bin", [start, end]);
-  log(`fetched bytes ${start}-${end - 1} of records.bin (${end - start} bytes)`);
-  const record = recordIndex.extract(id, start, bytes);
-  return record ? JSON.parse(new TextDecoder().decode(record)) : null;
+// Fetch many records in few range requests: plan coalesces nearby records into
+// shared reads, then each record is sliced out of the chunk that covers it.
+async function fetchRecords(ids) {
+  const out = new Map();
+  if (ids.length === 0) return out;
+  const plan = recordIndex.planRanges(new Uint32Array(ids), 4096);
+  const chunks = [];
+  for (let i = 0; i < plan.length; i += 2) {
+    const [s, e] = [plan[i], plan[i + 1]];
+    chunks.push({ s, e, bytes: await fetchBytes("records.bin", [s, e]) });
+  }
+  log(`fetched ${ids.length} records in ${chunks.length} range request(s)`);
+  for (const id of ids) {
+    const rr = recordIndex.recordRange(id); // [start, end] or []
+    if (rr.length === 0) continue;
+    const chunk = chunks.find((c) => rr[0] >= c.s && rr[1] <= c.e);
+    if (!chunk) continue;
+    const bytes = recordIndex.extract(id, chunk.s, chunk.bytes);
+    if (bytes) out.set(id, JSON.parse(new TextDecoder().decode(bytes)));
+  }
+  return out;
+}
+
+function wireNodeLinks(container) {
+  for (const a of container.querySelectorAll("a[data-node]")) {
+    a.onclick = (e) => { e.preventDefault(); $("node").value = a.dataset.node; show(); };
+  }
+}
+
+async function runSearch() {
+  const q = $("q").value.trim();
+  const ids = Array.from(search.search(q, 25));
+  if (ids.length === 0) { $("hits").innerHTML = "<p>(no hits)</p>"; return; }
+  const records = await fetchRecords(ids);
+  $("hits").innerHTML = ids
+    .map((id) => {
+      const r = records.get(id);
+      const title = r ? r.title : "(record missing)";
+      return `<a class="hit" href="#" data-node="${id}"><b>#${id}</b> ${title}</a>`;
+    })
+    .join("");
+  wireNodeLinks($("hits"));
 }
 
 function renderNodes(title, ids) {
-  const links = [...ids]
-    .map((n) => `<a class="nbr" href="#" data-node="${n}">${n}</a>`)
-    .join(" ");
+  const links = [...ids].map((n) => `<a class="nbr" href="#" data-node="${n}">${n}</a>`).join(" ");
   $("out").innerHTML = `<p>${title}</p><p>${links || "(none)"}</p>`;
-  for (const a of $("out").querySelectorAll("a[data-node]")) {
-    a.onclick = (e) => { e.preventDefault(); $("node").value = a.dataset.node; show(); };
-  }
+  wireNodeLinks($("out"));
 }
 
 async function show() {
   const id = Number($("node").value);
   const labels = graph.nodeLabels(id).join(", ") || "(no labels)";
+  const out = graph.neighbors(id, 0); // 0 = outgoing
   renderNodes(
-    `node ${id} [${labels}] — out: ${graph.outNeighbors(id).length}, in: ${graph.inNeighbors(id).length}`,
-    graph.outNeighbors(id),
+    `node ${id} [${labels}] — cites ${out.length}, cited-by ${graph.neighbors(id, 1).length}`,
+    out,
   );
-  const record = await fetchRecord(id);
+  const record = (await fetchRecords([id])).get(id);
   $("record").textContent = record ? JSON.stringify(record, null, 2) : "(no record)";
 }
 
+$("search").onclick = runSearch;
+$("q").onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
 $("show").onclick = show;
 $("bfs").onclick = () => {
   const id = Number($("node").value);
@@ -64,4 +100,5 @@ $("bfs").onclick = () => {
   renderNodes(`bfs(node ${id}, depth 2, outgoing) reached ${reached.length} nodes in ${ms} ms (zero network)`, reached);
 };
 
+await runSearch();
 await show();

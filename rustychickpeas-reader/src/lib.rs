@@ -293,6 +293,57 @@ impl GraphReader {
     }
 }
 
+/// Resident trigram search over a fully-loaded `.rrs` index.
+///
+/// For small indexes that fit in memory — like the browser demo, where the
+/// graph is already resident — the whole `.rrs` is loaded and queried in
+/// process. Large indexes should be range-fetched with roaringrange directly.
+/// Doc IDs returned by [`ResidentSearch::search`] share the graph's node-ID
+/// space, so a hit traverses and fetches its record with no remapping.
+pub struct ResidentSearch {
+    index: roaringrange::Index<roaringrange::MemoryFetch>,
+}
+
+impl ResidentSearch {
+    /// Open a `.rrs` trigram index from its full bytes.
+    pub fn open(rrs_bytes: Vec<u8>) -> std::result::Result<Self, roaringrange::IndexError> {
+        let fetch = roaringrange::MemoryFetch::new(rrs_bytes);
+        // `MemoryFetch` reads resolve synchronously, so the open future is ready
+        // on the first poll — no async runtime needed (this compiles for wasm).
+        let index = poll_ready(roaringrange::Index::open(fetch))
+            .expect("MemoryFetch open future resolves synchronously")?;
+        Ok(ResidentSearch { index })
+    }
+
+    /// Doc IDs matching `query`, best-ranked first, up to `limit`. Returns an
+    /// empty vec on a query error (e.g. a query shorter than one trigram).
+    pub fn search(&self, query: &str, limit: usize) -> Vec<u32> {
+        poll_ready(self.index.search(query, limit))
+            .and_then(|r| r.ok())
+            .unwrap_or_default()
+    }
+}
+
+/// Drive an immediately-ready future to completion with a single poll, via a
+/// no-op waker. Returns `None` if the future is pending (never the case for the
+/// in-memory `MemoryFetch`-backed searches here). Keeps an async runtime out of
+/// the wasm-safe reader.
+fn poll_ready<F: std::future::Future>(fut: F) -> Option<F::Output> {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    fn noop(_: *const ()) {}
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = Box::pin(fut);
+    match fut.as_mut().poll(&mut cx) {
+        Poll::Ready(v) => Some(v),
+        Poll::Pending => None,
+    }
+}
+
 /// Binary-search a sorted `(id, value)` sparse column for `id`.
 fn sparse_get<V: Copy>(pairs: &[(u32, V)], id: u32) -> Option<V> {
     pairs
@@ -364,5 +415,29 @@ mod tests {
         let r = GraphReader::topology_only(&bytes).unwrap();
         // property columns are skipped, so even a present key returns None
         assert_eq!(r.node_prop(0, "year"), None);
+    }
+
+    #[test]
+    fn resident_search_returns_doc_ids() {
+        use roaring::RoaringBitmap;
+        // Build a 2-doc trigram index inline (doc 0 = "graph database").
+        let docs = ["graph database", "vector search"];
+        let mut postings: HashMap<u64, RoaringBitmap> = HashMap::new();
+        for (id, text) in docs.iter().enumerate() {
+            for key in roaringrange::ngram_keys(text, 3) {
+                postings.entry(key).or_default().insert(id as u32);
+            }
+        }
+        let entries: Vec<(u64, Vec<u8>)> = postings
+            .into_iter()
+            .map(|(k, bm)| (k, roaringrange::build::serialize_posting(&bm)))
+            .collect();
+        let mut rrs = Vec::new();
+        roaringrange::build::write_index(&mut rrs, 3, 0, entries).unwrap();
+
+        let search = ResidentSearch::open(rrs).unwrap();
+        let hits = search.search("graph database", 10);
+        assert!(hits.contains(&0), "expected doc 0 in {hits:?}");
+        assert!(!hits.contains(&1), "doc 1 should not match, got {hits:?}");
     }
 }

@@ -6,22 +6,36 @@
   <style>
     body { font-family: ui-monospace, monospace; margin: 2rem; max-width: 60rem; }
     h1 { font-size: 1.2rem; }
+    h2 { font-size: 1rem; }
     button { margin: 0.1rem; }
+    input[type=text] { width: 18rem; padding: 0.2rem; }
     #record { white-space: pre-wrap; background: #f4f4f4; padding: 0.75rem; }
     #stats, #log { color: #555; font-size: 0.85rem; }
     .nbr { display: inline-block; padding: 0.15rem 0.4rem; }
+    .hit { display: block; padding: 0.1rem 0; }
+    .hit b { color: #036; }
   </style>
 </head>
 <body>
-  <h1>rustychickpeas: resident graph traversal + ranged record gets</h1>
+  <h1>rustychickpeas: search → traverse → ranged record get</h1>
   <div id="stats">loading…</div>
+
+  <h2>1. search (resident trigram index)</h2>
+  <p>
+    <input id="q" type="text" placeholder="e.g. graph database" value="graph database">
+    <button id="search">search</button>
+  </p>
+  <div id="hits"></div>
+
+  <h2>2. traverse (resident graph) — one shared id space</h2>
   <p>
     node <input id="node" type="number" value="0" min="0" style="width: 5rem">
     <button id="show">show</button>
     <button id="bfs">bfs depth 2</button>
   </p>
   <div id="out"></div>
-  <h2 style="font-size:1rem">record (fetched via HTTP Range)</h2>
+
+  <h2>3. record (fetched via HTTP Range)</h2>
   <div id="record">–</div>
   <div id="log"></div>
   <script type="module" src="main.js"></script>
