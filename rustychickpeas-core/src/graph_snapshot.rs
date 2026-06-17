@@ -1690,7 +1690,7 @@ impl GraphSnapshot {
     /// terminates and is deterministic.
     fn build_chain_roots(&self, direction: Direction, rel_type: RelationshipType) -> Vec<NodeId> {
         let n = self.n_nodes as usize;
-        let matcher = RelMatch::One(rel_type);
+        let matcher = RelMatch::one(rel_type);
         const UNRESOLVED: NodeId = NodeId::MAX;
         let mut root = vec![UNRESOLVED; n];
         let mut path: Vec<NodeId> = Vec::new();
@@ -1915,6 +1915,71 @@ impl GraphSnapshot {
             .unwrap_or_else(PoisonError::into_inner);
         let entry = index.entry(index_key).or_insert(key_index_final);
         entry.get(&value).cloned()
+    }
+
+    /// Whether `node` carries `label` — the fundamental label-membership test
+    /// (`nodes_with_label` + bitmap `contains`), exposed so callers need not pair
+    /// the two by hand.
+    pub fn has_label(&self, node: NodeId, label: &str) -> bool {
+        self.label_from_str(label)
+            .and_then(|l| self.nodes_with_label_id(l))
+            .is_some_and(|ns| ns.contains(node))
+    }
+
+    /// Neighbours of `node` via `rel_type` in `direction` that also carry
+    /// `label` — the typed-traversal-then-label-filter pattern, as a bitmap
+    /// membership test against the label's node set.
+    pub fn neighbors_with_label<'a>(
+        &'a self,
+        node: NodeId,
+        direction: Direction,
+        rel_type: &str,
+        label: &str,
+    ) -> impl Iterator<Item = NodeId> + 'a {
+        let label_set = self.label_from_str(label).and_then(|l| self.nodes_with_label_id(l));
+        self.neighbors_by_type(node, direction, rel_type)
+            .filter(move |&n| label_set.is_some_and(|ns| ns.contains(n)))
+    }
+
+    /// Find a single node by a property value across ALL labels (unlike
+    /// [`nodes_with_property`](Self::nodes_with_property), which is label-scoped).
+    /// Useful for a unique key such as a `uri`; returns the smallest matching node
+    /// id. The label-free `(key, value)` index is built lazily on first call and
+    /// cached under a reserved sentinel label.
+    pub fn node_by_property<V: IntoValueId>(&self, key: &str, value: V) -> Option<NodeId> {
+        let any = Label::new(u32::MAX);
+        let key_id = self.property_key_from_str(key)?;
+        let value_id = value.into_value_id(self)?;
+        {
+            let index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(key_index) = index.get(&(any, key_id)) {
+                return key_index.get(&value_id).and_then(|ns| ns.iter().next());
+            }
+        }
+        let column = self.columns.get(&key_id)?;
+        let key_index = Self::build_property_index_for_key_and_label(column, None);
+        let mut index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+        let entry = index.entry((any, key_id)).or_insert(key_index);
+        entry.get(&value_id).and_then(|ns| ns.iter().next())
+    }
+
+    /// Histogram of the target nodes reached from `sources` via `rel_type` in
+    /// `direction` (how many of the sources point to each target) — the
+    /// "count edges into each neighbour" aggregation behind many group-by-count
+    /// queries.
+    pub fn target_counts(
+        &self,
+        sources: impl IntoIterator<Item = NodeId>,
+        direction: Direction,
+        rel_type: &str,
+    ) -> HashMap<NodeId, usize> {
+        let mut counts: HashMap<NodeId, usize> = HashMap::new();
+        for s in sources {
+            for t in self.neighbors_by_type(s, direction, rel_type) {
+                *counts.entry(t).or_default() += 1;
+            }
+        }
+        counts
     }
 
     /// Full-text search: nodes of `label` whose `key` string property contains
@@ -3705,23 +3770,74 @@ mod tests {
 ///
 /// Produced from a [`RelTypeFilter`] argument; the `All` and `One` cases are
 /// allocation-free.
+/// Number of relationship types a [`RelMatch`] holds inline before spilling to a
+/// heap `Vec`. Most traversal filters name a single type, so the common case is
+/// allocation-free.
+const REL_MATCH_INLINE: usize = 4;
+
+/// A resolved relationship-type filter. Opaque: filters of up to
+/// [`REL_MATCH_INLINE`] types are stored inline (no allocation); larger filters
+/// spill to a `Vec`. Build one from already-resolved types with `collect()`, or
+/// from [`RelMatch::all`] / [`RelMatch::one`].
 #[derive(Clone, Debug)]
-pub enum RelMatch {
+pub struct RelMatch(RelMatchRepr);
+
+#[derive(Clone, Debug)]
+enum RelMatchRepr {
     /// Match every relationship type (an empty filter).
     All,
-    /// Match a single resolved type.
-    One(RelationshipType),
-    /// Match any of a set of resolved types.
-    Set(Vec<RelationshipType>),
+    /// Up to `REL_MATCH_INLINE` resolved types, stored without allocating.
+    Inline([Option<RelationshipType>; REL_MATCH_INLINE]),
+    /// `REL_MATCH_INLINE + 1` or more resolved types.
+    Heap(Vec<RelationshipType>),
 }
 
 impl RelMatch {
+    /// A filter that matches every relationship type.
+    #[inline]
+    pub fn all() -> RelMatch {
+        RelMatch(RelMatchRepr::All)
+    }
+
+    /// A filter matching a single resolved type (no allocation).
+    #[inline]
+    pub fn one(rt: RelationshipType) -> RelMatch {
+        let mut inline = [None; REL_MATCH_INLINE];
+        inline[0] = Some(rt);
+        RelMatch(RelMatchRepr::Inline(inline))
+    }
+
     #[inline]
     fn matches(&self, rt: RelationshipType) -> bool {
-        match self {
-            RelMatch::All => true,
-            RelMatch::One(t) => *t == rt,
-            RelMatch::Set(v) => v.contains(&rt),
+        match &self.0 {
+            RelMatchRepr::All => true,
+            RelMatchRepr::Inline(types) => types.iter().flatten().any(|&t| t == rt),
+            RelMatchRepr::Heap(v) => v.contains(&rt),
+        }
+    }
+}
+
+/// Build a filter from already-resolved types: up to [`REL_MATCH_INLINE`] are
+/// kept inline (no allocation), more spill to a `Vec`. An empty iterator matches
+/// nothing — use [`RelMatch::all`] for "match every type".
+impl FromIterator<RelationshipType> for RelMatch {
+    fn from_iter<I: IntoIterator<Item = RelationshipType>>(iter: I) -> Self {
+        let mut inline: [Option<RelationshipType>; REL_MATCH_INLINE] = [None; REL_MATCH_INLINE];
+        let mut it = iter.into_iter();
+        for slot in inline.iter_mut() {
+            match it.next() {
+                Some(rt) => *slot = Some(rt),
+                None => return RelMatch(RelMatchRepr::Inline(inline)),
+            }
+        }
+        match it.next() {
+            None => RelMatch(RelMatchRepr::Inline(inline)),
+            Some(rt) => {
+                let mut v: Vec<RelationshipType> = inline.iter().flatten().copied().collect();
+                v.push(rt);
+                v.extend(it);
+                RelMatch(RelMatchRepr::Heap(v))
+            }
         }
     }
 }
@@ -3744,7 +3860,7 @@ pub trait RelTypeFilter {
 impl RelTypeFilter for RelationshipType {
     #[inline]
     fn into_match(self, _graph: &GraphSnapshot) -> RelMatch {
-        RelMatch::One(self)
+        RelMatch::one(self)
     }
 }
 
@@ -3752,22 +3868,18 @@ impl RelTypeFilter for &str {
     #[inline]
     fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
         // An unresolvable name has no edges, so it matches nothing.
-        graph
-            .relationship_type_from_str(self)
-            .map_or(RelMatch::Set(Vec::new()), RelMatch::One)
+        graph.relationship_type_from_str(self).into_iter().collect()
     }
 }
 
 impl RelTypeFilter for &[&str] {
     fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
         if self.is_empty() {
-            RelMatch::All
+            RelMatch::all()
         } else {
-            RelMatch::Set(
-                self.iter()
-                    .filter_map(|s| graph.relationship_type_from_str(s))
-                    .collect(),
-            )
+            self.iter()
+                .filter_map(|s| graph.relationship_type_from_str(s))
+                .collect()
         }
     }
 }
@@ -3782,9 +3894,9 @@ impl<const N: usize> RelTypeFilter for &[&str; N] {
 impl RelTypeFilter for &[RelationshipType] {
     fn into_match(self, _graph: &GraphSnapshot) -> RelMatch {
         if self.is_empty() {
-            RelMatch::All
+            RelMatch::all()
         } else {
-            RelMatch::Set(self.to_vec())
+            self.iter().copied().collect()
         }
     }
 }
