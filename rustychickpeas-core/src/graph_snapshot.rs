@@ -535,16 +535,18 @@ pub type ChainRoots = Arc<[NodeId]>;
 /// column is dense, else the general column lookup. Build with
 /// [`GraphSnapshot::i64_col`] (node columns, indexed by node id) or
 /// [`GraphSnapshot::i64_edge_col`] (relationship columns, indexed by CSR position).
+#[derive(Clone, Copy)]
 pub struct I64Col<'a> {
     inner: I64ColInner<'a>,
 }
 
+#[derive(Clone, Copy)]
 enum I64ColInner<'a> {
     Dense(&'a [i64]),
     Other(&'a Column),
 }
 
-impl I64Col<'_> {
+impl<'a> I64Col<'a> {
     /// The `i64` value at `pos` (a node id for node columns, a relationship CSR
     /// position for edge columns), or `None` when absent.
     #[inline]
@@ -557,20 +559,33 @@ impl I64Col<'_> {
             },
         }
     }
+
+    /// The underlying dense `i64` slice when the column is dense — index it by node
+    /// id / CSR position directly in a hot loop; `None` for a sparse/rank column
+    /// (fall back to [`get`](Self::get) then).
+    #[inline]
+    pub fn as_slice(&self) -> Option<&'a [i64]> {
+        match self.inner {
+            I64ColInner::Dense(slice) => Some(slice),
+            I64ColInner::Other(_) => None,
+        }
+    }
 }
 
 /// A resolved boolean property column (the boolean analogue of [`I64Col`]); build
 /// with [`GraphSnapshot::bool_col`].
+#[derive(Clone, Copy)]
 pub struct BoolCol<'a> {
     inner: BoolColInner<'a>,
 }
 
+#[derive(Clone, Copy)]
 enum BoolColInner<'a> {
     Dense(&'a bitvec::slice::BitSlice),
     Other(&'a Column),
 }
 
-impl BoolCol<'_> {
+impl<'a> BoolCol<'a> {
     /// The boolean value at node `pos`, or `None` when absent.
     #[inline]
     pub fn get(&self, pos: NodeId) -> Option<bool> {
@@ -580,6 +595,16 @@ impl BoolCol<'_> {
                 Some(ValueId::Bool(v)) => Some(v),
                 _ => None,
             },
+        }
+    }
+
+    /// The underlying dense bit slice when the column is dense — index it by node id
+    /// directly in a hot loop; `None` for a sparse/rank column.
+    #[inline]
+    pub fn as_slice(&self) -> Option<&'a bitvec::slice::BitSlice> {
+        match self.inner {
+            BoolColInner::Dense(slice) => Some(slice),
+            BoolColInner::Other(_) => None,
         }
     }
 }
