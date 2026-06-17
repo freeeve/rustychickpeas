@@ -530,6 +530,60 @@ impl PartialOrd for DijkstraState {
 /// hot loop can hold it and index lock-free.
 pub type ChainRoots = Arc<[NodeId]>;
 
+/// A resolved `i64` property column: the key -> column lookup is done once, then
+/// [`I64Col::get`] reads a position via the dense `Vec<i64>` fast path when the
+/// column is dense, else the general column lookup. Build with
+/// [`GraphSnapshot::i64_col`] (node columns, indexed by node id) or
+/// [`GraphSnapshot::i64_edge_col`] (relationship columns, indexed by CSR position).
+pub struct I64Col<'a> {
+    inner: I64ColInner<'a>,
+}
+
+enum I64ColInner<'a> {
+    Dense(&'a [i64]),
+    Other(&'a Column),
+}
+
+impl I64Col<'_> {
+    /// The `i64` value at `pos` (a node id for node columns, a relationship CSR
+    /// position for edge columns), or `None` when absent.
+    #[inline]
+    pub fn get(&self, pos: NodeId) -> Option<i64> {
+        match &self.inner {
+            I64ColInner::Dense(slice) => slice.get(pos as usize).copied(),
+            I64ColInner::Other(col) => match col.get(pos) {
+                Some(ValueId::I64(v)) => Some(v),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// A resolved boolean property column (the boolean analogue of [`I64Col`]); build
+/// with [`GraphSnapshot::bool_col`].
+pub struct BoolCol<'a> {
+    inner: BoolColInner<'a>,
+}
+
+enum BoolColInner<'a> {
+    Dense(&'a bitvec::slice::BitSlice),
+    Other(&'a Column),
+}
+
+impl BoolCol<'_> {
+    /// The boolean value at node `pos`, or `None` when absent.
+    #[inline]
+    pub fn get(&self, pos: NodeId) -> Option<bool> {
+        match &self.inner {
+            BoolColInner::Dense(slice) => slice.get(pos as usize).map(|b| *b),
+            BoolColInner::Other(col) => match col.get(pos) {
+                Some(ValueId::Bool(v)) => Some(v),
+                _ => None,
+            },
+        }
+    }
+}
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
@@ -1966,7 +2020,34 @@ impl GraphSnapshot {
         rel_types: impl RelTypeFilter,
         set: &'a NodeSet,
     ) -> impl Iterator<Item = NodeId> + 'a {
-        self.neighbors_by_type(node, direction, rel_types).filter(move |&n| set.contains(n))
+        self.neighbors_by_type(node, direction, rel_types)
+            .filter(move |&n| set.contains(n))
+    }
+
+    /// The first neighbour of `node` along `rel_types` in `direction`, or `None`
+    /// -- the `neighbors_by_type(..).next()` idiom that pervades single-step
+    /// lookups (a message's creator, a person's city, ...). `rel_types` accepts a
+    /// single type, a slice, or `None` for any type (see [`RelTypeFilter`]).
+    pub fn first_neighbor(
+        &self,
+        node: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+    ) -> Option<NodeId> {
+        self.neighbors_by_type(node, direction, rel_types).next()
+    }
+
+    /// Walk a fixed chain of single-relationship steps from `start`, taking the
+    /// first neighbour at each `(direction, rel_type)` step -- e.g. person ->
+    /// city -> country. Returns `None` as soon as a step has no neighbour. (Each
+    /// step follows exactly one rel type; for a step with alternative types, call
+    /// [`first_neighbor`](Self::first_neighbor) directly.)
+    pub fn follow(&self, start: NodeId, steps: &[(Direction, &str)]) -> Option<NodeId> {
+        let mut cur = start;
+        for &(direction, rel) in steps {
+            cur = self.first_neighbor(cur, direction, rel)?;
+        }
+        Some(cur)
     }
 
     /// Find a single node by a property value across ALL labels (unlike
@@ -1979,14 +2060,20 @@ impl GraphSnapshot {
         let key_id = self.property_key_from_str(key)?;
         let value_id = value.into_value_id(self)?;
         {
-            let index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+            let index = self
+                .prop_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if let Some(key_index) = index.get(&(any, key_id)) {
                 return key_index.get(&value_id).and_then(|ns| ns.iter().next());
             }
         }
         let column = self.columns.get(&key_id)?;
         let key_index = Self::build_property_index_for_key_and_label(column, None);
-        let mut index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut index = self
+            .prop_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let entry = index.entry((any, key_id)).or_insert(key_index);
         entry.get(&value_id).and_then(|ns| ns.iter().next())
     }
@@ -2288,6 +2375,59 @@ impl GraphSnapshot {
     /// Get property value for a relationship (internal ID-based version)
     fn relationship_property_id(&self, rel_csr_pos: u32, key: PropertyKey) -> Option<ValueId> {
         self.rel_columns.get(&key)?.get(rel_csr_pos)
+    }
+
+    /// A typed reader for the `i64` node property `key`, resolved once. Reads take
+    /// the dense slice fast path when the column is dense (see [`I64Col`]); `None`
+    /// if no such column exists. Hoist this out of a hot loop instead of calling
+    /// [`prop`](Self::prop) (which re-resolves the key and matches [`ValueId`]) per
+    /// node.
+    pub fn i64_col(&self, key: &str) -> Option<I64Col<'_>> {
+        let col = self.columns.get(&self.property_key_from_str(key)?)?;
+        Some(I64Col {
+            inner: match col.as_i64_slice() {
+                Some(slice) => I64ColInner::Dense(slice),
+                None => I64ColInner::Other(col),
+            },
+        })
+    }
+
+    /// A typed reader for the `i64` relationship property `key`, indexed by CSR
+    /// position (the edge analogue of [`i64_col`](Self::i64_col); see
+    /// [`relationship_property`](Self::relationship_property) for the position).
+    pub fn i64_edge_col(&self, key: &str) -> Option<I64Col<'_>> {
+        let col = self.rel_columns.get(&self.property_key_from_str(key)?)?;
+        Some(I64Col {
+            inner: match col.as_i64_slice() {
+                Some(slice) => I64ColInner::Dense(slice),
+                None => I64ColInner::Other(col),
+            },
+        })
+    }
+
+    /// A typed reader for the boolean node property `key`, resolved once (the
+    /// boolean analogue of [`i64_col`](Self::i64_col); see [`BoolCol`]).
+    pub fn bool_col(&self, key: &str) -> Option<BoolCol<'_>> {
+        let col = self.columns.get(&self.property_key_from_str(key)?)?;
+        Some(BoolCol {
+            inner: match col.as_bool_slice() {
+                Some(slice) => BoolColInner::Dense(slice),
+                None => BoolColInner::Other(col),
+            },
+        })
+    }
+
+    /// The string node property `key` for `node`, or `None` when absent **or
+    /// empty**. Dense string columns store a missing value as `""`, so callers
+    /// otherwise repeat `prop(..).filter(|s| !s.is_empty())`; this folds that in.
+    pub fn str_prop(&self, node: NodeId, key: &str) -> Option<&str> {
+        match self.prop(node, key) {
+            Some(ValueId::Str(id)) => match self.resolve_string(id) {
+                Some(s) if !s.is_empty() => Some(s),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// Get the version of this snapshot
@@ -3245,6 +3385,60 @@ mod tests {
         let nodes = snapshot.nodes_with_property("Person", "active", true);
         assert!(nodes.is_some());
         assert_eq!(nodes.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_column_readers_and_neighbor_sugar() {
+        // person0 -knows-> person1; person0 -isLocatedIn-> city2 -isPartOf-> country3.
+        let mut b = GraphBuilder::new(Some(4), Some(4));
+        b.add_node(Some(0), &["Person"]).unwrap();
+        b.add_node(Some(1), &["Person"]).unwrap();
+        b.add_node(Some(2), &["City"]).unwrap();
+        b.add_node(Some(3), &["Country"]).unwrap();
+        b.set_prop_i64(0, "plid", 100).unwrap();
+        b.set_prop_bool(0, "active", true).unwrap();
+        b.set_prop_str(0, "name", "Alice").unwrap();
+        b.set_prop_str(1, "name", "").unwrap(); // empty string -> str_prop treats as absent
+        b.add_relationship(0, 1, "knows").unwrap();
+        b.add_relationship(0, 2, "isLocatedIn").unwrap();
+        b.add_relationship(2, 3, "isPartOf").unwrap();
+        let g = b.finalize(None);
+
+        // first_neighbor: the neighbors_by_type(..).next() idiom, both directions.
+        assert_eq!(g.first_neighbor(0, Direction::Outgoing, "knows"), Some(1));
+        assert_eq!(
+            g.first_neighbor(0, Direction::Outgoing, "isLocatedIn"),
+            Some(2)
+        );
+        assert_eq!(g.first_neighbor(1, Direction::Incoming, "knows"), Some(0));
+        assert_eq!(
+            g.first_neighbor(0, Direction::Outgoing, "nonexistent"),
+            None
+        );
+
+        // follow: chained one-of-each-step walk person -> city -> country.
+        assert_eq!(
+            g.follow(
+                0,
+                &[
+                    (Direction::Outgoing, "isLocatedIn"),
+                    (Direction::Outgoing, "isPartOf")
+                ]
+            ),
+            Some(3)
+        );
+        assert_eq!(g.follow(0, &[]), Some(0)); // no steps -> start
+        assert_eq!(g.follow(1, &[(Direction::Outgoing, "isLocatedIn")]), None); // broken chain
+
+        // Typed column readers: resolve the key once, then read by node.
+        assert_eq!(g.i64_col("plid").unwrap().get(0), Some(100));
+        assert!(g.i64_col("nonexistent").is_none());
+        assert_eq!(g.bool_col("active").unwrap().get(0), Some(true));
+
+        // str_prop: present value, empty-as-absent, and missing key all distinguished.
+        assert_eq!(g.str_prop(0, "name"), Some("Alice"));
+        assert_eq!(g.str_prop(1, "name"), None); // empty dense slot reads back as absent
+        assert_eq!(g.str_prop(0, "missing"), None);
     }
 
     #[test]

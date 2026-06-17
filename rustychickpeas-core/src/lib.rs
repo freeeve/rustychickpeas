@@ -22,14 +22,14 @@ pub use rustychickpeas_format as format;
 
 // Re-export main types
 pub use error::{GraphError, Result};
+pub use fulltext::FullTextField;
+pub use geo::{haversine_km, GeoIndex};
 pub use graph_builder::GraphBuilder;
 pub use graph_builder_csv::CsvColumnType;
 pub use graph_snapshot::{
-    Column, GraphSnapshot, NeighborsByType, RelMatch, RelTypeFilter, RelationshipRef,
-    RelationshipsByType, ShortestPaths, ValueId,
+    BoolCol, Column, GraphSnapshot, I64Col, NeighborsByType, RelMatch, RelTypeFilter,
+    RelationshipRef, RelationshipsByType, ShortestPaths, ValueId,
 };
-pub use fulltext::FullTextField;
-pub use geo::{haversine_km, GeoIndex};
 pub use rusty_chickpeas::RustyChickpeas;
 pub use types::{
     Direction, Label, NodeId, PropertyKey, PropertyValue, RelationshipDeduplication,
