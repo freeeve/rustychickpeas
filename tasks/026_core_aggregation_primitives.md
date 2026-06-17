@@ -1,7 +1,13 @@
 # 026 — Make `neighbor_counts` fast + Python-exposed (hidden scratch)
 
-Status: **this pass done** — (1) fast internals + (2) Python exposure. Variants
-(`_where`, top-k) and the SPB `target_counts` unification deferred.
+Status: **this pass done** — (1) fast internals + (2) Python exposure.
+
+Variants **skipped after review** (weak fit): `neighbor_counts_where` is Rust-only
+(closures don't cross PyO3), redundant for source/target-only filters, and doesn't
+even fit IC5 (filter depends on the member, not the post→forum edge); a core
+top-k must pick one tiebreak, but real queries tiebreak by name/property and would
+take the full map anyway. Add either only when a concrete consumer needs it.
+SPB `target_counts` unification still open (coordinate with that session).
 
 ## Done this pass
 - `neighbor_counts` now counts into a hidden thread-local generation-stamped dense
