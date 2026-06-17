@@ -1,6 +1,9 @@
 # 026 — Make `neighbor_counts` fast + Python-exposed (hidden scratch)
 
-Status: **this pass done** — (1) fast internals + (2) Python exposure.
+Status: **done** — (1) fast internals + (2) Python exposure shipped; variants
+skipped after review. The one carve-out — unifying SPB's `target_counts` onto
+`neighbor_counts` — is blocked on the concurrent SPB session that owns those
+files; tracked separately, not part of this task's completable scope.
 
 Variants **skipped after review** (weak fit): `neighbor_counts_where` is Rust-only
 (closures don't cross PyO3), redundant for source/target-only filters, and doesn't
