@@ -2075,6 +2075,37 @@ impl GraphSnapshot {
         Some(cur)
     }
 
+    /// Whether `node` has at least one `rel_types` neighbour in `direction` — the
+    /// existence predicate (`neighbors_by_type(..).next().is_some()`) behind facet
+    /// "has any X edge" checks.
+    pub fn has_edge(&self, node: NodeId, direction: Direction, rel_types: impl RelTypeFilter) -> bool {
+        self.first_neighbor(node, direction, rel_types).is_some()
+    }
+
+    /// Whether any `rel_types` neighbour of `node` in `direction` has property `key`
+    /// equal to `value` — e.g. "linked to a node whose `uri` is X". The comparison
+    /// value is resolved to its id once (outside the neighbour scan), so this is a
+    /// per-neighbour id compare rather than a per-neighbour string resolve.
+    pub fn has_neighbor_with_property<V: IntoValueId>(
+        &self,
+        node: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+        key: &str,
+        value: V,
+    ) -> bool {
+        let (Some(key_id), Some(value_id)) =
+            (self.property_key_from_str(key), value.into_value_id(self))
+        else {
+            return false;
+        };
+        let Some(column) = self.columns.get(&key_id) else {
+            return false;
+        };
+        self.neighbors_by_type(node, direction, rel_types)
+            .any(|t| column.get(t) == Some(value_id))
+    }
+
     /// Find a single node by a property value across ALL labels (unlike
     /// [`nodes_with_property`](Self::nodes_with_property), which is label-scoped).
     /// Useful for a unique key such as a `uri`; returns the smallest matching node
@@ -3499,6 +3530,33 @@ mod tests {
         // Unknown label or value -> None.
         assert_eq!(g.node_by_label_property("Person", "name", "X"), None);
         assert_eq!(g.node_by_label_property("Country", "name", "Y"), None);
+    }
+
+    #[test]
+    fn test_has_edge_and_neighbor_property() {
+        // work0 -about-> entity1 (uri "u:x"); work0 -category-> cat2 (uri "u:cat").
+        let mut b = GraphBuilder::new(Some(3), Some(2));
+        b.add_node(Some(0), &["Work"]).unwrap();
+        b.add_node(Some(1), &["Entity"]).unwrap();
+        b.add_node(Some(2), &["Category"]).unwrap();
+        b.set_prop_str(1, "uri", "u:x").unwrap();
+        b.set_prop_str(2, "uri", "u:cat").unwrap();
+        b.add_relationship(0, 1, "about").unwrap();
+        b.add_relationship(0, 2, "category").unwrap();
+        let g = b.finalize(None);
+
+        // has_edge: existence of an outgoing edge of a given type.
+        assert!(g.has_edge(0, Direction::Outgoing, "about"));
+        assert!(!g.has_edge(0, Direction::Outgoing, "mentions"));
+        assert!(!g.has_edge(1, Direction::Outgoing, "about"));
+
+        // has_neighbor_with_property: a neighbour reached by `edge` has `key` == value.
+        assert!(g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:x"));
+        assert!(g.has_neighbor_with_property(0, Direction::Outgoing, "category", "uri", "u:cat"));
+        // The cat is reached by `category`, not `about`, so this is false.
+        assert!(!g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:cat"));
+        // A value absent from the graph -> false (no node interns it).
+        assert!(!g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:none"));
     }
 
     #[test]
