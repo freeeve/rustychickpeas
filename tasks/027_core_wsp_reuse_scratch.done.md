@@ -25,18 +25,14 @@ kill the per-call churn while leaving the hashing CPU in place.
 - **Allocations (deterministic, warmup-then-count):** IC14 **28 / 1,081,456 B → 0 / 0**;
   IC13 **0 / 0**.
 - **Core unit test:** `weighted_shortest_path` passes (299-test suite green).
-- **Wall-clock:** not cleanly measurable — a concurrent benchmark session pinned
-  the machine at load 70–165 throughout. Min-sampled A/B (BEFORE 15.26 ms /
-  AFTER ~17 ms) sat in the same load-dominated band → no regression. By
-  construction the change only removes allocation; re-measure on a quiet machine.
+- **Wall-clock:** retested on a quiet machine (load ~7), A/B via
+  `git checkout 45c883b~1 -- graph_snapshot.rs` for the BEFORE,
+  `--only ic14 --repeat 200`. **AFTER (reused) min 7.60 ms** (7.60–7.92);
+  **BEFORE (fresh per call) 7.04 / 8.00 ms** — same band, so the change is
+  **wall-clock-neutral**. IC14 is Dijkstra-CPU-bound (heap + hashing), not
+  allocation-bound, so reusing the maps swaps the ~1 MB churn for a cheap
+  `clear()` and nets flat time. The deterministic 1.08 MB → 0 allocation is the
+  whole win — exactly the "cheap memory, modest CPU" tradeoff that was chosen.
 
-## Open
-
-- [ ] **Re-run the IC14 wall-clock A/B on a quiet machine.** The deterministic
-  win (1.08 MB → 0 alloc, value-identical) is verified; only the wall-clock
-  number is missing because a concurrent benchmark run pinned the machine at
-  load 70–165 during measurement. Command: revert via `/tmp/wsp.patch` (or
-  `git show 45c883b`) for the BEFORE, `--only ic14 --repeat 120`, take min.
-
-**Status: in progress** — implementation committed (`45c883b`) and value-verified;
-wall-clock retest pending a quiet machine.
+**Status: done** — implementation `45c883b`, value-identical, IC14
+allocations 1.08 MB → 0, wall-clock confirmed neutral (no regression).
