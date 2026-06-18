@@ -139,6 +139,79 @@ impl WasmGraph {
     pub fn rel_prop(&self, csr_pos: u32, key: &str) -> JsValue {
         prop_to_js(self.inner.rel_prop(csr_pos, key))
     }
+
+    /// First neighbor of `nodeId` via `relType` in `direction`, or `undefined`
+    /// — short-circuits the scan when one neighbor is all you need.
+    #[wasm_bindgen(js_name = firstNeighbor)]
+    pub fn first_neighbor(&self, node_id: u32, direction: u8, rel_type: &str) -> Option<u32> {
+        self.inner
+            .first_neighbor(node_id, dir_from_u8(direction), rel_type)
+    }
+
+    /// Follow a fixed chain of steps from `start`: `directions[i]` (0/1/2) paired
+    /// with `relTypes[i]`, taking the first neighbor at each. `undefined` if a
+    /// step has no neighbor or the arrays differ in length.
+    pub fn follow(&self, start: u32, directions: &[u8], rel_types: Vec<String>) -> Option<u32> {
+        if directions.len() != rel_types.len() {
+            return None;
+        }
+        let steps: Vec<(crate::Direction, &str)> = directions
+            .iter()
+            .zip(rel_types.iter())
+            .map(|(&d, r)| (dir_from_u8(d), r.as_str()))
+            .collect();
+        self.inner.follow(start, &steps)
+    }
+
+    /// Whether `nodeId` has any neighbor via `relType` in `direction`.
+    #[wasm_bindgen(js_name = hasRel)]
+    pub fn has_rel(&self, node_id: u32, direction: u8, rel_type: &str) -> bool {
+        self.inner.has_rel(node_id, dir_from_u8(direction), rel_type)
+    }
+
+    /// Whether `nodeId` has a neighbor (via `relType`, `direction`) whose string
+    /// node property `key` equals `value`. String-typed — the facet-predicate
+    /// case; needs `loadProperties = true`.
+    #[wasm_bindgen(js_name = hasNeighborWithStrProperty)]
+    pub fn has_neighbor_with_str_property(
+        &self,
+        node_id: u32,
+        direction: u8,
+        rel_type: &str,
+        key: &str,
+        value: &str,
+    ) -> bool {
+        self.inner.has_neighbor_with_property(
+            node_id,
+            dir_from_u8(direction),
+            rel_type,
+            key,
+            PropValue::Str(value),
+        )
+    }
+
+    /// Deduplicated union of the neighbors of `nodeId` reached via any of
+    /// `relTypes` in `direction`, ascending by id.
+    #[wasm_bindgen(js_name = neighborsByTypes)]
+    pub fn neighbors_by_types(&self, node_id: u32, direction: u8, rel_types: Vec<String>) -> Vec<u32> {
+        let refs: Vec<&str> = rel_types.iter().map(String::as_str).collect();
+        self.inner
+            .neighbors_by_types(node_id, dir_from_u8(direction), &refs)
+    }
+
+    /// O(1) degree of `nodeId` in `direction` (0 = out, 1 = in, 2 = both).
+    pub fn degree(&self, node_id: u32, direction: u8) -> u32 {
+        self.inner.degree(node_id, dir_from_u8(direction))
+    }
+
+    /// All nodes within `1..=maxHops` of `seed` via `relType` in `direction`
+    /// (the typed k-hop neighborhood), as a sorted id array; excludes `seed`.
+    pub fn neighborhood(&self, seed: u32, direction: u8, rel_type: &str, max_hops: u32) -> Vec<u32> {
+        self.inner
+            .neighborhood(seed, dir_from_u8(direction), rel_type, max_hops)
+            .iter()
+            .collect()
+    }
 }
 
 /// Map a resolved property value to its natural JS value, or `undefined`.

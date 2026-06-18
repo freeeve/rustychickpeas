@@ -327,6 +327,176 @@ impl GraphReader {
         }
         order
     }
+
+    /// Select the (offsets, neighbors, types) CSR arrays for a single
+    /// direction; `Both` is handled by callers scanning each side.
+    fn adjacency(&self, dir: Direction) -> (&[u32], &[u32], &[u32]) {
+        match dir {
+            Direction::Outgoing => (
+                &self.graph.out_offsets,
+                &self.graph.out_nbrs,
+                &self.graph.out_types,
+            ),
+            _ => (
+                &self.graph.in_offsets,
+                &self.graph.in_nbrs,
+                &self.graph.in_types,
+            ),
+        }
+    }
+
+    /// The first neighbor of `node_id` reached via `rel_type` in `direction`,
+    /// or `None`. Short-circuits the CSR scan, so it is cheaper than
+    /// [`neighbors_by_type`](Self::neighbors_by_type) when one neighbor is all
+    /// you need (a single-cardinality edge like `isLocatedIn`). `Both` prefers
+    /// the first outgoing match, else the first incoming.
+    pub fn first_neighbor(&self, node_id: u32, direction: Direction, rel_type: &str) -> Option<u32> {
+        let type_atom = self.atom_id(rel_type)?;
+        if matches!(direction, Direction::Outgoing | Direction::Both) {
+            if let Some(n) = self.first_neighbor_dir(node_id, type_atom, Direction::Outgoing) {
+                return Some(n);
+            }
+        }
+        if matches!(direction, Direction::Incoming | Direction::Both) {
+            if let Some(n) = self.first_neighbor_dir(node_id, type_atom, Direction::Incoming) {
+                return Some(n);
+            }
+        }
+        None
+    }
+
+    /// First type-matching neighbor in one direction (short-circuit scan).
+    fn first_neighbor_dir(&self, node_id: u32, type_atom: u32, dir: Direction) -> Option<u32> {
+        let (offsets, nbrs, types) = self.adjacency(dir);
+        let i = node_id as usize;
+        if i + 1 >= offsets.len() {
+            return None;
+        }
+        let (start, end) = (offsets[i] as usize, offsets[i + 1] as usize);
+        if start > end || end > nbrs.len() || end > types.len() {
+            return None;
+        }
+        (start..end).find(|&k| types[k] == type_atom).map(|k| nbrs[k])
+    }
+
+    /// Typed neighbors via a pre-resolved relationship-type atom (both
+    /// directions, like [`neighbors_by_type`](Self::neighbors_by_type)), so a
+    /// BFS-style expansion resolves the atom once instead of per node.
+    fn typed_neighbors(&self, node_id: u32, direction: Direction, type_atom: u32) -> Vec<u32> {
+        let mut neighbors = Vec::new();
+        if matches!(direction, Direction::Outgoing | Direction::Both) {
+            neighbors.extend(self.neighbors_by_type_dir(node_id, type_atom, Direction::Outgoing));
+        }
+        if matches!(direction, Direction::Incoming | Direction::Both) {
+            neighbors.extend(self.neighbors_by_type_dir(node_id, type_atom, Direction::Incoming));
+        }
+        neighbors
+    }
+
+    /// Follow a fixed chain of `(direction, rel_type)` steps from `start`,
+    /// taking the [`first_neighbor`](Self::first_neighbor) at each; `None` if a
+    /// step has no such neighbor. Empty `steps` returns `start`.
+    pub fn follow(&self, start: u32, steps: &[(Direction, &str)]) -> Option<u32> {
+        let mut node = start;
+        for &(dir, rel) in steps {
+            node = self.first_neighbor(node, dir, rel)?;
+        }
+        Some(node)
+    }
+
+    /// Whether `node_id` has any neighbor via `rel_type` in `direction` — an
+    /// existence check that short-circuits on the first match.
+    pub fn has_rel(&self, node_id: u32, direction: Direction, rel_type: &str) -> bool {
+        self.first_neighbor(node_id, direction, rel_type).is_some()
+    }
+
+    /// Whether `node_id` has a neighbor (via `rel_type`, `direction`) whose node
+    /// property `key` equals `value`. Reads the neighbor property from the
+    /// resident columns, so it needs properties loaded (not `topology_only`).
+    pub fn has_neighbor_with_property(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_type: &str,
+        key: &str,
+        value: PropValue<'_>,
+    ) -> bool {
+        self.neighbors_by_type(node_id, direction, rel_type)
+            .into_iter()
+            .any(|nbr| self.node_prop(nbr, key) == Some(value))
+    }
+
+    /// Deduplicated union of the neighbors reached via any of `rel_types` in
+    /// `direction`, ascending by id. (The non-deduped, order-preserving form is
+    /// a per-type [`neighbors_by_type`](Self::neighbors_by_type) loop.)
+    pub fn neighbors_by_types(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_types: &[&str],
+    ) -> Vec<u32> {
+        let mut set = RoaringBitmap::new();
+        for &rel_type in rel_types {
+            for nbr in self.neighbors_by_type(node_id, direction, rel_type) {
+                set.insert(nbr);
+            }
+        }
+        set.iter().collect()
+    }
+
+    /// Degree of `node_id` in `direction`, O(1) from the resident CSR offsets
+    /// (no scan). `Both` sums the two sides.
+    pub fn degree(&self, node_id: u32, direction: Direction) -> u32 {
+        let one = |offsets: &[u32]| {
+            let i = node_id as usize;
+            if i + 1 >= offsets.len() {
+                0
+            } else {
+                offsets[i + 1] - offsets[i]
+            }
+        };
+        match direction {
+            Direction::Outgoing => one(&self.graph.out_offsets),
+            Direction::Incoming => one(&self.graph.in_offsets),
+            Direction::Both => one(&self.graph.out_offsets) + one(&self.graph.in_offsets),
+        }
+    }
+
+    /// All nodes within `1..=max_hops` of `seed`, expanding only along
+    /// `rel_type` in `direction` — the typed k-hop neighborhood, as a
+    /// [`RoaringBitmap`] so it composes with label sets. Excludes `seed`; all
+    /// work is over the resident CSR (no I/O).
+    pub fn neighborhood(
+        &self,
+        seed: u32,
+        direction: Direction,
+        rel_type: &str,
+        max_hops: u32,
+    ) -> RoaringBitmap {
+        let mut result = RoaringBitmap::new();
+        let Some(type_atom) = self.atom_id(rel_type) else {
+            return result;
+        };
+        let mut visited = RoaringBitmap::new();
+        visited.insert(seed);
+        let mut frontier = vec![seed];
+        for _ in 0..max_hops {
+            let mut next = Vec::new();
+            for &node in &frontier {
+                for nbr in self.typed_neighbors(node, direction, type_atom) {
+                    if visited.insert(nbr) {
+                        result.insert(nbr);
+                        next.push(nbr);
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        result
+    }
 }
 
 /// Resident trigram search over a fully-loaded `.rrs` index.
@@ -518,5 +688,78 @@ mod tests {
         let r2 = GraphReader::topology_only(&bytes).unwrap();
         assert_eq!(r2.rel_prop(0, "weight"), None);
         assert_eq!(r2.out_edges(0), vec![(1, 0)]);
+    }
+
+    /// A small typed graph for the traversal primitives. Edges:
+    ///   0 -KNOWS-> 1, 0 -KNOWS-> 2, 0 -LIVES-> 4, 1 -KNOWS-> 3.
+    /// Node "name": 1 = Bob, 2 = Carol. Round-tripped through the RCPG codec.
+    fn traversal_reader() -> GraphReader {
+        let mut g = GraphSection {
+            n_nodes: 5,
+            n_rels: 4,
+            out_offsets: vec![0, 3, 4, 4, 4, 4],
+            out_nbrs: vec![1, 2, 4, 3],
+            out_types: vec![1, 1, 2, 1], // KNOWS, KNOWS, LIVES, KNOWS
+            in_offsets: vec![0, 0, 1, 2, 3, 4],
+            in_nbrs: vec![0, 0, 1, 0],
+            in_types: vec![1, 1, 1, 2],
+            atoms: vec![
+                String::new(),       // 0 = ""
+                "KNOWS".to_string(), // 1
+                "LIVES".to_string(), // 2
+                "name".to_string(),  // 3 = key
+                "Bob".to_string(),   // 4
+                "Carol".to_string(), // 5
+            ],
+            ..Default::default()
+        };
+        g.node_columns = vec![(3, ColumnData::DenseStr(vec![0, 4, 5, 0, 0]))];
+        let mut bytes = Vec::new();
+        rcpg::write(&g, &mut bytes).unwrap();
+        GraphReader::from_rcpg_bytes(&bytes).unwrap()
+    }
+
+    #[test]
+    fn first_neighbor_follow_has_rel() {
+        let r = traversal_reader();
+        // first_neighbor short-circuits to the first type match in CSR order.
+        assert_eq!(r.first_neighbor(0, Direction::Outgoing, "KNOWS"), Some(1));
+        assert_eq!(r.first_neighbor(0, Direction::Outgoing, "LIVES"), Some(4));
+        assert_eq!(r.first_neighbor(0, Direction::Outgoing, "NOPE"), None);
+        assert_eq!(r.first_neighbor(3, Direction::Outgoing, "KNOWS"), None); // leaf
+        assert_eq!(r.first_neighbor(3, Direction::Incoming, "KNOWS"), Some(1));
+        // follow chains first_neighbor: 0 -KNOWS-> 1 -KNOWS-> 3.
+        let path = &[(Direction::Outgoing, "KNOWS"), (Direction::Outgoing, "KNOWS")];
+        assert_eq!(r.follow(0, path), Some(3));
+        assert_eq!(r.follow(0, &[]), Some(0)); // no steps -> start
+        assert_eq!(r.follow(0, &[(Direction::Outgoing, "NOPE")]), None);
+        // has_rel existence check
+        assert!(r.has_rel(0, Direction::Outgoing, "KNOWS"));
+        assert!(!r.has_rel(0, Direction::Outgoing, "NOPE"));
+        assert!(!r.has_rel(3, Direction::Outgoing, "KNOWS"));
+    }
+
+    #[test]
+    fn degree_types_neighborhood_property() {
+        let r = traversal_reader();
+        // degree is O(1) from the offsets: node 0 has 3 out, 0 in.
+        assert_eq!(r.degree(0, Direction::Outgoing), 3);
+        assert_eq!(r.degree(0, Direction::Incoming), 0);
+        assert_eq!(r.degree(1, Direction::Both), 2); // 1 out (->3) + 1 in (0->)
+        // deduped union of KNOWS+LIVES from 0, ascending.
+        assert_eq!(
+            r.neighbors_by_types(0, Direction::Outgoing, &["KNOWS", "LIVES"]),
+            vec![1, 2, 4]
+        );
+        // typed 2-hop neighborhood from 0 via KNOWS: {1,2} then {3}.
+        let nbhd: Vec<u32> = r.neighborhood(0, Direction::Outgoing, "KNOWS", 2).iter().collect();
+        assert_eq!(nbhd, vec![1, 2, 3]);
+        let one: Vec<u32> = r.neighborhood(0, Direction::Outgoing, "KNOWS", 1).iter().collect();
+        assert_eq!(one, vec![1, 2]);
+        // has_neighbor_with_property reads the neighbor's resident node property.
+        assert!(r.has_neighbor_with_property(0, Direction::Outgoing, "KNOWS", "name", PropValue::Str("Bob")));
+        assert!(!r.has_neighbor_with_property(0, Direction::Outgoing, "KNOWS", "name", PropValue::Str("Zara")));
+        // the LIVES neighbor (node 4) carries no name, so no Bob match that way.
+        assert!(!r.has_neighbor_with_property(0, Direction::Outgoing, "LIVES", "name", PropValue::Str("Bob")));
     }
 }
