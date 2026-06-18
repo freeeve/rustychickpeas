@@ -548,6 +548,7 @@ impl GraphSnapshot {
             &group,
             sum_col.as_deref(),
             None,
+            None,
         )?;
         let res = py
             .allow_threads(|| agg.run())
@@ -577,6 +578,7 @@ impl GraphSnapshot {
             group: Vec::new(),
             sum_col: None,
             through: None,
+            neighbor_filter: None,
         }
     }
 
@@ -1734,6 +1736,7 @@ fn build_core_agg<'a>(
     group: &[GroupSpec],
     sum_col: Option<&str>,
     through: Option<(&str, rustychickpeas_core::types::Direction)>,
+    neighbor_filter: Option<&[u32]>,
 ) -> PyResult<rustychickpeas_core::Aggregation<'a>> {
     let op = |s: &str| {
         AggOp::parse(s).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
@@ -1760,6 +1763,9 @@ fn build_core_agg<'a>(
     if let Some((rt, dir)) = through {
         agg = agg.through(rt, dir);
     }
+    if let Some(ids) = neighbor_filter {
+        agg = agg.only_neighbors(ids.iter().copied());
+    }
     Ok(agg)
 }
 
@@ -1777,6 +1783,7 @@ pub struct Aggregation {
     group: Vec<GroupSpec>,
     sum_col: Option<String>,
     through: Option<(String, rustychickpeas_core::types::Direction)>,
+    neighbor_filter: Option<Vec<u32>>,
 }
 
 #[pymethods]
@@ -1846,6 +1853,14 @@ impl Aggregation {
         a
     }
 
+    /// With `through`, count only neighbors whose node id is in `node_ids` (others
+    /// skipped), so `.rows` has just those neighbors.
+    fn only_neighbors(&self, node_ids: Vec<u32>) -> Aggregation {
+        let mut a = self.clone();
+        a.neighbor_filter = Some(node_ids);
+        a
+    }
+
     /// Execute: returns an [`AggResult`] with `.total` and self-describing dict
     /// `.rows` (keys: the group fields, then `"count"` and `"sum"` if requested).
     fn run(&self, py: Python<'_>) -> PyResult<AggResult> {
@@ -1858,6 +1873,7 @@ impl Aggregation {
             &self.group,
             self.sum_col.as_deref(),
             self.through.as_ref().map(|(rt, dir)| (rt.as_str(), *dir)),
+            self.neighbor_filter.as_deref(),
         )?;
         // The parallel scan lives in core; release the GIL while it runs.
         let res = py

@@ -9,8 +9,8 @@
 use crate::bitmap::NodeSet;
 use crate::error::{GraphError, Result};
 use crate::graph_snapshot::GraphSnapshot;
-use crate::types::{Direction, RelationshipType};
-use hashbrown::HashMap;
+use crate::types::{Direction, NodeId, RelationshipType};
+use hashbrown::{HashMap, HashSet};
 
 /// Comparison operator for [`Aggregation`] filters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +77,8 @@ pub struct Aggregation<'a> {
     /// When set, count *edges* of this relationship type/direction out of each
     /// source node, grouping additionally by the neighbor (the `"neighbor"` field).
     through: Option<(String, Direction)>,
+    /// With `through`, restrict counting to neighbors in this set (others skipped).
+    neighbor_filter: Option<HashSet<NodeId>>,
 }
 
 /// One output group from [`Aggregation::run`]: the group-key values in field order
@@ -116,6 +118,7 @@ impl GraphSnapshot {
             group: Vec::new(),
             sum: None,
             through: None,
+            neighbor_filter: None,
         }
     }
 }
@@ -166,6 +169,13 @@ impl<'a> Aggregation<'a> {
         self
     }
 
+    /// With [`through`](Self::through), count only neighbors in `ids` (others are
+    /// skipped) — so the result has just those neighbors, not every reachable one.
+    pub fn only_neighbors(mut self, ids: impl IntoIterator<Item = NodeId>) -> Self {
+        self.neighbor_filter = Some(ids.into_iter().collect());
+        self
+    }
+
     /// Execute the reduction in parallel and collect the groups.
     pub fn run(&self) -> Result<AggResult> {
         let g = self.graph;
@@ -207,6 +217,7 @@ impl<'a> Aggregation<'a> {
             .as_ref()
             .map(|(_, d)| *d)
             .unwrap_or(Direction::Outgoing);
+        let neighbor_filter = self.neighbor_filter.as_ref();
 
         // Each label's nodes are folded in parallel into a partial (map, total); the
         // partials are merged across labels.
@@ -228,6 +239,11 @@ impl<'a> Aggregation<'a> {
                     if is_through {
                         if let Some(rt) = through_rt {
                             for nb in g.neighbors_by_type(node, direction, rt) {
+                                if let Some(allow) = neighbor_filter {
+                                    if !allow.contains(&nb) {
+                                        continue;
+                                    }
+                                }
                                 let key = key_with_neighbor(k, &buf, &overflow, nb as i64);
                                 let e = acc.0.entry(key).or_insert((0, 0));
                                 e.0 += 1;
@@ -496,5 +512,15 @@ mod tests {
         let mut got: Vec<(i64, u64)> = res.rows.iter().map(|r| (r.key[0], r.count)).collect();
         got.sort();
         assert_eq!(got, vec![(2, 2), (3, 1)]); // tag2 has 2 edges, tag3 has 1
+
+        // only_neighbors restricts the count to the given set.
+        let res = g
+            .aggregate(["Post"])
+            .through("hasTag", Direction::Outgoing)
+            .only_neighbors([3u32])
+            .run()
+            .unwrap();
+        let got: Vec<(i64, u64)> = res.rows.iter().map(|r| (r.key[0], r.count)).collect();
+        assert_eq!(got, vec![(3, 1)]); // only tag3 counted
     }
 }

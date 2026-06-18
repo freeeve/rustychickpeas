@@ -89,6 +89,15 @@ def test_aggregate_through_counts_edges_by_neighbor():
     counts = {r["neighbor"]: r["count"] for r in res.rows}
     assert counts == {2: 2, 3: 1}  # tag 2 has 2 edges, tag 3 has 1
 
+    # only_neighbors restricts counting to the given set.
+    res = (
+        g.aggregate("Post")
+        .through("hasTag", Direction.Outgoing)
+        .only_neighbors([3])
+        .run()
+    )
+    assert {r["neighbor"]: r["count"] for r in res.rows} == {3: 1}
+
 
 def test_absent_column_is_none():
     assert _build().column("missing") is None
