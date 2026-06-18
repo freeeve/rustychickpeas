@@ -565,6 +565,116 @@ impl GraphSnapshotBuilder {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
+    /// Load nodes from a CSV file into the builder (.csv or .csv.gz).
+    ///
+    /// Args:
+    ///     path: Path to the CSV file
+    ///     node_id_column: Column holding node IDs (auto-generated if None)
+    ///     label_columns: Columns whose values are labels
+    ///     property_columns: Columns to load as properties (all non-id/label if None)
+    ///     unique_properties: Property columns to deduplicate nodes on
+    ///     default_label: A fixed label applied to every row (e.g. the entity type
+    ///         when the label is the file rather than a column) — the CSV analogue
+    ///         of the Parquet loader's default_label.
+    #[pyo3(signature = (path, node_id_column=None, label_columns=None, property_columns=None, unique_properties=None, default_label=None, delimiter=",".to_string()))]
+    #[allow(clippy::too_many_arguments)]
+    fn load_nodes_from_csv(
+        &mut self,
+        path: String,
+        node_id_column: Option<String>,
+        label_columns: Option<Vec<String>>,
+        property_columns: Option<Vec<String>>,
+        unique_properties: Option<Vec<String>>,
+        default_label: Option<String>,
+        delimiter: String,
+    ) -> PyResult<Vec<u32>> {
+        self.check_not_finalized()?;
+        let delim = delimiter.as_bytes().first().copied().unwrap_or(b',');
+        let label_cols = label_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let prop_cols = property_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let unique_props = unique_properties
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+
+        self.builder
+            .load_nodes_from_csv(
+                &path,
+                node_id_column.as_deref(),
+                label_cols,
+                prop_cols,
+                unique_props,
+                None, // column_types: Auto heuristic
+                default_label.as_deref(),
+                delim,
+            )
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    /// Load relationships from a CSV file into the builder (.csv or .csv.gz).
+    ///
+    /// Args:
+    ///     path: Path to the CSV file
+    ///     start_node_column / end_node_column: Columns holding endpoint node IDs
+    ///     rel_type_column: Column holding the relationship type (or use fixed_rel_type)
+    ///     property_columns: Columns to load as edge properties
+    ///     fixed_rel_type: A fixed relationship type for every row
+    ///     deduplication: 'create_all' | 'unique_by_type' | 'unique_by_type_and_key_properties'
+    #[pyo3(signature = (path, start_node_column, end_node_column, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, delimiter=",".to_string()))]
+    #[allow(clippy::too_many_arguments)]
+    fn load_relationships_from_csv(
+        &mut self,
+        path: String,
+        start_node_column: String,
+        end_node_column: String,
+        rel_type_column: Option<String>,
+        property_columns: Option<Vec<String>>,
+        fixed_rel_type: Option<String>,
+        deduplication: Option<String>,
+        delimiter: String,
+    ) -> PyResult<Vec<(u32, u32)>> {
+        use rustychickpeas_core::types::RelationshipDeduplication as Dd;
+        self.check_not_finalized()?;
+        let delim = delimiter.as_bytes().first().copied().unwrap_or(b',');
+        let prop_cols = property_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
+        let dedup = match deduplication.as_deref() {
+            Some("create_all") | Some("CreateAll") => Some(Dd::CreateAll),
+            Some("unique_by_type") | Some("CreateUniqueByRelType") => {
+                Some(Dd::CreateUniqueByRelType)
+            }
+            Some("unique_by_type_and_key_properties")
+            | Some("CreateUniqueByRelTypeAndKeyProperties") => {
+                Some(Dd::CreateUniqueByRelTypeAndKeyProperties)
+            }
+            Some(other) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown deduplication strategy: '{}'",
+                    other
+                )))
+            }
+            None => None,
+        };
+
+        self.builder
+            .load_relationships_from_csv(
+                &path,
+                &start_node_column,
+                &end_node_column,
+                rel_type_column.as_deref(),
+                prop_cols,
+                fixed_rel_type.as_deref(),
+                dedup,
+                None, // column_types: Auto heuristic
+                delim,
+            )
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
     /// Load relationships from a Parquet file with flexible node reference support
     ///
     /// This version supports looking up nodes by:

@@ -200,6 +200,8 @@ proptest! {
                 Some(vec!["name", "count", "score", "active"]),
                 None,
                 Some(types),
+                None,
+                b',',
             )
             .unwrap();
         prop_assert_eq!(node_ids.len(), rows.len());

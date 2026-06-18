@@ -14,7 +14,7 @@ use std::io::{BufReader, Read};
 
 /// Helper to create a CSV reader from a file path
 /// Handles both plain CSV and gzip-compressed CSV (.csv.gz)
-fn create_csv_reader(path: &str) -> Result<csv::Reader<Box<dyn Read>>> {
+fn create_csv_reader(path: &str, delimiter: u8) -> Result<csv::Reader<Box<dyn Read>>> {
     let file = File::open(path)
         .map_err(|e| GraphError::CsvError(format!("Failed to open CSV file {}: {}", path, e)))?;
 
@@ -24,7 +24,10 @@ fn create_csv_reader(path: &str) -> Result<csv::Reader<Box<dyn Read>>> {
         Box::new(BufReader::new(file))
     };
 
-    let csv_reader = ReaderBuilder::new().has_headers(true).from_reader(reader);
+    let csv_reader = ReaderBuilder::new()
+        .has_headers(true)
+        .delimiter(delimiter)
+        .from_reader(reader);
 
     Ok(csv_reader)
 }
@@ -177,6 +180,9 @@ fn add_node_with_interned_labels(
 struct NodeRowContext<'a> {
     node_id_idx: Option<usize>,
     label_indices: &'a [usize],
+    /// Interned id of a fixed label applied to every row (e.g. the entity type
+    /// when the label is the file, not a column), or `None`.
+    default_label_id: Option<u32>,
     prop_indices: &'a [(usize, String)],
     unique_prop_indices: &'a [(usize, String)],
     column_types: &'a Option<HashMap<&'a str, CsvColumnType>>,
@@ -199,8 +205,11 @@ fn process_node_row(
     // Extract node ID
     let node_id = extract_node_id(record, ctx.node_id_idx, row_num)?;
 
-    // Extract labels
-    let labels = extract_labels(builder, record, ctx.label_indices);
+    // Extract labels (column-valued labels plus any fixed default label).
+    let mut labels = extract_labels(builder, record, ctx.label_indices);
+    if let Some(dl) = ctx.default_label_id {
+        labels.push(dl);
+    }
 
     // Extract dedup key
     let dedup_key = extract_dedup_key(builder, record, ctx.unique_prop_indices, ctx.column_types);
@@ -363,6 +372,7 @@ impl GraphBuilder {
     /// * `property_columns` - Optional list of column names to use as properties. If None, uses all columns except ID and labels.
     /// * `unique_properties` - Optional list of property column names to use for deduplication. If provided, nodes with the same values for these properties will be merged.
     /// * `column_types` - Optional map of column names to types. If not specified, uses heuristic parsing (Auto).
+    #[allow(clippy::too_many_arguments)]
     pub fn load_nodes_from_csv(
         &mut self,
         path: &str,
@@ -371,8 +381,10 @@ impl GraphBuilder {
         property_columns: Option<Vec<&str>>,
         unique_properties: Option<Vec<&str>>,
         column_types: Option<HashMap<&str, CsvColumnType>>,
+        default_label: Option<&str>,
+        delimiter: u8,
     ) -> Result<Vec<u32>> {
-        let mut reader = create_csv_reader(path)?;
+        let mut reader = create_csv_reader(path, delimiter)?;
 
         // Get headers
         let headers = reader
@@ -449,9 +461,12 @@ impl GraphBuilder {
             })
             .unwrap_or_default();
 
+        let default_label_id = default_label.map(|l| self.interner.get_or_intern(l));
+
         let ctx = NodeRowContext {
             node_id_idx,
             label_indices: &label_indices,
+            default_label_id,
             prop_indices: &prop_indices,
             unique_prop_indices: &unique_prop_indices,
             column_types: &column_types,
@@ -507,8 +522,9 @@ impl GraphBuilder {
         fixed_rel_type: Option<&str>,
         deduplication: Option<crate::types::RelationshipDeduplication>,
         column_types: Option<HashMap<&str, CsvColumnType>>,
+        delimiter: u8,
     ) -> Result<Vec<(u32, u32)>> {
-        let mut reader = create_csv_reader(path)?;
+        let mut reader = create_csv_reader(path, delimiter)?;
 
         // Get headers
         let headers = reader
@@ -844,6 +860,8 @@ mod tests {
                 Some(vec!["name", "age", "score", "active"]),
                 None,
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -880,6 +898,8 @@ mod tests {
                 Some(vec!["name"]),
                 None,
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -901,6 +921,8 @@ mod tests {
                 Some(vec!["name"]),
                 None,
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -922,6 +944,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -952,6 +976,8 @@ mod tests {
                 Some(vec!["name"]),
                 Some(vec!["name"]),
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -980,6 +1006,7 @@ mod tests {
                 None,
                 None,
                 None,
+                b',',
             )
             .unwrap();
 
@@ -1008,6 +1035,7 @@ mod tests {
                 Some("KNOWS"),
                 None,
                 None,
+                b',',
             )
             .unwrap();
 
@@ -1034,6 +1062,7 @@ mod tests {
                 None,
                 None,
                 None,
+                b',',
             )
             .unwrap();
 
@@ -1051,6 +1080,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            b',',
         );
 
         assert!(result.is_err());
@@ -1077,6 +1108,7 @@ mod tests {
             None,
             None,
             None,
+            b',',
         );
 
         assert!(result.is_err());
@@ -1098,6 +1130,8 @@ mod tests {
                 Some(vec!["name"]),
                 None,
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -1123,6 +1157,8 @@ mod tests {
                 Some(vec!["name", "age", "score", "active"]),
                 None,
                 None,
+                None,
+                b',',
             )
             .unwrap();
 
@@ -1164,6 +1200,7 @@ mod tests {
                 None,
                 Some(crate::types::RelationshipDeduplication::CreateUniqueByRelType),
                 None,
+                b',',
             )
             .unwrap();
 
@@ -1189,6 +1226,8 @@ mod tests {
             Some(vec!["name"]),
             None,
             None,
+            None,
+            b',',
         );
 
         assert!(result.is_err());
@@ -1212,6 +1251,8 @@ mod tests {
             Some(vec!["name"]),
             None,
             None,
+            None,
+            b',',
         );
 
         assert!(result.is_err());
@@ -1241,6 +1282,8 @@ mod tests {
                 Some(vec!["code", "value"]),
                 None,
                 Some(column_types),
+                None,
+                b',',
             )
             .unwrap();
 
@@ -1275,6 +1318,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            b',',
         );
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -1301,6 +1346,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            b',',
         );
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -1334,6 +1381,7 @@ mod tests {
                 None,
                 None,
                 None,
+                b',',
             )
             .unwrap();
 
@@ -1360,6 +1408,7 @@ mod tests {
             None,
             None,
             None,
+            b',',
         );
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
