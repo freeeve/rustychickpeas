@@ -609,11 +609,95 @@ impl<'a> BoolCol<'a> {
     }
 }
 
+/// A resolved `f64` property column (the `f64` analogue of [`I64Col`]); obtained
+/// by narrowing a [`Col`] with [`Col::f64`].
+#[derive(Clone, Copy)]
+pub struct F64Col<'a> {
+    inner: F64ColInner<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum F64ColInner<'a> {
+    Dense(&'a [f64]),
+    Other(&'a Column),
+}
+
+impl<'a> F64Col<'a> {
+    /// The `f64` value at `pos`, or `None` when absent.
+    #[inline]
+    pub fn get(&self, pos: NodeId) -> Option<f64> {
+        match &self.inner {
+            F64ColInner::Dense(slice) => slice.get(pos as usize).copied(),
+            F64ColInner::Other(col) => col.get(pos).and_then(|v| v.to_f64()),
+        }
+    }
+
+    /// The underlying dense `f64` slice when the column is dense — index it by node
+    /// id / CSR position directly in a hot loop; `None` for a sparse/rank column.
+    #[inline]
+    pub fn as_slice(&self) -> Option<&'a [f64]> {
+        match self.inner {
+            F64ColInner::Dense(slice) => Some(slice),
+            F64ColInner::Other(_) => None,
+        }
+    }
+}
+
+/// A resolved string property column exposing interned string ids: [`StrCol::id`]
+/// reads the id at a position; [`StrCol::as_ids`] exposes the dense id slice for
+/// vectorized comparison (resolve a target string to its id once and compare
+/// `u32`s). Recover text via [`GraphSnapshot::resolve_string`]. Obtained by
+/// narrowing a [`Col`] with [`Col::str`].
+#[derive(Clone, Copy)]
+pub struct StrCol<'a> {
+    inner: StrColInner<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum StrColInner<'a> {
+    Dense(&'a [u32]),
+    Other(&'a Column),
+}
+
+impl<'a> StrCol<'a> {
+    /// The interned string id at `pos`, or `None` when absent.
+    #[inline]
+    pub fn id(&self, pos: NodeId) -> Option<u32> {
+        match &self.inner {
+            StrColInner::Dense(slice) => slice.get(pos as usize).copied(),
+            StrColInner::Other(col) => match col.get(pos) {
+                Some(ValueId::Str(id)) => Some(id),
+                _ => None,
+            },
+        }
+    }
+
+    /// The underlying dense interned-id slice when the column is dense — compare it
+    /// against ids resolved from target strings; `None` for a sparse/rank column.
+    #[inline]
+    pub fn as_ids(&self) -> Option<&'a [u32]> {
+        match self.inner {
+            StrColInner::Dense(slice) => Some(slice),
+            StrColInner::Other(_) => None,
+        }
+    }
+}
+
+/// The logical element type of a [`Col`], reported by [`Col::dtype`] without
+/// narrowing — the dtype analogue of a pandas/polars column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnDtype {
+    I64,
+    F64,
+    Bool,
+    Str,
+}
+
 /// A resolved property column: the key -> column lookup is done once, then
-/// narrowed to a typed reader with [`Col::i64`] / [`Col::bool`] — mirroring the
-/// polars `column(name).i64()` shape. Build with [`GraphSnapshot::col`] (node
-/// columns, indexed by node id) or [`GraphSnapshot::rel_col`] (relationship
-/// columns, indexed by CSR position).
+/// narrowed to a typed reader with [`Col::i64`] / [`Col::f64`] / [`Col::bool`] /
+/// [`Col::str`] — mirroring the polars `column(name).i64()` shape. Build with
+/// [`GraphSnapshot::col`] (node columns, indexed by node id) or
+/// [`GraphSnapshot::rel_col`] (relationship columns, indexed by CSR position).
 #[derive(Clone, Copy)]
 pub struct Col<'a> {
     col: &'a Column,
@@ -641,6 +725,43 @@ impl<'a> Col<'a> {
                 Some(slice) => BoolColInner::Dense(slice),
                 None => BoolColInner::Other(self.col),
             },
+        }
+    }
+
+    /// Narrow to a typed `f64` reader (the `f64` analogue of [`Col::i64`]).
+    #[inline]
+    pub fn f64(self) -> F64Col<'a> {
+        F64Col {
+            inner: match self.col.as_f64_slice() {
+                Some(slice) => F64ColInner::Dense(slice),
+                None => F64ColInner::Other(self.col),
+            },
+        }
+    }
+
+    /// Narrow to a typed string reader exposing interned ids (the string analogue
+    /// of [`Col::i64`]); compare its ids against ids resolved from target strings.
+    #[inline]
+    pub fn str(self) -> StrCol<'a> {
+        StrCol {
+            inner: match self.col.as_str_ids() {
+                Some(slice) => StrColInner::Dense(slice),
+                None => StrColInner::Other(self.col),
+            },
+        }
+    }
+
+    /// The logical element type of this column, without narrowing — pick the
+    /// matching typed reader (or buffer dtype) from it.
+    #[inline]
+    pub fn dtype(self) -> ColumnDtype {
+        match self.col {
+            Column::DenseI64(_) | Column::SparseI64(_) | Column::RankI64 { .. } => ColumnDtype::I64,
+            Column::DenseF64(_) | Column::SparseF64(_) | Column::RankF64 { .. } => ColumnDtype::F64,
+            Column::DenseBool(_) | Column::SparseBool(_) | Column::RankBool { .. } => {
+                ColumnDtype::Bool
+            }
+            Column::DenseStr(_) | Column::SparseStr(_) | Column::RankStr { .. } => ColumnDtype::Str,
         }
     }
 }
@@ -3738,6 +3859,39 @@ mod tests {
         assert_eq!(g.prop_str(0, "name"), Some("Alice"));
         assert_eq!(g.prop_str(1, "name"), None); // empty dense slot reads back as absent
         assert_eq!(g.prop_str(0, "missing"), None);
+    }
+
+    #[test]
+    fn test_typed_f64_str_dtype_readers() {
+        let mut b = GraphBuilder::new(Some(3), Some(0));
+        for i in 0..3u32 {
+            b.add_node(Some(i), &["N"]).unwrap();
+            b.set_prop_i64(i, "n", i as i64).unwrap();
+            b.set_prop_f64(i, "score", i as f64 + 0.5).unwrap();
+            b.set_prop_bool(i, "flag", i % 2 == 0).unwrap();
+            b.set_prop_str(i, "name", &format!("p{i}")).unwrap();
+        }
+        let g = b.finalize(None);
+
+        // f64 reader: per-value get + dense slice fast path.
+        let f = g.col("score").unwrap().f64();
+        assert_eq!(f.get(0), Some(0.5));
+        assert_eq!(f.get(2), Some(2.5));
+        assert_eq!(f.as_slice(), Some(&[0.5, 1.5, 2.5][..]));
+
+        // str reader: interned ids + dense id slice; ids resolve to the strings.
+        let s = g.col("name").unwrap().str();
+        let ids = s.as_ids().expect("dense str column");
+        assert_eq!(ids.len(), 3);
+        assert_eq!(s.id(1), Some(ids[1]));
+        let names: Vec<&str> = ids.iter().map(|&id| g.resolve_string(id).unwrap()).collect();
+        assert_eq!(names, vec!["p0", "p1", "p2"]);
+
+        // dtype reports the logical type without narrowing.
+        assert_eq!(g.col("n").unwrap().dtype(), ColumnDtype::I64);
+        assert_eq!(g.col("score").unwrap().dtype(), ColumnDtype::F64);
+        assert_eq!(g.col("flag").unwrap().dtype(), ColumnDtype::Bool);
+        assert_eq!(g.col("name").unwrap().dtype(), ColumnDtype::Str);
     }
 
     #[test]

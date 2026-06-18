@@ -738,20 +738,44 @@ impl GraphBuilder {
             let id = self.interner.get_or_intern(l);
             Label::new(id)
         });
+        // Key must already be interned for any node to carry it.
+        let Some(k) = self.interner.get(property_key) else {
+            return index;
+        };
 
-        // Build index by iterating through all nodes
-        for node_id in 0..self.next_node_id {
-            // Filter by label if specified
-            if let Some(required_label) = label_id {
-                let node_labels = &self.node_labels[node_id as usize];
-                if !node_labels.contains(&required_label) {
-                    continue;
+        // Iterate the staged property column directly (O(entries)) instead of calling
+        // the O(n) `prop()` for every node — the latter is O(n^2) and was minutes for
+        // a multi-million-node graph.
+        let keep = |nid: NodeId| match label_id {
+            Some(required) => self.node_labels[nid as usize].contains(&required),
+            None => true,
+        };
+        if let Some(pairs) = self.node_col_i64.get(&k) {
+            for &(nid, v) in pairs {
+                if keep(nid) {
+                    index.entry(ValueId::I64(v)).or_default().push(nid);
                 }
             }
-
-            // Add to index if property exists
-            if let Some(value_id) = self.prop(node_id, property_key) {
-                index.entry(value_id).or_default().push(node_id);
+        }
+        if let Some(pairs) = self.node_col_str.get(&k) {
+            for &(nid, v) in pairs {
+                if keep(nid) {
+                    index.entry(ValueId::Str(v)).or_default().push(nid);
+                }
+            }
+        }
+        if let Some(pairs) = self.node_col_f64.get(&k) {
+            for &(nid, v) in pairs {
+                if keep(nid) {
+                    index.entry(ValueId::from_f64(v)).or_default().push(nid);
+                }
+            }
+        }
+        if let Some(pairs) = self.node_col_bool.get(&k) {
+            for &(nid, v) in pairs {
+                if keep(nid) {
+                    index.entry(ValueId::Bool(v)).or_default().push(nid);
+                }
             }
         }
 

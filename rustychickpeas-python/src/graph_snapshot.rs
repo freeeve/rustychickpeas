@@ -4,13 +4,17 @@ use crate::direction::Direction;
 use crate::node::Node;
 use crate::relationship::Relationship;
 use crate::utils::{py_to_property_value, value_id_to_pyobject};
+use pyo3::ffi;
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 use roaring::RoaringBitmap;
 use rustychickpeas_core::bitmap::NodeSet;
 use rustychickpeas_core::types::PropertyKey;
 use rustychickpeas_core::{
-    GraphSnapshot as CoreGraphSnapshot, Label, RelationshipRef, RelationshipType, ValueId,
+    AggOp, ColumnDtype, GraphSnapshot as CoreGraphSnapshot, Label, RelationshipRef,
+    RelationshipType, ValueId,
 };
+use std::os::raw::{c_char, c_int, c_void};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Python wrapper for GraphSnapshot
@@ -491,30 +495,89 @@ impl GraphSnapshot {
             .and_then(|c| c.as_slice().map(<[i64]>::to_vec))
     }
 
-    /// The dense `i64` column `key` as raw native-endian bytes (8 bytes per node
-    /// id), or `None` when the column is absent or not a dense `i64` column.
+    /// The interned id (code) for `s` in this snapshot, or `None` if `s` was never
+    /// interned (so no node can carry it). Resolve filter targets to codes once,
+    /// then compare them against a string [`Column`]'s codes (dtype `'string'`)
+    /// vectorized — e.g. `numpy.isin(numpy.asarray(g.column("lang")), [c1, c2])`.
+    fn string_id(&self, s: &str) -> Option<u32> {
+        self.get_string_id(s)
+    }
+
+    /// A dense property column as a self-describing [`Column`] (its dtype is
+    /// intrinsic — no `.i64()` narrowing), or `None` when the key is absent or the
+    /// column is not stored densely. The `Column` supports the buffer protocol, so
+    /// `numpy.asarray(col)` / `pyarrow.py_buffer(col)` / `memoryview(col)` read it
+    /// zero-copy, and `col.to_pylist()` gives a plain Python list.
+    fn column(&self, key: &str) -> Option<Column> {
+        Column::build(self.snapshot.clone(), key)
+    }
+
+    /// Low-level grouped reduction over dense `i64` node columns, run in Rust with
+    /// the GIL released. Prefer the fluent [`GraphSnapshot::aggregate`] builder —
+    /// this is the kernel it calls, kept public for direct use.
     ///
-    /// One bulk memcpy instead of building a Python list of millions of ints —
-    /// wrap the result zero-copy with `pyarrow.py_buffer` /
-    /// `pyarrow.Array.from_buffers(pa.int64(), n, [None, buf])` (or
-    /// `numpy.frombuffer(..., dtype='<i8')`) to vectorize column scans.
-    fn i64_column_bytes<'py>(
+    /// Scans the nodes of each label in `labels`. A row counts toward `total` when
+    /// it passes every `pre_filters` predicate `(column, op, value)` (op ∈
+    /// `<,<=,>,>=,==,!=`); rows additionally passing every `group_filters` predicate
+    /// are grouped. The group key is the label index (when `group_label`), then each
+    /// `group_cols` value, then a bucket index per `group_bins` `(column, edges)`
+    /// (bucket = count of `edges <= value`). Returns `(rows, total)` with
+    /// `rows = [(key_tuple, count, sum), ...]`. All referenced columns must be dense
+    /// `i64` columns; a missing label or non-dense/-i64 column raises `ValueError`.
+    #[pyo3(signature = (labels, pre_filters=vec![], group_filters=vec![], group_label=false, group_cols=vec![], group_bins=vec![], sum_col=None))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn group_reduce(
         &self,
-        py: Python<'py>,
-        key: &str,
-    ) -> Option<Bound<'py, pyo3::types::PyBytes>> {
-        self.snapshot
-            .col(key)
-            .map(|c| c.i64())
-            .and_then(|c| c.as_slice())
-            .map(|s| {
-                // Reinterpret the i64 slice as bytes (native endianness); PyBytes::new
-                // copies it into a Python-owned buffer.
-                let bytes = unsafe {
-                    std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s))
-                };
-                pyo3::types::PyBytes::new(py, bytes)
-            })
+        py: Python<'_>,
+        labels: Vec<String>,
+        pre_filters: Vec<(String, String, i64)>,
+        group_filters: Vec<(String, String, i64)>,
+        group_label: bool,
+        group_cols: Vec<String>,
+        group_bins: Vec<(String, Vec<i64>)>,
+        sum_col: Option<String>,
+    ) -> PyResult<(Vec<(Vec<i64>, u64, i64)>, u64)> {
+        let mut group: Vec<GroupSpec> = group_cols.into_iter().map(GroupSpec::Col).collect();
+        group.extend(group_bins.into_iter().map(|(c, e)| GroupSpec::Bin(c, e)));
+        let agg = build_core_agg(
+            &self.snapshot,
+            &labels,
+            &pre_filters,
+            &group_filters,
+            group_label,
+            &group,
+            sum_col.as_deref(),
+            None,
+        )?;
+        let res = py
+            .allow_threads(|| agg.run())
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        let rows = res
+            .rows
+            .into_iter()
+            .map(|r| (r.key, r.count, r.sum))
+            .collect();
+        Ok((rows, res.total))
+    }
+
+    /// Start a fluent aggregation over the given node labels — the Pythonic front
+    /// for [`group_reduce`](Self::group_reduce). Chain `.where(col, op, value)` /
+    /// `.having(col, op, value)` / `.by(col)` / `.bin(col, edges)` / `.by_label()` /
+    /// `.sum(col)`, then `.run()` for a result with `.total` and self-describing dict
+    /// `.rows` (the source label comes back as its name). The heavy scan runs in Rust
+    /// with the GIL released — no numpy/pyarrow needed.
+    #[pyo3(signature = (*labels))]
+    fn aggregate(&self, labels: Vec<String>) -> Aggregation {
+        Aggregation {
+            snapshot: self.snapshot.clone(),
+            labels,
+            where_filters: Vec::new(),
+            having_filters: Vec::new(),
+            by_label: false,
+            group: Vec::new(),
+            sum_col: None,
+            through: None,
+        }
     }
 
     /// Weighted (or unweighted) shortest-path cost from `source` to `target`, or
@@ -1460,5 +1523,386 @@ impl GraphSnapshot {
             rel_types_str.as_deref(),
             max_depth_u32,
         ))
+    }
+}
+
+/// A dense property column exposed to Python as a self-describing, buffer-protocol
+/// array (its dtype is intrinsic — no `.i64()` narrowing). Built by
+/// [`GraphSnapshot::column`]; holds an `Arc` to the snapshot so the zero-copy
+/// buffer it hands out (numpy / pyarrow / memoryview) stays valid for its lifetime.
+#[pyclass(name = "Column")]
+pub struct Column {
+    snapshot: Arc<CoreGraphSnapshot>,
+    key: String,
+    dtype: ColumnDtype,
+    len: usize,
+    itemsize: isize,
+    // One-element shape/strides the buffer view points at (must outlive the view;
+    // they live in this object, which view.obj keeps alive).
+    shape: [ffi::Py_ssize_t; 1],
+    strides: [ffi::Py_ssize_t; 1],
+    // Booleans are bit-packed in core; expanded to one 0/1 byte per node so the
+    // buffer has a standard layout. `None` (zero-copy) for the other dtypes.
+    bool_bytes: Option<Vec<u8>>,
+}
+
+impl Column {
+    /// Build a Column for a dense node column, or `None` if absent / not dense.
+    fn build(snapshot: Arc<CoreGraphSnapshot>, key: &str) -> Option<Column> {
+        let col = snapshot.col(key)?;
+        let dtype = col.dtype();
+        let (len, itemsize, bool_bytes) = match dtype {
+            ColumnDtype::I64 => (col.i64().as_slice()?.len(), 8isize, None),
+            ColumnDtype::F64 => (col.f64().as_slice()?.len(), 8, None),
+            ColumnDtype::Str => (col.str().as_ids()?.len(), 4, None),
+            ColumnDtype::Bool => {
+                let bytes: Vec<u8> = col.bool().as_slice()?.iter().map(|b| *b as u8).collect();
+                (bytes.len(), 1, Some(bytes))
+            }
+        };
+        Some(Column {
+            snapshot,
+            key: key.to_string(),
+            dtype,
+            len,
+            itemsize,
+            shape: [len as ffi::Py_ssize_t],
+            strides: [itemsize as ffi::Py_ssize_t],
+            bool_bytes,
+        })
+    }
+
+    /// Raw data pointer + struct-format char for the buffer view. The pointer is
+    /// into the immutable snapshot (or `bool_bytes`) and is stable for the lifetime.
+    fn buffer_ptr_format(&self) -> (*const u8, &'static [u8]) {
+        match self.dtype {
+            ColumnDtype::I64 => {
+                let s = self.snapshot.col(&self.key).unwrap().i64().as_slice().unwrap();
+                (s.as_ptr() as *const u8, b"q\0")
+            }
+            ColumnDtype::F64 => {
+                let s = self.snapshot.col(&self.key).unwrap().f64().as_slice().unwrap();
+                (s.as_ptr() as *const u8, b"d\0")
+            }
+            ColumnDtype::Str => {
+                let s = self.snapshot.col(&self.key).unwrap().str().as_ids().unwrap();
+                (s.as_ptr() as *const u8, b"I\0")
+            }
+            ColumnDtype::Bool => (self.bool_bytes.as_ref().unwrap().as_ptr(), b"B\0"),
+        }
+    }
+}
+
+#[pymethods]
+impl Column {
+    /// The numpy/struct dtype name: 'int64' | 'float64' | 'bool' | 'string'.
+    #[getter]
+    fn dtype(&self) -> &'static str {
+        match self.dtype {
+            ColumnDtype::I64 => "int64",
+            ColumnDtype::F64 => "float64",
+            ColumnDtype::Bool => "bool",
+            ColumnDtype::Str => "string",
+        }
+    }
+
+    fn __len__(&self) -> usize {
+        self.len
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Column(key='{}', dtype='{}', len={})",
+            self.key,
+            self.dtype(),
+            self.len
+        )
+    }
+
+    /// The column as a plain Python list. String columns resolve interned ids to
+    /// `str`; numeric/bool columns return `int` / `float` / `bool`.
+    fn to_pylist(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match self.dtype {
+            ColumnDtype::I64 => self
+                .snapshot
+                .col(&self.key)
+                .unwrap()
+                .i64()
+                .as_slice()
+                .unwrap()
+                .to_vec()
+                .into_py_any(py),
+            ColumnDtype::F64 => self
+                .snapshot
+                .col(&self.key)
+                .unwrap()
+                .f64()
+                .as_slice()
+                .unwrap()
+                .to_vec()
+                .into_py_any(py),
+            ColumnDtype::Bool => {
+                let v: Vec<bool> = self
+                    .bool_bytes
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|&b| b != 0)
+                    .collect();
+                v.into_py_any(py)
+            }
+            ColumnDtype::Str => {
+                let ids = self.snapshot.col(&self.key).unwrap().str().as_ids().unwrap();
+                let v: Vec<&str> = ids
+                    .iter()
+                    .map(|&id| self.snapshot.resolve_string(id).unwrap_or(""))
+                    .collect();
+                v.into_py_any(py)
+            }
+        }
+    }
+
+    /// Buffer protocol: expose the dense bytes zero-copy (read-only, 1-D,
+    /// C-contiguous). `view.obj` takes a new reference to this Column so the backing
+    /// memory stays alive while the view is held.
+    unsafe fn __getbuffer__(
+        slf: PyRef<'_, Self>,
+        view: *mut ffi::Py_buffer,
+        flags: c_int,
+    ) -> PyResult<()> {
+        if view.is_null() {
+            return Err(pyo3::exceptions::PyBufferError::new_err("view is null"));
+        }
+        if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {
+            return Err(pyo3::exceptions::PyBufferError::new_err(
+                "column buffer is read-only",
+            ));
+        }
+        let (ptr, format) = slf.buffer_ptr_format();
+        let obj = slf.as_ptr();
+        ffi::Py_INCREF(obj);
+        (*view).obj = obj;
+        (*view).buf = ptr as *mut c_void;
+        (*view).len = (slf.len as isize) * slf.itemsize;
+        (*view).readonly = 1;
+        (*view).itemsize = slf.itemsize;
+        (*view).ndim = 1;
+        (*view).format = if (flags & ffi::PyBUF_FORMAT) == ffi::PyBUF_FORMAT {
+            format.as_ptr() as *mut c_char
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).shape = if (flags & ffi::PyBUF_ND) == ffi::PyBUF_ND {
+            slf.shape.as_ptr() as *mut ffi::Py_ssize_t
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).strides = if (flags & ffi::PyBUF_STRIDES) == ffi::PyBUF_STRIDES {
+            slf.strides.as_ptr() as *mut ffi::Py_ssize_t
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).suboffsets = std::ptr::null_mut();
+        (*view).internal = std::ptr::null_mut();
+        Ok(())
+    }
+
+    unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {
+        // Nothing to free: format is static, shape/strides live in self, and
+        // CPython decrefs view.obj.
+    }
+}
+
+/// One group dimension for the Python-side aggregation spec: a raw `i64` column,
+/// or a column bucketed by ascending `edges`.
+#[derive(Clone)]
+enum GroupSpec {
+    Col(String),
+    Bin(String, Vec<i64>),
+}
+
+/// Build the core [`rustychickpeas_core::Aggregation`] from a Python-side spec.
+/// All the scan/parallelism lives in core; this just translates the spec.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
+fn build_core_agg<'a>(
+    snapshot: &'a CoreGraphSnapshot,
+    labels: &[String],
+    where_filters: &[(String, String, i64)],
+    having_filters: &[(String, String, i64)],
+    by_label: bool,
+    group: &[GroupSpec],
+    sum_col: Option<&str>,
+    through: Option<(&str, rustychickpeas_core::types::Direction)>,
+) -> PyResult<rustychickpeas_core::Aggregation<'a>> {
+    let op = |s: &str| {
+        AggOp::parse(s).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    };
+    let mut agg = snapshot.aggregate(labels.iter().cloned());
+    for (c, o, v) in where_filters {
+        agg = agg.filter(c.clone(), op(o)?, *v);
+    }
+    for (c, o, v) in having_filters {
+        agg = agg.having(c.clone(), op(o)?, *v);
+    }
+    if by_label {
+        agg = agg.by_label();
+    }
+    for gs in group {
+        agg = match gs {
+            GroupSpec::Col(c) => agg.by(c.clone()),
+            GroupSpec::Bin(c, e) => agg.bin(c.clone(), e.clone()),
+        };
+    }
+    if let Some(c) = sum_col {
+        agg = agg.sum(c);
+    }
+    if let Some((rt, dir)) = through {
+        agg = agg.through(rt, dir);
+    }
+    Ok(agg)
+}
+
+/// Fluent aggregation builder (immutable: each step returns a new builder), created
+/// by [`GraphSnapshot::aggregate`]. `.run()` executes the scan and returns an
+/// [`AggResult`].
+#[pyclass(name = "Aggregation")]
+#[derive(Clone)]
+pub struct Aggregation {
+    snapshot: Arc<CoreGraphSnapshot>,
+    labels: Vec<String>,
+    where_filters: Vec<(String, String, i64)>,
+    having_filters: Vec<(String, String, i64)>,
+    by_label: bool,
+    group: Vec<GroupSpec>,
+    sum_col: Option<String>,
+    through: Option<(String, rustychickpeas_core::types::Direction)>,
+}
+
+#[pymethods]
+impl Aggregation {
+    fn __repr__(&self) -> String {
+        format!(
+            "Aggregation(labels={:?}, where={}, having={}, group_dims={}, sum={:?})",
+            self.labels,
+            self.where_filters.len(),
+            self.having_filters.len(),
+            self.by_label as usize + self.group.len(),
+            self.sum_col,
+        )
+    }
+
+    /// Population predicate `column op value` (op ∈ `<,<=,>,>=,==,!=`); rows passing
+    /// all of these count toward `total`.
+    #[pyo3(name = "where")]
+    fn where_(&self, column: String, op: String, value: i64) -> Aggregation {
+        let mut a = self.clone();
+        a.where_filters.push((column, op, value));
+        a
+    }
+
+    /// Extra predicate applied to grouped rows only (after the population filters).
+    fn having(&self, column: String, op: String, value: i64) -> Aggregation {
+        let mut a = self.clone();
+        a.having_filters.push((column, op, value));
+        a
+    }
+
+    /// Group by the source node label (returned in rows as its name).
+    fn by_label(&self) -> Aggregation {
+        let mut a = self.clone();
+        a.by_label = true;
+        a
+    }
+
+    /// Group by a dense `i64` column's value.
+    fn by(&self, column: String) -> Aggregation {
+        let mut a = self.clone();
+        a.group.push(GroupSpec::Col(column));
+        a
+    }
+
+    /// Group by a column bucketed at ascending `edges` (bucket = count of
+    /// `edges <= value`); the row field is `"{column}_bin"`.
+    fn bin(&self, column: String, edges: Vec<i64>) -> Aggregation {
+        let mut a = self.clone();
+        a.group.push(GroupSpec::Bin(column, edges));
+        a
+    }
+
+    /// Also sum this `i64` column per group (row field `"sum"`).
+    fn sum(&self, column: String) -> Aggregation {
+        let mut a = self.clone();
+        a.sum_col = Some(column);
+        a
+    }
+
+    /// Count edges of `rel_type`/`direction` out of each source node instead of
+    /// counting nodes, grouping additionally by the neighbor id (row field
+    /// `"neighbor"`). `total` still counts source nodes.
+    fn through(&self, rel_type: String, direction: Direction) -> Aggregation {
+        let mut a = self.clone();
+        a.through = Some((rel_type, direction.into()));
+        a
+    }
+
+    /// Execute: returns an [`AggResult`] with `.total` and self-describing dict
+    /// `.rows` (keys: the group fields, then `"count"` and `"sum"` if requested).
+    fn run(&self, py: Python<'_>) -> PyResult<AggResult> {
+        let agg = build_core_agg(
+            &self.snapshot,
+            &self.labels,
+            &self.where_filters,
+            &self.having_filters,
+            self.by_label,
+            &self.group,
+            self.sum_col.as_deref(),
+            self.through.as_ref().map(|(rt, dir)| (rt.as_str(), *dir)),
+        )?;
+        // The parallel scan lives in core; release the GIL while it runs.
+        let res = py
+            .allow_threads(|| agg.run())
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        let has_sum = self.sum_col.is_some();
+
+        let rows = pyo3::types::PyList::empty(py);
+        for row in &res.rows {
+            let d = pyo3::types::PyDict::new(py);
+            for (pos, (field, val)) in res.fields.iter().zip(row.key.iter()).enumerate() {
+                if self.by_label && pos == 0 {
+                    // The label key is its index into `labels`; emit the name.
+                    d.set_item(field, &self.labels[*val as usize])?;
+                } else {
+                    d.set_item(field, *val)?;
+                }
+            }
+            d.set_item("count", row.count)?;
+            if has_sum {
+                d.set_item("sum", row.sum)?;
+            }
+            rows.append(d)?;
+        }
+        Ok(AggResult {
+            total: res.total,
+            rows: rows.into_any().unbind(),
+        })
+    }
+}
+
+/// Result of [`Aggregation::run`]: `total` (population count) and `rows`
+/// (a list of self-describing dicts).
+#[pyclass(name = "AggResult")]
+pub struct AggResult {
+    #[pyo3(get)]
+    total: u64,
+    #[pyo3(get)]
+    rows: PyObject,
+}
+
+#[pymethods]
+impl AggResult {
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let n = self.rows.bind(py).len()?;
+        Ok(format!("AggResult(total={}, rows={} groups)", self.total, n))
     }
 }

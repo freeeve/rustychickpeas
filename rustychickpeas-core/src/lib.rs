@@ -3,6 +3,7 @@
 //! This library provides a high-performance graph API with a familiar
 //! interface for easy porting of graph database stored procedures.
 
+pub mod aggregate;
 pub mod bitmap;
 pub mod error;
 pub mod fulltext;
@@ -21,15 +22,16 @@ pub mod types;
 pub use rustychickpeas_format as format;
 
 // Re-export main types
+pub use aggregate::{AggOp, AggResult, AggRow, Aggregation};
 pub use error::{GraphError, Result};
 pub use fulltext::FullTextField;
 pub use geo::{haversine_km, GeoIndex};
 pub use graph_builder::GraphBuilder;
 pub use graph_builder_csv::CsvColumnType;
 pub use graph_snapshot::{
-    BoolCol, Col, Column, GraphSnapshot, I64Col, NeighborsByType, Prop, PropExt, RelMatch,
-    RelTypeFilter,
-    RelationshipRef, RelationshipsByType, ShortestPaths, ValueId,
+    BoolCol, Col, Column, ColumnDtype, F64Col, GraphSnapshot, I64Col, NeighborsByType, Prop,
+    PropExt, RelMatch, RelTypeFilter, RelationshipRef, RelationshipsByType, ShortestPaths, StrCol,
+    ValueId,
 };
 pub use rusty_chickpeas::RustyChickpeas;
 pub use types::{
