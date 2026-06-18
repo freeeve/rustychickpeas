@@ -34,7 +34,10 @@ fn sorted(ns: rustychickpeas_core::bitmap::NodeSet) -> Vec<u32> {
 fn radius_query_is_label_scoped() {
     let g = cities();
     // Within 400 km of London: London (0) and Paris (~344). New York excluded.
-    assert_eq!(sorted(g.geo_within_radius("City", "lat", "lon", 51.5074, -0.1278, 400.0)), [1, 2]);
+    assert_eq!(
+        sorted(g.geo_within_radius("City", "lat", "lon", 51.5074, -0.1278, 400.0)),
+        [1, 2]
+    );
     // The "Other" node at London's coordinates must not surface under "City".
     let near: Vec<u32> = g
         .geo_within_radius("City", "lat", "lon", 51.5, -0.12, 1.0)
@@ -55,7 +58,10 @@ fn knn_returns_nearest_with_distances() {
 #[test]
 fn bbox_query() {
     let g = cities();
-    assert_eq!(sorted(g.geo_within_bbox("City", "lat", "lon", (40.0, -10.0), (55.0, 10.0))), [1, 2]);
+    assert_eq!(
+        sorted(g.geo_within_bbox("City", "lat", "lon", (40.0, -10.0), (55.0, 10.0))),
+        [1, 2]
+    );
 }
 
 #[test]
@@ -63,18 +69,22 @@ fn composes_with_full_text_search() {
     let g = cities();
     // "capitals within 400 km of London that mention 'france'": geo ∩ fts.
     let near = g.geo_within_radius("City", "lat", "lon", 51.5074, -0.1278, 400.0); // {1, 2}
-    let french = g.fts("City", "blurb", "france"); // {2}
+    let french = g.full_text_search("City", "blurb", "france"); // {2}
     assert_eq!(sorted(&near & &french), [2]);
 
     // Broader keyword intersects to both nearby capitals.
-    let capitals = g.fts("City", "blurb", "capital"); // {1, 2}
+    let capitals = g.full_text_search("City", "blurb", "capital"); // {1, 2}
     assert_eq!(sorted(&near & &capitals), [1, 2]);
 }
 
 #[test]
 fn unknown_names_yield_empty() {
     let g = cities();
-    assert!(g.geo_within_radius("Nope", "lat", "lon", 0.0, 0.0, 100.0).is_empty());
-    assert!(g.geo_within_radius("City", "nope", "lon", 0.0, 0.0, 100.0).is_empty());
+    assert!(g
+        .geo_within_radius("Nope", "lat", "lon", 0.0, 0.0, 100.0)
+        .is_empty());
+    assert!(g
+        .geo_within_radius("City", "nope", "lon", 0.0, 0.0, 100.0)
+        .is_empty());
     assert!(g.geo_knn("City", "lat", "nope", 0.0, 0.0, 5).is_empty());
 }

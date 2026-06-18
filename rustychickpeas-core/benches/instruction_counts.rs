@@ -84,7 +84,7 @@ fn finalize(builder: GraphBuilder) -> GraphSnapshot {
 fn neighbors_scan(graph: GraphSnapshot) -> usize {
     let mut count = 0usize;
     for i in 0..N as u32 {
-        count += black_box(graph.neighbors(black_box(i), Direction::Outgoing)).len();
+        count += black_box(graph.neighbors(black_box(i), Direction::Outgoing)).count();
     }
     black_box(count)
 }
@@ -95,8 +95,8 @@ fn neighbors_scan(graph: GraphSnapshot) -> usize {
 fn neighbors_by_type_scan(graph: GraphSnapshot) -> usize {
     let mut count = 0usize;
     for i in 0..N as u32 {
-        count +=
-            black_box(graph.neighbors_by_type(black_box(i), Direction::Outgoing, &["KNOWS"])).len();
+        count += black_box(graph.neighbors_by_type(black_box(i), Direction::Outgoing, &["KNOWS"]))
+            .count();
     }
     black_box(count)
 }
@@ -107,7 +107,8 @@ fn neighbors_by_type_scan(graph: GraphSnapshot) -> usize {
 fn relationships_scan(graph: GraphSnapshot) -> usize {
     let mut count = 0usize;
     for i in 0..N as u32 {
-        count += black_box(graph.relationships(black_box(i), Direction::Outgoing, &[])).len();
+        count += black_box(graph.relationships(black_box(i), Direction::Outgoing, &[] as &[&str]))
+            .count();
     }
     black_box(count)
 }
@@ -116,7 +117,7 @@ fn relationships_scan(graph: GraphSnapshot) -> usize {
 #[library_benchmark]
 #[bench::ring(args = (N), setup = build_ring_graph)]
 fn bfs_traversal(graph: GraphSnapshot) -> u64 {
-    let start = NodeSet::new(RoaringBitmap::from_iter([0u32]));
+    let start = NodeSet::from(RoaringBitmap::from_iter([0u32]));
     let (nodes, rels) = graph.bfs::<NodeFilter, RelFilter>(
         black_box(&start),
         Direction::Outgoing,
@@ -132,7 +133,13 @@ fn bfs_traversal(graph: GraphSnapshot) -> u64 {
 #[library_benchmark]
 #[bench::ring(args = (N), setup = build_ring_graph)]
 fn dijkstra_unweighted(graph: GraphSnapshot) -> usize {
-    let paths = graph.dijkstra(black_box(0), Direction::Outgoing, &[], None, |_, _| 1.0);
+    let paths = graph.dijkstra(
+        black_box(0),
+        Direction::Outgoing,
+        &[] as &[&str],
+        None,
+        |_, _| 1.0,
+    );
     black_box(paths.reached(black_box(N as u32 - 1)) as usize)
 }
 
@@ -144,9 +151,9 @@ fn dijkstra_weighted(graph: GraphSnapshot) -> usize {
     let paths = graph.dijkstra(
         black_box(0),
         Direction::Outgoing,
-        &[],
+        &[] as &[&str],
         None,
-        |_, rel| match graph.relationship_property(rel.pos, "weight") {
+        |_, rel| match graph.rel_prop(rel.pos, "weight").map(|p| p.value()) {
             Some(ValueId::I64(w)) => w as f64,
             _ => 1.0,
         },

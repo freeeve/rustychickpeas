@@ -160,8 +160,9 @@ fn bi1_tag_evolution_benchmark(c: &mut Criterion) {
                 std::collections::HashMap::new();
 
             for &post_id in &posts {
-                let post_tags =
-                    graph.neighbors_by_type(black_box(post_id), Direction::Outgoing, &["hasTag"]);
+                let post_tags: Vec<u32> = graph
+                    .neighbors_by_type(black_box(post_id), Direction::Outgoing, &["hasTag"])
+                    .collect();
 
                 for i in 0..post_tags.len() {
                     for j in (i + 1)..post_tags.len() {
@@ -176,11 +177,9 @@ fn bi1_tag_evolution_benchmark(c: &mut Criterion) {
             }
 
             for &comment_id in &comments {
-                let comment_tags = graph.neighbors_by_type(
-                    black_box(comment_id),
-                    Direction::Outgoing,
-                    &["hasTag"],
-                );
+                let comment_tags: Vec<u32> = graph
+                    .neighbors_by_type(black_box(comment_id), Direction::Outgoing, &["hasTag"])
+                    .collect();
 
                 for i in 0..comment_tags.len() {
                     for j in (i + 1)..comment_tags.len() {
@@ -219,16 +218,20 @@ fn bi2_tag_person_path_benchmark(c: &mut Criterion) {
             // Find paths through shared tags (simplified - just find persons with shared tags)
             for i in 0..persons.len().min(100) {
                 for j in (i + 1)..persons.len().min(100) {
-                    let person1_tags = graph.neighbors_by_type(
-                        black_box(persons[i]),
-                        Direction::Outgoing,
-                        &["hasInterest"],
-                    );
-                    let person2_tags = graph.neighbors_by_type(
-                        black_box(persons[j]),
-                        Direction::Outgoing,
-                        &["hasInterest"],
-                    );
+                    let person1_tags: Vec<u32> = graph
+                        .neighbors_by_type(
+                            black_box(persons[i]),
+                            Direction::Outgoing,
+                            &["hasInterest"],
+                        )
+                        .collect();
+                    let person2_tags: Vec<u32> = graph
+                        .neighbors_by_type(
+                            black_box(persons[j]),
+                            Direction::Outgoing,
+                            &["hasInterest"],
+                        )
+                        .collect();
 
                     // Check for shared tags
                     for &tag1 in &person1_tags {
@@ -312,7 +315,7 @@ fn bi4_top_commenters_benchmark(c: &mut Criterion) {
                 for comment_id in comments.iter() {
                     let creators = graph.neighbors(black_box(comment_id), Direction::Incoming);
 
-                    for &creator_id in &creators {
+                    for creator_id in creators {
                         if let Some(persons) = graph.nodes_with_label("Person") {
                             if persons.contains(creator_id) {
                                 *person_comment_counts.entry(creator_id).or_insert(0) += 1;
@@ -349,7 +352,7 @@ fn bi5_active_users_benchmark(c: &mut Criterion) {
                 for post_id in posts.iter() {
                     let creators = graph.neighbors(black_box(post_id), Direction::Incoming);
 
-                    for &creator_id in &creators {
+                    for creator_id in creators {
                         if let Some(persons) = graph.nodes_with_label("Person") {
                             if persons.contains(creator_id) {
                                 *person_post_counts.entry(creator_id).or_insert(0) += 1;
@@ -384,11 +387,9 @@ fn bi6_tag_cooccurrence_benchmark(c: &mut Criterion) {
 
             if let Some(posts) = graph.nodes_with_label("Post") {
                 for post_id in posts.iter() {
-                    let tags = graph.neighbors_by_type(
-                        black_box(post_id),
-                        Direction::Outgoing,
-                        &["hasTag"],
-                    );
+                    let tags: Vec<u32> = graph
+                        .neighbors_by_type(black_box(post_id), Direction::Outgoing, &["hasTag"])
+                        .collect();
 
                     for i in 0..tags.len() {
                         for j in (i + 1)..tags.len() {

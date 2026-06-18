@@ -905,7 +905,6 @@ fn bi2_tag_person_path() {
             // Find other persons interested in the same tag
             let other_persons: Vec<u32> = graph
                 .neighbors_by_type(tag_id, Direction::Incoming, &["hasInterest"])
-                .into_iter()
                 .filter(|&p| p != person1_id)
                 .collect();
 

@@ -74,13 +74,16 @@ fn rcpg_round_trip_with_properties() {
         (1, "score"),
         (10, "active"),
     ] {
-        let (a, b) = (snapshot.prop(id, key), restored.prop(id, key));
+        let (a, b) = (
+            snapshot.prop(id, key).map(|p| p.value()),
+            restored.prop(id, key).map(|p| p.value()),
+        );
         assert_eq!(a, b, "prop({}, {})", id, key);
         if let Some(ValueId::Str(s)) = a {
             assert_eq!(snapshot.resolve_string(s), restored.resolve_string(s));
         }
     }
-    assert_eq!(restored.prop(5, "name"), None); // gap ID has nothing
+    assert_eq!(restored.prop(5, "name").map(|p| p.value()), None); // gap ID has nothing
 
     // lazy property index rebuilds and answers correctly after a read
     let by_name: Vec<u32> = restored
@@ -113,7 +116,9 @@ fn rcpg_topology_only_write() {
     let restored = GraphSnapshot::read_rcpg(&lean).unwrap();
     // traversal and labels intact, properties absent
     assert_eq!(
-        restored.neighbors(0, Direction::Outgoing).collect::<Vec<_>>(),
+        restored
+            .neighbors(0, Direction::Outgoing)
+            .collect::<Vec<_>>(),
         vec![1]
     );
     let people: Vec<u32> = restored
@@ -122,8 +127,8 @@ fn rcpg_topology_only_write() {
         .iter()
         .collect();
     assert_eq!(people, vec![0, 1]);
-    assert_eq!(restored.prop(0, "name"), None);
-    assert_eq!(restored.prop(1, "age"), None);
+    assert_eq!(restored.prop(0, "name").map(|p| p.value()), None);
+    assert_eq!(restored.prop(1, "age").map(|p| p.value()), None);
 }
 
 #[test]
@@ -139,7 +144,9 @@ fn rcpg_file_round_trip() {
     let restored = GraphSnapshot::read_rcpg_file(path.to_str().unwrap()).unwrap();
     assert_eq!(restored.n_nodes, 1);
     assert_eq!(
-        restored.neighbors(0, Direction::Outgoing).collect::<Vec<_>>(),
+        restored
+            .neighbors(0, Direction::Outgoing)
+            .collect::<Vec<_>>(),
         vec![0]
     );
 }
@@ -192,9 +199,15 @@ proptest! {
         for id in 0..=max_id {
             prop_assert_eq!(snapshot.neighbors(id, Direction::Outgoing).collect::<Vec<_>>(), restored.neighbors(id, Direction::Outgoing).collect::<Vec<_>>());
             prop_assert_eq!(snapshot.neighbors(id, Direction::Incoming).collect::<Vec<_>>(), restored.neighbors(id, Direction::Incoming).collect::<Vec<_>>());
-            let (a, b) = (snapshot.prop(id, "num"), restored.prop(id, "num"));
+            let (a, b) = (
+                snapshot.prop(id, "num").map(|p| p.value()),
+                restored.prop(id, "num").map(|p| p.value()),
+            );
             prop_assert_eq!(a, b);
-            match (snapshot.prop(id, "tag"), restored.prop(id, "tag")) {
+            match (
+                snapshot.prop(id, "tag").map(|p| p.value()),
+                restored.prop(id, "tag").map(|p| p.value()),
+            ) {
                 (Some(ValueId::Str(x)), Some(ValueId::Str(y))) => {
                     prop_assert_eq!(snapshot.resolve_string(x), restored.resolve_string(y));
                 }

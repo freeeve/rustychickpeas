@@ -205,7 +205,7 @@ fn snapshot_get_degree_benchmark(c: &mut Criterion) {
             b.iter(|| {
                 // Calculate degree from neighbors
                 let neighbors = snapshot.neighbors(black_box(test_node), Direction::Outgoing);
-                let degree = neighbors.len();
+                let degree = neighbors.count();
                 black_box(degree);
             });
         });
@@ -232,9 +232,9 @@ fn snapshot_traversal_benchmark(c: &mut Criterion) {
                 // 2-hop traversal
                 let mut count = 0;
                 let neighbors1 = snapshot.neighbors(black_box(start_node), Direction::Outgoing);
-                for &n1 in neighbors1.iter().take(10) {
+                for n1 in neighbors1.take(10) {
                     let neighbors2 = snapshot.neighbors(n1, Direction::Outgoing);
-                    count += neighbors2.len();
+                    count += neighbors2.count();
                 }
                 black_box(count);
             });
@@ -259,11 +259,11 @@ fn bidirectional_bfs_benchmark(c: &mut Criterion) {
 
         // Source nodes: first 10% of nodes
         let source_nodes: Vec<u32> = (0..(*size / 10)).map(|i| i as u32).collect();
-        let source = NodeSet::new(RoaringBitmap::from_iter(source_nodes.iter().copied()));
+        let source = NodeSet::from(RoaringBitmap::from_iter(source_nodes.iter().copied()));
 
         // Target nodes: last 10% of nodes
         let target_nodes: Vec<u32> = ((*size * 9 / 10)..*size).map(|i| i as u32).collect();
-        let target = NodeSet::new(RoaringBitmap::from_iter(target_nodes.iter().copied()));
+        let target = NodeSet::from(RoaringBitmap::from_iter(target_nodes.iter().copied()));
 
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
@@ -307,10 +307,10 @@ fn bidirectional_bfs_with_filters_benchmark(c: &mut Criterion) {
         use rustychickpeas_core::bitmap::NodeSet;
 
         let source_nodes: Vec<u32> = (0..(*size / 10)).map(|i| i as u32).collect();
-        let source = NodeSet::new(RoaringBitmap::from_iter(source_nodes.iter().copied()));
+        let source = NodeSet::from(RoaringBitmap::from_iter(source_nodes.iter().copied()));
 
         let target_nodes: Vec<u32> = ((*size * 9 / 10)..*size).map(|i| i as u32).collect();
-        let target = NodeSet::new(RoaringBitmap::from_iter(target_nodes.iter().copied()));
+        let target = NodeSet::from(RoaringBitmap::from_iter(target_nodes.iter().copied()));
 
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(
@@ -408,7 +408,7 @@ fn bfs_benchmark(c: &mut Criterion) {
 
         // Start nodes: first 10% of nodes
         let start_nodes: Vec<u32> = (0..(*size / 10)).map(|i| i as u32).collect();
-        let start = NodeSet::new(RoaringBitmap::from_iter(start_nodes.iter().copied()));
+        let start = NodeSet::from(RoaringBitmap::from_iter(start_nodes.iter().copied()));
 
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
@@ -451,7 +451,7 @@ fn bfs_with_filters_benchmark(c: &mut Criterion) {
         use rustychickpeas_core::bitmap::NodeSet;
 
         let start_nodes: Vec<u32> = (0..(*size / 10)).map(|i| i as u32).collect();
-        let start = NodeSet::new(RoaringBitmap::from_iter(start_nodes.iter().copied()));
+        let start = NodeSet::from(RoaringBitmap::from_iter(start_nodes.iter().copied()));
 
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(
@@ -690,7 +690,11 @@ fn snapshot_relationships_benchmark(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             b.iter(|| {
-                let rels = snapshot.relationships(black_box(test_node), Direction::Outgoing, &[]);
+                let rels = snapshot.relationships(
+                    black_box(test_node),
+                    Direction::Outgoing,
+                    &[] as &[&str],
+                );
                 black_box(rels);
             });
         });
@@ -709,10 +713,13 @@ fn snapshot_dijkstra_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Elements(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
             b.iter(|| {
-                let paths =
-                    snapshot.dijkstra(black_box(source), Direction::Outgoing, &[], None, |_, _| {
-                        1.0
-                    });
+                let paths = snapshot.dijkstra(
+                    black_box(source),
+                    Direction::Outgoing,
+                    &[] as &[&str],
+                    None,
+                    |_, _| 1.0,
+                );
                 black_box(paths);
             });
         });

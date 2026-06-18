@@ -68,9 +68,8 @@ fn main() {
             present.set(p as usize, true);
         }
         let block_rank = build_block_rank(&present);
-        let bitvec_bytes = present.as_raw_slice().len() * std::mem::size_of::<usize>()
-            + block_rank.len() * 4
-            + values_bytes;
+        let bitvec_bytes =
+            std::mem::size_of_val(present.as_raw_slice()) + block_rank.len() * 4 + values_bytes;
 
         // --- roaring presence ---
         let mut rb = RoaringBitmap::new();

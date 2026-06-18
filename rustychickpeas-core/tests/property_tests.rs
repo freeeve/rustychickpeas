@@ -19,7 +19,7 @@ use rustychickpeas_core::types::Direction;
 // ---------------------------------------------------------------------------
 
 fn roaring_of(ids: &BTreeSet<u32>) -> NodeSet {
-    NodeSet::new(ids.iter().copied().collect::<RoaringBitmap>())
+    NodeSet::from(ids.iter().copied().collect::<RoaringBitmap>())
 }
 
 fn bitset_of(ids: &BTreeSet<u32>) -> NodeSet {
@@ -29,7 +29,7 @@ fn bitset_of(ids: &BTreeSet<u32>) -> NodeSet {
     for &id in ids {
         bv.set(id as usize, true);
     }
-    NodeSet::new_bitset(bv)
+    NodeSet::from(bv)
 }
 
 fn collect_sorted(ns: &NodeSet) -> Vec<u32> {
@@ -208,7 +208,7 @@ proptest! {
 
         let snapshot = builder.finalize(None);
         for (id, (name, count, score, active)) in &rows {
-            match snapshot.prop(*id, "name") {
+            match snapshot.prop(*id, "name").map(|p| p.value()) {
                 Some(ValueId::Str(s)) => {
                     prop_assert_eq!(snapshot.resolve_string(s).unwrap(), name, "name for node {}", id)
                 }
@@ -216,12 +216,18 @@ proptest! {
                 None => prop_assert!(name.is_empty(), "name missing for node {}", id),
                 other => prop_assert!(false, "unexpected name value {:?}", other),
             }
-            prop_assert_eq!(snapshot.prop(*id, "count"), Some(ValueId::I64(*count)));
+            prop_assert_eq!(
+                snapshot.prop(*id, "count").map(|p| p.value()),
+                Some(ValueId::I64(*count))
+            );
             match snapshot.prop(*id, "score") {
-                Some(v) => prop_assert_eq!(v.to_f64().unwrap(), *score),
+                Some(v) => prop_assert_eq!(v.f64().unwrap(), *score),
                 None => prop_assert!(false, "score missing for node {}", id),
             }
-            prop_assert_eq!(snapshot.prop(*id, "active"), Some(ValueId::Bool(*active)));
+            prop_assert_eq!(
+                snapshot.prop(*id, "active").map(|p| p.value()),
+                Some(ValueId::Bool(*active))
+            );
         }
     }
 }
@@ -299,7 +305,7 @@ proptest! {
 
         let snapshot = builder.finalize(None);
         for (id, (name, count, score, active)) in &rows {
-            match (snapshot.prop(*id, "name"), name) {
+            match (snapshot.prop(*id, "name").map(|p| p.value()), name) {
                 (Some(ValueId::Str(s)), Some(expected)) => {
                     prop_assert_eq!(snapshot.resolve_string(s).unwrap(), expected)
                 }
@@ -310,9 +316,12 @@ proptest! {
                     id, got, expected
                 ),
             }
-            prop_assert_eq!(snapshot.prop(*id, "count"), count.map(ValueId::I64));
+            prop_assert_eq!(
+                snapshot.prop(*id, "count").map(|p| p.value()),
+                count.map(ValueId::I64)
+            );
             match (snapshot.prop(*id, "score"), score) {
-                (Some(v), Some(expected)) => prop_assert_eq!(v.to_f64().unwrap(), *expected),
+                (Some(v), Some(expected)) => prop_assert_eq!(v.f64().unwrap(), *expected),
                 (None, None) => {}
                 (got, expected) => prop_assert!(
                     false,
@@ -320,7 +329,10 @@ proptest! {
                     id, got, expected
                 ),
             }
-            prop_assert_eq!(snapshot.prop(*id, "active"), active.map(ValueId::Bool));
+            prop_assert_eq!(
+                snapshot.prop(*id, "active").map(|p| p.value()),
+                active.map(ValueId::Bool)
+            );
         }
     }
 }
