@@ -12,6 +12,7 @@ mod direction;
 mod graph_snapshot;
 mod graph_snapshot_builder;
 mod node;
+mod node_set;
 mod relationship;
 mod rrsr;
 mod rusty_chickpeas;
@@ -32,6 +33,8 @@ fn rustychickpeas(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Relationship>()?;
     m.add_class::<GraphSnapshot>()?;
     m.add_class::<graph_snapshot::NodeIdIter>()?;
+    m.add_class::<node_set::NodeSet>()?;
+    m.add_class::<node_set::NodeSetIter>()?;
     m.add_class::<GraphSnapshotBuilder>()?;
     m.add_class::<RustyChickpeas>()?;
     m.add_function(wrap_pyfunction!(rrsr::write_rrsr, m)?)?;

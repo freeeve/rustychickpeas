@@ -108,3 +108,34 @@ def test_node_degree():
     assert n0.degree(O) == 1
     assert n0.degree(O, "KNOWS") == 1
     assert n0.degree(O, "LIKES") == 0
+
+
+def test_node_set():
+    from rustychickpeas import NodeSet
+
+    a = NodeSet([1, 2, 3])
+    b = NodeSet([2, 3, 4])
+    assert len(a) == 3
+    assert 2 in a and 5 not in a
+    assert (a & b).to_list() == [2, 3]
+    assert (a | b).to_list() == [1, 2, 3, 4]
+    assert (a - b).to_list() == [1]
+    assert a.intersect(b).to_list() == [2, 3]
+    assert sorted(list(a)) == [1, 2, 3]  # __iter__
+    assert NodeSet().is_empty() and not NodeSet()
+    assert NodeSet([1])  # __bool__
+    # composes with query results without a Python set()
+    g = chain()
+    persons = NodeSet(g.nodes_with_label("Person"))
+    fof = NodeSet(g.neighborhood(0, O, "KNOWS", 2))
+    assert (persons & fof).to_list() == [1, 2]
+
+
+def test_relationships_incoming_via_in_to_out():
+    # 0 -KNOWS-> 1 -KNOWS-> 2: node 1 has one incoming (from 0) and one outgoing (to 2).
+    g = chain()
+    n1 = g.node(1)
+    inc = n1.relationships(Direction.Incoming)
+    assert len(inc) == 1
+    both = n1.relationships(Direction.Both)
+    assert len(both) == 2

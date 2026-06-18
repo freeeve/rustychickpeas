@@ -90,7 +90,6 @@ impl Node {
 
                 for idx in start..end {
                     let rel_type = self.snapshot.in_types[idx];
-                    let source_node = self.snapshot.in_nbrs[idx];
 
                     // Apply type filter if provided
                     if let Some(type_ids) = rel_type_ids.as_ref() {
@@ -102,24 +101,28 @@ impl Node {
                         continue;
                     }
 
-                    // Find the corresponding outgoing index for this relationship
-                    // We need to search the source node's outgoing relationships
-                    let source_start = self.snapshot.out_offsets[source_node as usize] as usize;
-                    let source_end = self.snapshot.out_offsets[source_node as usize + 1] as usize;
-
-                    // Find the relationship in the source node's outgoing edges
-                    for out_idx in source_start..source_end {
-                        if self.snapshot.out_nbrs[out_idx] == self.node_id
-                            && self.snapshot.out_types[out_idx] == rel_type
-                        {
-                            relationships.push(Relationship {
-                                snapshot: self.snapshot.clone(),
-                                rel_index: out_idx as u32,
-                                is_outgoing: true, // Use canonical outgoing index
-                            });
-                            break;
+                    // Canonical outgoing CSR index: O(1) via the in->out map when
+                    // present (deserialized graphs), else scan the source's out-edges.
+                    let rel_index = match self.snapshot.in_to_out.get(idx) {
+                        Some(&out) => out,
+                        None => {
+                            let source = self.snapshot.in_nbrs[idx] as usize;
+                            let s = self.snapshot.out_offsets[source] as usize;
+                            let e = self.snapshot.out_offsets[source + 1] as usize;
+                            (s..e)
+                                .find(|&k| {
+                                    self.snapshot.out_nbrs[k] == self.node_id
+                                        && self.snapshot.out_types[k] == rel_type
+                                })
+                                .map(|k| k as u32)
+                                .unwrap_or(idx as u32)
                         }
-                    }
+                    };
+                    relationships.push(Relationship {
+                        snapshot: self.snapshot.clone(),
+                        rel_index,
+                        is_outgoing: true,
+                    });
                 }
             }
             Direction::Both => {
@@ -152,7 +155,6 @@ impl Node {
 
                 for in_idx in in_start..in_end {
                     let rel_type = self.snapshot.in_types[in_idx];
-                    let source_node = self.snapshot.in_nbrs[in_idx];
 
                     // Apply type filter if provided
                     if let Some(type_ids) = rel_type_ids.as_ref() {
@@ -163,22 +165,28 @@ impl Node {
                         continue;
                     }
 
-                    // Find the corresponding outgoing index
-                    let source_start = self.snapshot.out_offsets[source_node as usize] as usize;
-                    let source_end = self.snapshot.out_offsets[source_node as usize + 1] as usize;
-
-                    for out_idx in source_start..source_end {
-                        if self.snapshot.out_nbrs[out_idx] == self.node_id
-                            && self.snapshot.out_types[out_idx] == rel_type
-                        {
-                            relationships.push(Relationship {
-                                snapshot: self.snapshot.clone(),
-                                rel_index: out_idx as u32,
-                                is_outgoing: true,
-                            });
-                            break;
+                    // Canonical outgoing CSR index: O(1) via the in->out map when
+                    // present, else scan the source's out-edges.
+                    let rel_index = match self.snapshot.in_to_out.get(in_idx) {
+                        Some(&out) => out,
+                        None => {
+                            let source = self.snapshot.in_nbrs[in_idx] as usize;
+                            let s = self.snapshot.out_offsets[source] as usize;
+                            let e = self.snapshot.out_offsets[source + 1] as usize;
+                            (s..e)
+                                .find(|&k| {
+                                    self.snapshot.out_nbrs[k] == self.node_id
+                                        && self.snapshot.out_types[k] == rel_type
+                                })
+                                .map(|k| k as u32)
+                                .unwrap_or(in_idx as u32)
                         }
-                    }
+                    };
+                    relationships.push(Relationship {
+                        snapshot: self.snapshot.clone(),
+                        rel_index,
+                        is_outgoing: true,
+                    });
                 }
             }
         }
