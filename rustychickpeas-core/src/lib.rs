@@ -27,7 +27,8 @@ pub use geo::{haversine_km, GeoIndex};
 pub use graph_builder::GraphBuilder;
 pub use graph_builder_csv::CsvColumnType;
 pub use graph_snapshot::{
-    BoolCol, Col, Column, GraphSnapshot, I64Col, NeighborsByType, Prop, RelMatch, RelTypeFilter,
+    BoolCol, Col, Column, GraphSnapshot, I64Col, NeighborsByType, Prop, PropExt, RelMatch,
+    RelTypeFilter,
     RelationshipRef, RelationshipsByType, ShortestPaths, ValueId,
 };
 pub use rusty_chickpeas::RustyChickpeas;

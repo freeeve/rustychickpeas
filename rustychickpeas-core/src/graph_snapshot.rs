@@ -708,6 +708,65 @@ impl core::fmt::Debug for Prop<'_> {
     }
 }
 
+/// Typed reads lifted over `Option<`[`Prop`]`>`, so a [`GraphSnapshot::prop`] result
+/// reads directly: `g.prop(n, k).str()` flattens the narrow (vs
+/// `…​.and_then(|p| p.str())`), and the `*_or` variants fold in a default for the
+/// ubiquitous "typed value or fallback" read. Bring into scope to use; the same
+/// `str`/`i64`/`bool`/`f64` names work on a bare [`Prop`] too.
+pub trait PropExt<'a> {
+    /// The string value, or `None` if absent, not a string, **or empty**.
+    fn str(self) -> Option<&'a str>;
+    /// The `i64` value, or `None` if absent or not an `i64`.
+    fn i64(self) -> Option<i64>;
+    /// The boolean value, or `None` if absent or not a boolean.
+    fn bool(self) -> Option<bool>;
+    /// The `f64` value, or `None` if absent or not an `f64`.
+    fn f64(self) -> Option<f64>;
+    /// The string value, or `default` if absent / not a string / empty.
+    fn str_or(self, default: &'a str) -> &'a str;
+    /// The `i64` value, or `default` if absent or not an `i64`.
+    fn i64_or(self, default: i64) -> i64;
+    /// The boolean value, or `default` if absent or not a boolean.
+    fn bool_or(self, default: bool) -> bool;
+    /// The `f64` value, or `default` if absent or not an `f64`.
+    fn f64_or(self, default: f64) -> f64;
+}
+
+impl<'a> PropExt<'a> for Option<Prop<'a>> {
+    #[inline]
+    fn str(self) -> Option<&'a str> {
+        self.and_then(Prop::str)
+    }
+    #[inline]
+    fn i64(self) -> Option<i64> {
+        self.and_then(Prop::i64)
+    }
+    #[inline]
+    fn bool(self) -> Option<bool> {
+        self.and_then(Prop::bool)
+    }
+    #[inline]
+    fn f64(self) -> Option<f64> {
+        self.and_then(Prop::f64)
+    }
+    #[inline]
+    fn str_or(self, default: &'a str) -> &'a str {
+        self.and_then(Prop::str).unwrap_or(default)
+    }
+    #[inline]
+    fn i64_or(self, default: i64) -> i64 {
+        self.and_then(Prop::i64).unwrap_or(default)
+    }
+    #[inline]
+    fn bool_or(self, default: bool) -> bool {
+        self.and_then(Prop::bool).unwrap_or(default)
+    }
+    #[inline]
+    fn f64_or(self, default: f64) -> f64 {
+        self.and_then(Prop::f64).unwrap_or(default)
+    }
+}
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
