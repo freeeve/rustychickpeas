@@ -277,10 +277,7 @@ impl GraphSnapshot {
     /// Get neighbor node IDs of a node
     /// Returns a list of node IDs for neighbors in the specified direction
     fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
-        Ok(self
-            .snapshot
-            .neighbors(node_id, direction.into())
-            .collect())
+        Ok(self.snapshot.neighbors(node_id, direction.into()).collect())
     }
 
     /// Histogram of the neighbours reached from `sources` via `rel_type` edges in
@@ -382,7 +379,7 @@ impl GraphSnapshot {
         let cost = py.allow_threads(move || {
             let weight = |_from: u32, rel: &RelationshipRef| -> f64 {
                 match &weight_property {
-                    Some(prop) => match snapshot.relationship_property(rel.pos, prop) {
+                    Some(prop) => match snapshot.rel_prop(rel.pos, prop).map(|p| p.value()) {
                         Some(ValueId::F64(bits)) => f64::from_bits(bits),
                         Some(ValueId::I64(w)) => w as f64,
                         _ => f64::INFINITY,
@@ -585,7 +582,7 @@ impl GraphSnapshot {
             )));
         }
 
-        let value_id = self.snapshot.prop(node_id, &key);
+        let value_id = self.snapshot.prop(node_id, &key).map(|p| p.value());
 
         Python::with_gil(|py| {
             Ok(value_id.and_then(|vid| value_id_to_pyobject(py, vid, &self.snapshot.atoms)))
@@ -797,8 +794,8 @@ impl GraphSnapshot {
         rel_filter: Option<PyObject>,
         max_depth: Option<u32>,
     ) -> PyResult<(Vec<u32>, Vec<u32>)> {
-        let source_set = NodeSet::new(RoaringBitmap::from_iter(source_nodes.iter().copied()));
-        let target_set = NodeSet::new(RoaringBitmap::from_iter(target_nodes.iter().copied()));
+        let source_set = NodeSet::from(RoaringBitmap::from_iter(source_nodes.iter().copied()));
+        let target_set = NodeSet::from(RoaringBitmap::from_iter(target_nodes.iter().copied()));
 
         use rustychickpeas_core::types::Direction as CoreDirection;
         let rust_direction = match direction {
@@ -1055,7 +1052,7 @@ impl GraphSnapshot {
         rel_filter: Option<PyObject>,
         max_depth: Option<u32>,
     ) -> PyResult<(Vec<u32>, Vec<u32>)> {
-        let start_set = NodeSet::new(RoaringBitmap::from_iter(start_nodes.iter().copied()));
+        let start_set = NodeSet::from(RoaringBitmap::from_iter(start_nodes.iter().copied()));
 
         use rustychickpeas_core::types::Direction as CoreDirection;
         let rust_direction = match direction {

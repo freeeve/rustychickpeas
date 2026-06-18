@@ -132,7 +132,7 @@ impl Relationship {
                 .copied()
                 .unwrap_or(self.rel_index)
         };
-        let value_id = self.snapshot.relationship_property(prop_index, &key);
+        let value_id = self.snapshot.rel_prop(prop_index, &key).map(|p| p.value());
 
         Python::with_gil(|py| {
             Ok(value_id.and_then(|vid| value_id_to_pyobject(py, vid, &self.snapshot.atoms)))

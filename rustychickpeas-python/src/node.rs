@@ -27,7 +27,7 @@ impl Node {
             )));
         }
 
-        let value_id = self.snapshot.prop(self.node_id, &key);
+        let value_id = self.snapshot.prop(self.node_id, &key).map(|p| p.value());
 
         Python::with_gil(|py| {
             Ok(value_id.and_then(|vid| value_id_to_pyobject(py, vid, &self.snapshot.atoms)))
