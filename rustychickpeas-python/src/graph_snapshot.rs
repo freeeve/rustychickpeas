@@ -491,6 +491,32 @@ impl GraphSnapshot {
             .and_then(|c| c.as_slice().map(<[i64]>::to_vec))
     }
 
+    /// The dense `i64` column `key` as raw native-endian bytes (8 bytes per node
+    /// id), or `None` when the column is absent or not a dense `i64` column.
+    ///
+    /// One bulk memcpy instead of building a Python list of millions of ints —
+    /// wrap the result zero-copy with `pyarrow.py_buffer` /
+    /// `pyarrow.Array.from_buffers(pa.int64(), n, [None, buf])` (or
+    /// `numpy.frombuffer(..., dtype='<i8')`) to vectorize column scans.
+    fn i64_column_bytes<'py>(
+        &self,
+        py: Python<'py>,
+        key: &str,
+    ) -> Option<Bound<'py, pyo3::types::PyBytes>> {
+        self.snapshot
+            .col(key)
+            .map(|c| c.i64())
+            .and_then(|c| c.as_slice())
+            .map(|s| {
+                // Reinterpret the i64 slice as bytes (native endianness); PyBytes::new
+                // copies it into a Python-owned buffer.
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s))
+                };
+                pyo3::types::PyBytes::new(py, bytes)
+            })
+    }
+
     /// Weighted (or unweighted) shortest-path cost from `source` to `target`, or
     /// `None` if `target` is unreachable.
     ///
