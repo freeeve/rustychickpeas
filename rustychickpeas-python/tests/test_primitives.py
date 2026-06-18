@@ -83,3 +83,28 @@ def test_i64_column():
     assert g.i64_column("age") == [30, 31, 32]
     assert g.i64_column("missing") is None
     assert g.i64_column("name") is None  # string column, not i64
+
+
+def test_degree():
+    g = chain()
+    assert g.degree(0, O) == 1
+    assert g.degree(1, Direction.Both) == 2  # 1 out (->2) + 1 in (0->)
+    assert g.degree(2, O) == 0
+    assert g.degree(0, O, "KNOWS") == 1  # typed
+    assert g.degree(0, O, "LIKES") == 0
+
+
+def test_neighbor_ids_rel_types():
+    g = chain()
+    assert g.neighbor_ids(0, O) == [1]
+    assert g.neighbor_ids(1, O) == [2]
+    assert g.neighbor_ids(0, O, ["KNOWS"]) == [1]
+    assert g.neighbor_ids(0, O, ["LIKES"]) == []
+
+
+def test_node_degree():
+    g = chain()
+    n0 = g.node(0)
+    assert n0.degree(O) == 1
+    assert n0.degree(O, "KNOWS") == 1
+    assert n0.degree(O, "LIKES") == 0

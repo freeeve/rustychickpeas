@@ -293,10 +293,30 @@ impl GraphSnapshot {
         Ok(relationships)
     }
 
-    /// Get neighbor node IDs of a node
-    /// Returns a list of node IDs for neighbors in the specified direction
-    fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
-        Ok(self.snapshot.neighbors(node_id, direction.into()).collect())
+    /// Neighbor node IDs in `direction`, optionally restricted to `rel_types`
+    /// (deduplicated, ascending, when types are given).
+    #[pyo3(signature = (node_id, direction, rel_types=None))]
+    fn neighbor_ids(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+    ) -> Vec<u32> {
+        match rel_types {
+            None => self.snapshot.neighbors(node_id, direction.into()).collect(),
+            Some(types) => {
+                let mut set = RoaringBitmap::new();
+                for t in &types {
+                    for n in self
+                        .snapshot
+                        .neighbors_by_type(node_id, direction.into(), t.as_str())
+                    {
+                        set.insert(n);
+                    }
+                }
+                set.iter().collect()
+            }
+        }
     }
 
     /// Histogram of the neighbours reached from `sources` via `rel_type` edges in
@@ -360,9 +380,17 @@ impl GraphSnapshot {
             .collect())
     }
 
-    /// Get degree of a node
-    fn degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
-        Ok(self.snapshot.neighbors(node_id, direction.into()).count())
+    /// Degree of a node — O(1) from the CSR offsets when untyped; with
+    /// `rel_type`, the count of neighbors reached via that type.
+    #[pyo3(signature = (node_id, direction, rel_type=None))]
+    fn degree(&self, node_id: u32, direction: Direction, rel_type: Option<&str>) -> usize {
+        match rel_type {
+            Some(rt) => self
+                .snapshot
+                .neighbors_by_type(node_id, direction.into(), rt)
+                .count(),
+            None => crate::utils::csr_degree(&self.snapshot, node_id, direction.into()),
+        }
     }
 
     /// Whether `node_id` carries `label` — an O(1) label-index check, vs the

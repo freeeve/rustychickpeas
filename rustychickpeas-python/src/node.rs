@@ -229,12 +229,17 @@ impl Node {
         Ok(labels)
     }
 
-    /// Get degree (number of relationships) for this node
-    fn degree(&self, direction: Direction) -> PyResult<usize> {
-        Ok(self
-            .snapshot
-            .neighbors(self.node_id, direction.into())
-            .count())
+    /// Degree of this node — O(1) from the CSR offsets when untyped; with
+    /// `rel_type`, the count of neighbors reached via that type.
+    #[pyo3(signature = (direction, rel_type=None))]
+    fn degree(&self, direction: Direction, rel_type: Option<&str>) -> usize {
+        match rel_type {
+            Some(rt) => self
+                .snapshot
+                .neighbors_by_type(self.node_id, direction.into(), rt)
+                .count(),
+            None => crate::utils::csr_degree(&self.snapshot, self.node_id, direction.into()),
+        }
     }
 
     /// Get the internal node ID

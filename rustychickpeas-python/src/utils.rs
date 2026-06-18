@@ -44,6 +44,29 @@ pub fn stable_hash_u64(x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// O(1) degree of `node` in `direction`, read straight from the resident CSR
+/// offsets (no neighbor scan). `Both` sums the two sides.
+pub fn csr_degree(
+    snapshot: &rustychickpeas_core::GraphSnapshot,
+    node: u32,
+    direction: rustychickpeas_core::Direction,
+) -> usize {
+    use rustychickpeas_core::Direction;
+    let one = |offsets: &[u32]| {
+        let i = node as usize;
+        if i + 1 >= offsets.len() {
+            0
+        } else {
+            (offsets[i + 1] - offsets[i]) as usize
+        }
+    };
+    match direction {
+        Direction::Outgoing => one(&snapshot.out_offsets),
+        Direction::Incoming => one(&snapshot.in_offsets),
+        Direction::Both => one(&snapshot.out_offsets) + one(&snapshot.in_offsets),
+    }
+}
+
 /// Convert a ValueId to a Python object, resolving strings through the Atoms table
 pub fn value_id_to_pyobject(py: Python<'_>, vid: ValueId, atoms: &Atoms) -> Option<PyObject> {
     match vid {
