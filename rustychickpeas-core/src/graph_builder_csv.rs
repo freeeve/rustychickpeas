@@ -362,6 +362,151 @@ fn node_exists_in_builder(builder: &GraphBuilder, node_id: u32) -> bool {
     builder.known_nodes.contains(node_id)
 }
 
+/// How to resolve a relationship endpoint to an internal node id for one CSV column set.
+///
+/// Mirrors the Parquet loader's `NodeReference` handling: an `Id` column is parsed directly
+/// as a `u32` node id, while property references resolve through an index built over the
+/// already-loaded nodes (`build_property_index` / `build_composite_property_index`). The
+/// indexes are owned here so they don't borrow the builder during row processing.
+enum RefIndex {
+    /// Column holds the node id directly (parsed as `u32`).
+    Id { col: usize },
+    /// Single-property lookup: parse the column cell, look it up in the property index.
+    Single {
+        col: usize,
+        ty: CsvColumnType,
+        index: HashMap<ValueId, Vec<u32>>,
+    },
+    /// Composite-property lookup: parse each column cell, look up the combined key.
+    Composite {
+        cols: Vec<usize>,
+        tys: Vec<CsvColumnType>,
+        index: HashMap<crate::types::DedupKey, Vec<u32>>,
+    },
+}
+
+/// Column names referenced by a `NodeReference`, used to exclude endpoint columns from
+/// auto-detected relationship property columns.
+fn ref_column_names(node_ref: &crate::types::NodeReference) -> Vec<&str> {
+    use crate::types::NodeReference;
+    match node_ref {
+        NodeReference::Id(c) => vec![c.as_str()],
+        NodeReference::Property { column, .. } => vec![column.as_str()],
+        NodeReference::CompositeProperty { columns, .. } => {
+            columns.iter().map(|s| s.as_str()).collect()
+        }
+    }
+}
+
+/// Resolve the endpoint columns declared by a `NodeReference` to header indices, building the
+/// property index needed for property-based references. `ctx` labels the endpoint
+/// ("Start node"/"End node") for not-found errors.
+fn build_ref_index(
+    builder: &GraphBuilder,
+    headers: &[String],
+    node_ref: &crate::types::NodeReference,
+    ctx: &str,
+    column_types: &Option<HashMap<&str, CsvColumnType>>,
+) -> Result<RefIndex> {
+    use crate::types::NodeReference;
+
+    let col_type = |name: &str| {
+        column_types
+            .as_ref()
+            .and_then(|m| m.get(name).copied())
+            .unwrap_or(CsvColumnType::Auto)
+    };
+
+    match node_ref {
+        NodeReference::Id(column) => {
+            let col = require_column_index(headers, column, ctx)?;
+            Ok(RefIndex::Id { col })
+        }
+        NodeReference::Property {
+            column,
+            property_key,
+            label,
+        } => {
+            let col = require_column_index(headers, column, ctx)?;
+            let index = builder.build_property_index(property_key, label.as_deref());
+            Ok(RefIndex::Single {
+                col,
+                ty: col_type(column),
+                index,
+            })
+        }
+        NodeReference::CompositeProperty {
+            columns,
+            property_keys,
+            label,
+        } => {
+            let cols = columns
+                .iter()
+                .map(|c| require_column_index(headers, c, ctx))
+                .collect::<Result<Vec<_>>>()?;
+            let tys = columns.iter().map(|c| col_type(c)).collect();
+            let keys: Vec<&str> = property_keys.iter().map(|s| s.as_str()).collect();
+            let index = builder.build_composite_property_index(&keys, label.as_deref());
+            Ok(RefIndex::Composite { cols, tys, index })
+        }
+    }
+}
+
+/// Resolve a single relationship endpoint for one CSV row to an internal node id.
+///
+/// Returns `Ok(None)` when a property reference cannot be matched (empty cell or no node with
+/// that property value) so the caller can skip the row. `Id` references parse the column as a
+/// `u32` and error on malformed input, preserving the original loader behavior.
+fn resolve_ref_node(
+    builder: &mut GraphBuilder,
+    record: &csv::StringRecord,
+    ref_index: &RefIndex,
+    side: &str,
+    row_num: usize,
+) -> Result<Option<u32>> {
+    match ref_index {
+        RefIndex::Id { col } => {
+            let s = record.get(*col).ok_or_else(|| {
+                GraphError::CsvError(format!(
+                    "Missing {} node column at row {}",
+                    side,
+                    row_num + 1
+                ))
+            })?;
+            let id = s.parse::<u32>().map_err(|e| {
+                GraphError::CsvError(format!(
+                    "Invalid {} node ID '{}' at row {}: {}",
+                    side,
+                    s,
+                    row_num + 1,
+                    e
+                ))
+            })?;
+            Ok(Some(id))
+        }
+        RefIndex::Single { col, ty, index } => {
+            let s = match record.get(*col) {
+                Some(s) if !s.is_empty() => s,
+                _ => return Ok(None),
+            };
+            let value_id = parse_csv_value(s, builder, *ty);
+            Ok(index.get(&value_id).and_then(|ids| ids.first().copied()))
+        }
+        RefIndex::Composite { cols, tys, index } => {
+            let mut values: Vec<ValueId> = Vec::with_capacity(cols.len());
+            for (col, ty) in cols.iter().zip(tys.iter()) {
+                let s = match record.get(*col) {
+                    Some(s) if !s.is_empty() => s,
+                    _ => return Ok(None),
+                };
+                values.push(parse_csv_value(s, builder, *ty));
+            }
+            let key = crate::types::DedupKey::from_slice(&values);
+            Ok(index.get(&key).and_then(|ids| ids.first().copied()))
+        }
+    }
+}
+
 impl GraphBuilder {
     /// Load nodes from a CSV file into the builder
     ///
@@ -504,19 +649,25 @@ impl GraphBuilder {
     ///
     /// # Arguments
     /// * `path` - Path to CSV file (supports .csv and .csv.gz)
-    /// * `start_node_column` - Column name for start node IDs
-    /// * `end_node_column` - Column name for end node IDs
+    /// * `start_node_ref` - How to identify start nodes: a bare column name (`&str`/`String`)
+    ///   for a direct id column, or a [`crate::types::NodeReference`] for property-based lookup
+    /// * `end_node_ref` - How to identify end nodes (same forms as `start_node_ref`)
     /// * `rel_type_column` - Optional column name for relationship type. If None, `fixed_rel_type` must be provided.
-    /// * `property_columns` - Optional list of column names to use as properties. If None, uses all columns except start/end/type.
+    /// * `property_columns` - Optional list of column names to use as properties. If None, uses all columns except the endpoint/type columns.
     /// * `fixed_rel_type` - Optional fixed relationship type to use for all relationships. Required if `rel_type_column` is None.
     /// * `deduplication` - Optional deduplication strategy for relationships
     /// * `column_types` - Optional map of column names to types. If not specified, uses heuristic parsing (Auto).
+    ///
+    /// Property-based references resolve through an index over the already-loaded nodes, so the
+    /// nodes must be loaded before their relationships. This lets CSV relationships reference
+    /// nodes whose external ids are i64 or collide across types (e.g. LDBC), where the raw id
+    /// column cannot be used directly as the internal `u32` node id.
     #[allow(clippy::too_many_arguments)]
     pub fn load_relationships_from_csv(
         &mut self,
         path: &str,
-        start_node_column: &str,
-        end_node_column: &str,
+        start_node_ref: impl Into<crate::types::NodeReference>,
+        end_node_ref: impl Into<crate::types::NodeReference>,
         rel_type_column: Option<&str>,
         property_columns: Option<Vec<&str>>,
         fixed_rel_type: Option<&str>,
@@ -524,6 +675,10 @@ impl GraphBuilder {
         column_types: Option<HashMap<&str, CsvColumnType>>,
         delimiter: u8,
     ) -> Result<Vec<(u32, u32)>> {
+        // Accept a bare column name (`From<&str>`) or an explicit reference spec.
+        let start_ref = start_node_ref.into();
+        let end_ref = end_node_ref.into();
+
         let mut reader = create_csv_reader(path, delimiter)?;
 
         // Get headers
@@ -533,10 +688,6 @@ impl GraphBuilder {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-
-        // Validate required columns exist, using SchemaError for mismatches
-        let start_node_idx = require_column_index(&headers, start_node_column, "Start node")?;
-        let end_node_idx = require_column_index(&headers, end_node_column, "End node")?;
 
         let rel_type_idx = match rel_type_column {
             Some(col) => Some(require_column_index(&headers, col, "Relationship type")?),
@@ -554,17 +705,22 @@ impl GraphBuilder {
             validate_columns_exist(&headers, prop_cols, "Relationship property")?;
         }
 
+        // Columns consumed as endpoints or relationship type are excluded from
+        // auto-detected property columns.
+        let start_cols = ref_column_names(&start_ref);
+        let end_cols = ref_column_names(&end_ref);
+        let mut reserved: Vec<&str> = Vec::new();
+        reserved.extend_from_slice(&start_cols);
+        reserved.extend_from_slice(&end_cols);
+        if let Some(rt_col) = rel_type_column {
+            reserved.push(rt_col);
+        }
+
         // Determine property columns
         let prop_cols = property_columns.unwrap_or_else(|| {
             headers
                 .iter()
-                .filter(|col| {
-                    col.as_str() != start_node_column
-                        && col.as_str() != end_node_column
-                        && rel_type_column
-                            .map(|rt_col| col.as_str() != rt_col)
-                            .unwrap_or(true)
-                })
+                .filter(|col| !reserved.contains(&col.as_str()))
                 .map(|s| s.as_str())
                 .collect()
         });
@@ -578,6 +734,11 @@ impl GraphBuilder {
                     .map(|idx| (idx, col.to_string()))
             })
             .collect();
+
+        // Build endpoint resolvers (and any property indexes) once, up front. This also
+        // validates that the referenced columns exist (SchemaError otherwise).
+        let start_index = build_ref_index(self, &headers, &start_ref, "Start node", &column_types)?;
+        let end_index = build_ref_index(self, &headers, &end_ref, "End node", &column_types)?;
 
         // Set up deduplication tracking
         let mut seen_by_type: HashMap<(u32, u32, u32), ()> = HashMap::new();
@@ -599,12 +760,34 @@ impl GraphBuilder {
 
             row_num += 1;
 
+            let start_id = match resolve_ref_node(self, &record, &start_index, "start", row_num)? {
+                Some(id) => id,
+                None => {
+                    skipped_missing_nodes += 1;
+                    continue;
+                }
+            };
+            let end_id = match resolve_ref_node(self, &record, &end_index, "end", row_num)? {
+                Some(id) => id,
+                None => {
+                    skipped_missing_nodes += 1;
+                    continue;
+                }
+            };
+
+            // Validate that referenced nodes exist (relevant for id columns; property
+            // lookups only ever yield existing nodes).
+            if !node_exists_in_builder(self, start_id) || !node_exists_in_builder(self, end_id) {
+                skipped_missing_nodes += 1;
+                continue;
+            }
+
             if let Some(pair) = process_rel_row(
                 self,
                 &record,
                 row_num,
-                start_node_idx,
-                end_node_idx,
+                start_id,
+                end_id,
                 rel_type_idx,
                 fixed_rel_type,
                 &prop_indices,
@@ -612,7 +795,6 @@ impl GraphBuilder {
                 &deduplication,
                 &mut seen_by_type,
                 &mut seen_by_type_and_props,
-                &mut skipped_missing_nodes,
             )? {
                 rel_ids.push(pair);
             }
@@ -629,15 +811,15 @@ impl GraphBuilder {
     }
 }
 
-/// Process a single CSV row for relationship loading.
-/// Returns `Some((start_id, end_id))` if the relationship was added, `None` if skipped.
+/// Process a single CSV row for relationship loading, given already-resolved endpoint ids.
+/// Returns `Some((start_id, end_id))` if the relationship was added, `None` if deduplicated away.
 #[allow(clippy::too_many_arguments)]
 fn process_rel_row(
     builder: &mut GraphBuilder,
     record: &csv::StringRecord,
     row_num: usize,
-    start_node_idx: usize,
-    end_node_idx: usize,
+    start_id: u32,
+    end_id: u32,
     rel_type_idx: Option<usize>,
     fixed_rel_type: Option<&str>,
     prop_indices: &[(usize, String)],
@@ -645,39 +827,7 @@ fn process_rel_row(
     deduplication: &Option<crate::types::RelationshipDeduplication>,
     seen_by_type: &mut HashMap<(u32, u32, u32), ()>,
     seen_by_type_and_props: &mut HashMap<(u32, u32, u32, Vec<ValueId>), ()>,
-    skipped_missing_nodes: &mut u64,
 ) -> Result<Option<(u32, u32)>> {
-    // Extract start and end node IDs
-    let start_str = record.get(start_node_idx).ok_or_else(|| {
-        GraphError::CsvError(format!("Missing start node column at row {}", row_num + 1))
-    })?;
-    let end_str = record.get(end_node_idx).ok_or_else(|| {
-        GraphError::CsvError(format!("Missing end node column at row {}", row_num + 1))
-    })?;
-
-    let start_id = start_str.parse::<u32>().map_err(|e| {
-        GraphError::CsvError(format!(
-            "Invalid start node ID '{}' at row {}: {}",
-            start_str,
-            row_num + 1,
-            e
-        ))
-    })?;
-    let end_id = end_str.parse::<u32>().map_err(|e| {
-        GraphError::CsvError(format!(
-            "Invalid end node ID '{}' at row {}: {}",
-            end_str,
-            row_num + 1,
-            e
-        ))
-    })?;
-
-    // Validate that referenced nodes exist in the builder
-    if !node_exists_in_builder(builder, start_id) || !node_exists_in_builder(builder, end_id) {
-        *skipped_missing_nodes += 1;
-        return Ok(None);
-    }
-
     // Extract relationship type
     let rel_type = if let Some(idx) = rel_type_idx {
         record
@@ -1417,5 +1567,176 @@ mod tests {
             "Expected schema error, got: {}",
             err_msg
         );
+    }
+
+    /// Resolve relationship endpoints by a property whose external ids overflow `u32` and
+    /// collide across labels (the LDBC shape). Auto-assigned internal ids are 0,1,2 in row
+    /// order; the `Person` label filter must disambiguate the colliding external id.
+    #[test]
+    fn test_load_relationships_from_csv_property_ref() {
+        use crate::types::NodeReference;
+        let temp_dir = TempDir::new().unwrap();
+
+        let nodes_path = temp_dir.path().join("nodes.csv");
+        let mut nf = File::create(&nodes_path).unwrap();
+        // internal 0 = Comment ext 1000000000001, 1 = Person ext 1000000000001,
+        // 2 = Person ext 1000000000002. Without the label filter, `.first()` would pick
+        // the Comment for ext 1000000000001 because it is loaded first.
+        writeln!(nf, "ext_id|label").unwrap();
+        writeln!(nf, "1000000000001|Comment").unwrap();
+        writeln!(nf, "1000000000001|Person").unwrap();
+        writeln!(nf, "1000000000002|Person").unwrap();
+        drop(nf);
+
+        let rels_path = temp_dir.path().join("rels.csv");
+        let mut rf = File::create(&rels_path).unwrap();
+        writeln!(rf, "from|to|type").unwrap();
+        writeln!(rf, "1000000000001|1000000000002|KNOWS").unwrap();
+        drop(rf);
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder
+            .load_nodes_from_csv(
+                nodes_path.to_str().unwrap(),
+                None, // auto-assign internal node ids
+                Some(vec!["label"]),
+                Some(vec!["ext_id"]), // store external id as a property
+                None,
+                None,
+                None,
+                b'|',
+            )
+            .unwrap();
+
+        let rel_ids = builder
+            .load_relationships_from_csv(
+                rels_path.to_str().unwrap(),
+                NodeReference::property("from", "ext_id", Some("Person")),
+                NodeReference::property("to", "ext_id", Some("Person")),
+                Some("type"),
+                None,
+                None,
+                None,
+                None,
+                b'|',
+            )
+            .unwrap();
+
+        assert_eq!(rel_ids, vec![(1, 2)]);
+        assert_eq!(builder.relationship_count(), 1);
+        // Endpoints are the two Person nodes, not the colliding Comment node.
+        assert_eq!(builder.prop(1, "ext_id"), Some(ValueId::I64(1000000000001)));
+        assert_eq!(builder.prop(2, "ext_id"), Some(ValueId::I64(1000000000002)));
+    }
+
+    /// Relationship rows whose property reference matches no node are skipped, not errored.
+    #[test]
+    fn test_load_relationships_from_csv_property_ref_unmatched_skipped() {
+        use crate::types::NodeReference;
+        let temp_dir = TempDir::new().unwrap();
+
+        let nodes_path = temp_dir.path().join("nodes.csv");
+        let mut nf = File::create(&nodes_path).unwrap();
+        writeln!(nf, "ext_id|label").unwrap();
+        writeln!(nf, "10|Person").unwrap();
+        writeln!(nf, "20|Person").unwrap();
+        drop(nf);
+
+        let rels_path = temp_dir.path().join("rels.csv");
+        let mut rf = File::create(&rels_path).unwrap();
+        writeln!(rf, "from|to|type").unwrap();
+        writeln!(rf, "10|20|KNOWS").unwrap();
+        writeln!(rf, "10|999|KNOWS").unwrap(); // 999 matches no node
+        drop(rf);
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder
+            .load_nodes_from_csv(
+                nodes_path.to_str().unwrap(),
+                None,
+                Some(vec!["label"]),
+                Some(vec!["ext_id"]),
+                None,
+                None,
+                None,
+                b'|',
+            )
+            .unwrap();
+
+        let rel_ids = builder
+            .load_relationships_from_csv(
+                rels_path.to_str().unwrap(),
+                NodeReference::property("from", "ext_id", Some("Person")),
+                NodeReference::property("to", "ext_id", Some("Person")),
+                Some("type"),
+                None,
+                None,
+                None,
+                None,
+                b'|',
+            )
+            .unwrap();
+
+        assert_eq!(rel_ids, vec![(0, 1)]);
+        assert_eq!(builder.relationship_count(), 1);
+    }
+
+    /// Resolve endpoints by a composite (multi-column) property reference.
+    #[test]
+    fn test_load_relationships_from_csv_composite_ref() {
+        use crate::types::NodeReference;
+        let temp_dir = TempDir::new().unwrap();
+
+        let nodes_path = temp_dir.path().join("nodes.csv");
+        let mut nf = File::create(&nodes_path).unwrap();
+        writeln!(nf, "first,last,label").unwrap();
+        writeln!(nf, "Alice,Smith,Person").unwrap();
+        writeln!(nf, "Bob,Jones,Person").unwrap();
+        drop(nf);
+
+        let rels_path = temp_dir.path().join("rels.csv");
+        let mut rf = File::create(&rels_path).unwrap();
+        writeln!(rf, "f1,l1,f2,l2,type").unwrap();
+        writeln!(rf, "Alice,Smith,Bob,Jones,KNOWS").unwrap();
+        drop(rf);
+
+        let mut builder = GraphBuilder::new(None, None);
+        builder
+            .load_nodes_from_csv(
+                nodes_path.to_str().unwrap(),
+                None,
+                Some(vec!["label"]),
+                Some(vec!["first", "last"]),
+                None,
+                None,
+                None,
+                b',',
+            )
+            .unwrap();
+
+        let rel_ids = builder
+            .load_relationships_from_csv(
+                rels_path.to_str().unwrap(),
+                NodeReference::composite(
+                    vec!["f1".to_string(), "l1".to_string()],
+                    vec!["first".to_string(), "last".to_string()],
+                    Some("Person"),
+                ),
+                NodeReference::composite(
+                    vec!["f2".to_string(), "l2".to_string()],
+                    vec!["first".to_string(), "last".to_string()],
+                    Some("Person"),
+                ),
+                Some("type"),
+                None,
+                None,
+                None,
+                None,
+                b',',
+            )
+            .unwrap();
+
+        assert_eq!(rel_ids, vec![(0, 1)]);
+        assert_eq!(builder.relationship_count(), 1);
     }
 }

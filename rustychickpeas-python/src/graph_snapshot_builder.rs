@@ -560,9 +560,17 @@ impl GraphSnapshotBuilder {
 
     /// Load relationships from a CSV file into the builder (.csv or .csv.gz).
     ///
+    /// Endpoints accept the same forms as the Parquet loader:
+    /// - String: a column holding the node id directly
+    /// - Dict (single property): {"column": "ext_id", "property_key": "id", "label": "Person"}
+    /// - Dict (composite property): {"columns": [...], "property_keys": [...], "label": "Person"}
+    ///
+    /// Property references resolve against already-loaded nodes, so load nodes before their
+    /// relationships. Use them when external ids overflow u32 or collide across labels (LDBC).
+    ///
     /// Args:
     ///     path: Path to the CSV file
-    ///     start_node_column / end_node_column: Columns holding endpoint node IDs
+    ///     start_node_column / end_node_column: String column name or property-lookup dict
     ///     rel_type_column: Column holding the relationship type (or use fixed_rel_type)
     ///     property_columns: Columns to load as edge properties
     ///     fixed_rel_type: A fixed relationship type for every row
@@ -572,8 +580,8 @@ impl GraphSnapshotBuilder {
     fn load_relationships_from_csv(
         &mut self,
         path: String,
-        start_node_column: String,
-        end_node_column: String,
+        start_node_column: &Bound<'_, PyAny>,
+        end_node_column: &Bound<'_, PyAny>,
         rel_type_column: Option<String>,
         property_columns: Option<Vec<String>>,
         fixed_rel_type: Option<String>,
@@ -582,6 +590,9 @@ impl GraphSnapshotBuilder {
     ) -> PyResult<Vec<(u32, u32)>> {
         use rustychickpeas_core::types::RelationshipDeduplication as Dd;
         self.check_not_finalized()?;
+        // A bare column name (str) or a property-lookup dict; see parse_node_reference.
+        let start_ref = parse_node_reference(start_node_column)?;
+        let end_ref = parse_node_reference(end_node_column)?;
         let delim = delimiter.as_bytes().first().copied().unwrap_or(b',');
         let prop_cols = property_columns
             .as_ref()
@@ -607,8 +618,8 @@ impl GraphSnapshotBuilder {
         self.builder
             .load_relationships_from_csv(
                 &path,
-                &start_node_column,
-                &end_node_column,
+                start_ref,
+                end_ref,
                 rel_type_column.as_deref(),
                 prop_cols,
                 fixed_rel_type.as_deref(),
@@ -788,7 +799,12 @@ impl GraphSnapshotBuilder {
     /// * `key` - The property key
     /// * `value` - The property value to search for
     #[pyo3(signature = (label, key, value))]
-    fn nodes_with_property(&self, label: String, key: String, value: &Bound<'_, PyAny>) -> PyResult<Vec<u32>> {
+    fn nodes_with_property(
+        &self,
+        label: String,
+        key: String,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<u32>> {
         self.check_not_finalized()?;
         let prop_value = py_to_property_value(value)?;
         let value_id = match prop_value {
