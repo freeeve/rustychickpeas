@@ -2135,11 +2135,11 @@ mod tests {
         let since_val = snapshot.value_id_from_str("2020").unwrap();
 
         // Check that relationship property exists
-        let prop = snapshot.rel_prop(csr_pos, "since");
+        let prop = snapshot.rel_prop(csr_pos, "since").map(|p| p.value());
         assert_eq!(prop, Some(since_val));
 
         let weight_val = ValueId::I64(5);
-        let prop = snapshot.rel_prop(csr_pos, "weight");
+        let prop = snapshot.rel_prop(csr_pos, "weight").map(|p| p.value());
         assert_eq!(prop, Some(weight_val));
     }
 
@@ -2165,7 +2165,7 @@ mod tests {
         let mut out = std::collections::HashMap::new();
         for r in g.relationships(1, Direction::Outgoing, &["KNOWS"]) {
             assert_eq!(r.direction, Direction::Outgoing);
-            out.insert(r.neighbor, g.rel_prop(r.pos, "since"));
+            out.insert(r.neighbor, g.rel_prop(r.pos, "since").map(|p| p.value()));
         }
         assert_eq!(out.get(&2), Some(&Some(ValueId::I64(2020))));
         assert_eq!(out.get(&3), Some(&Some(ValueId::I64(2021))));
@@ -2175,7 +2175,7 @@ mod tests {
         let mut inc = std::collections::HashMap::new();
         for r in g.relationships(2, Direction::Incoming, &["KNOWS"]) {
             assert_eq!(r.direction, Direction::Incoming);
-            inc.insert(r.neighbor, g.rel_prop(r.pos, "since"));
+            inc.insert(r.neighbor, g.rel_prop(r.pos, "since").map(|p| p.value()));
         }
         assert_eq!(inc.get(&1), Some(&Some(ValueId::I64(2020))));
         assert_eq!(inc.get(&4), Some(&Some(ValueId::I64(2019))));
@@ -2214,7 +2214,7 @@ mod tests {
 
         let mut inc = std::collections::HashMap::new();
         for r in restored.relationships(3, Direction::Incoming, &["KNOWS"]) {
-            inc.insert(r.neighbor, restored.rel_prop(r.pos, "since"));
+            inc.insert(r.neighbor, restored.rel_prop(r.pos, "since").map(|p| p.value()));
         }
         assert_eq!(inc.get(&1), Some(&Some(ValueId::I64(2020))));
         assert_eq!(inc.get(&2), Some(&Some(ValueId::I64(2018))));
@@ -2236,6 +2236,7 @@ mod tests {
         let g = b.finalize(None);
         let cost = |_from: NodeId, rel: &crate::RelationshipRef| match g
             .rel_prop(rel.pos, "w")
+            .map(|p| p.value())
         {
             Some(ValueId::I64(w)) => w as f64,
             _ => f64::INFINITY,

@@ -399,7 +399,7 @@ impl Atoms {
 ///
 /// Carries the other endpoint, the relationship type, the direction relative to
 /// the queried node, and the CSR position used to read the relationship's
-/// properties via [`GraphSnapshot::relationship_property`] — which the plain
+/// properties via [`GraphSnapshot::rel_prop`] — which the plain
 /// neighbor accessors do not expose. `pos` is valid for property access in
 /// **both** directions (for incoming relationships it is mapped to the position
 /// where the property is stored).
@@ -412,7 +412,7 @@ pub struct RelationshipRef {
     /// Direction relative to the queried node: `Outgoing` if it is the source,
     /// `Incoming` if it is the destination.
     pub direction: Direction,
-    /// CSR position; pass to [`GraphSnapshot::relationship_property`] to read
+    /// CSR position; pass to [`GraphSnapshot::rel_prop`] to read
     /// this relationship's properties.
     pub pos: u32,
 }
@@ -1270,7 +1270,7 @@ impl GraphSnapshot {
     /// Unlike [`neighbors`](Self::neighbors), which yields only node IDs in a
     /// direction, each [`RelationshipRef`] carries the
     /// [`pos`](RelationshipRef::pos) needed to read the relationship's
-    /// properties via [`relationship_property`](Self::relationship_property) —
+    /// properties via [`rel_prop`](Self::rel_prop) —
     /// for incoming relationships as well as outgoing (the incoming position is
     /// mapped to where the property is stored). Use this when a query must read
     /// a per-relationship property during traversal, e.g. filtering `KNOWS`
@@ -1317,7 +1317,7 @@ impl GraphSnapshot {
     /// The `weight` closure returns the cost of traversing a relationship; it
     /// receives the step's source node and the [`RelationshipRef`], so it can
     /// read a stored edge weight via [`RelationshipRef::pos`] (with
-    /// [`relationship_property`](Self::relationship_property)) or compute a
+    /// [`rel_prop`](Self::rel_prop)) or compute a
     /// derived cost. Weights must be **non-negative** (Dijkstra's assumption).
     ///
     /// Pass a `target` to stop as soon as its shortest distance is known
@@ -2683,18 +2683,17 @@ impl GraphSnapshot {
         self.columns.get(&key)?.get(node_id)
     }
 
-    /// Read a relationship property value by CSR position — the relationship
-    /// analogue of [`prop`](Self::prop) for nodes. `rel_csr_pos` is the position in
-    /// the outgoing CSR array (0..n_rels), as carried by `RelationshipRef::pos`.
-    pub fn rel_prop(&self, rel_csr_pos: u32, key: &str) -> Option<ValueId> {
+    /// Read a relationship property by CSR position — the relationship analogue of
+    /// [`prop`](Self::prop), returning the same narrowable [`Prop`]. `rel_csr_pos` is
+    /// the position in the outgoing CSR array (0..n_rels), as carried by
+    /// [`RelationshipRef::pos`]. Narrow with [`Prop::i64`] / [`Prop::f64`] / … or
+    /// [`PropExt`] on the `Option`, exactly like a node `prop`.
+    pub fn rel_prop(&self, rel_csr_pos: u32, key: &str) -> Option<Prop<'_>> {
         let key_id = self.property_key_from_str(key)?;
-        self.relationship_property_id(rel_csr_pos, key_id)
-    }
-
-    /// Verbose alias of [`rel_prop`](Self::rel_prop), retained for backward
-    /// compatibility; prefer `rel_prop`.
-    pub fn relationship_property(&self, rel_csr_pos: u32, key: &str) -> Option<ValueId> {
-        self.rel_prop(rel_csr_pos, key)
+        Some(Prop {
+            g: self,
+            value: self.relationship_property_id(rel_csr_pos, key_id)?,
+        })
     }
 
     /// Get property value for a relationship (internal ID-based version)
