@@ -67,6 +67,25 @@ impl GraphSnapshot {
     fn property_key_from_str(&self, s: &str) -> Option<PropertyKey> {
         self.get_string_id(s)
     }
+
+    /// Convert a Python value to a core [`ValueId`], resolving a string to its
+    /// interned atom id. Returns `Ok(None)` when a string value is not interned
+    /// in this snapshot — no node can carry it, so predicate/lookup callers
+    /// short-circuit to "no match" rather than erroring.
+    fn py_value_to_id_opt(&self, value: &PyAny) -> PyResult<Option<ValueId>> {
+        use rustychickpeas_core::PropertyValue;
+        Ok(match py_to_property_value(value)? {
+            PropertyValue::String(s) => self.get_string_id(&s).map(ValueId::Str),
+            PropertyValue::Integer(i) => Some(ValueId::I64(i)),
+            PropertyValue::Float(f) => Some(ValueId::from_f64(f)),
+            PropertyValue::Boolean(b) => Some(ValueId::Bool(b)),
+            PropertyValue::InternedString(_) => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "InternedString not supported here",
+                ));
+            }
+        })
+    }
 }
 
 impl GraphSnapshot {
@@ -344,6 +363,104 @@ impl GraphSnapshot {
     /// Get degree of a node
     fn degree(&self, node_id: u32, direction: Direction) -> PyResult<usize> {
         Ok(self.snapshot.neighbors(node_id, direction.into()).count())
+    }
+
+    /// Whether `node_id` carries `label` — an O(1) label-index check, vs the
+    /// `"X" in node_labels(n)` scan it replaces.
+    fn has_label(&self, node_id: u32, label: &str) -> bool {
+        self.snapshot.has_label(node_id, label)
+    }
+
+    /// Whether `node_id` has any neighbor via `rel_type` in `direction`
+    /// (existence check, short-circuits on the first match).
+    fn has_rel(&self, node_id: u32, direction: Direction, rel_type: &str) -> bool {
+        self.snapshot.has_rel(node_id, direction.into(), rel_type)
+    }
+
+    /// Whether `node_id` has a neighbor (via `rel_type`, `direction`) whose node
+    /// property `key` equals `value` — resolves the value once, then compares ids
+    /// per neighbor (vs a per-neighbor Python property read).
+    fn has_neighbor_with_property(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_type: &str,
+        key: &str,
+        value: &PyAny,
+    ) -> PyResult<bool> {
+        let Some(value_id) = self.py_value_to_id_opt(value)? else {
+            return Ok(false);
+        };
+        Ok(self
+            .snapshot
+            .has_neighbor_with_property(node_id, direction.into(), rel_type, key, value_id))
+    }
+
+    /// The smallest node carrying `label` with property `key` == `value`, or
+    /// `None` — collapses `nodes_with_property(..)[0]`, label-scoped so a `name`
+    /// shared across labels stays unambiguous.
+    fn node_with_label_property(
+        &self,
+        label: &str,
+        key: &str,
+        value: &PyAny,
+    ) -> PyResult<Option<u32>> {
+        let Some(value_id) = self.py_value_to_id_opt(value)? else {
+            return Ok(None);
+        };
+        Ok(self.snapshot.node_with_label_property(label, key, value_id))
+    }
+
+    /// First neighbor of `node_id` via `rel_type` in `direction`, or `None` —
+    /// returns the id (not a `Node`), short-circuiting the scan.
+    fn first_neighbor(&self, node_id: u32, direction: Direction, rel_type: &str) -> Option<u32> {
+        self.snapshot
+            .first_neighbor(node_id, direction.into(), rel_type)
+    }
+
+    /// Follow a fixed chain of `(direction, rel_type)` steps from `start`, taking
+    /// the first neighbor at each; `None` if a step has no neighbor. Returns the
+    /// final node id (not a list of `Node`s).
+    fn follow(&self, start: u32, steps: Vec<(Direction, String)>) -> Option<u32> {
+        let steps: Vec<(rustychickpeas_core::Direction, &str)> = steps
+            .iter()
+            .map(|(d, r)| ((*d).into(), r.as_str()))
+            .collect();
+        self.snapshot.follow(start, &steps)
+    }
+
+    /// The string property `key` of `node_id`, or `None` when absent **or empty**
+    /// (a dense string column stores a missing value as `""`).
+    fn prop_str(&self, node_id: u32, key: &str) -> Option<String> {
+        self.snapshot.prop_str(node_id, key).map(str::to_string)
+    }
+
+    /// All nodes within `min_hops..=max_hops` of `seed`, expanding only along
+    /// `rel_type` in `direction` — the typed k-hop neighborhood as a list of ids
+    /// (excludes `seed`). `min_hops` defaults to 1.
+    #[pyo3(signature = (seed, direction, rel_type, max_hops, min_hops=1))]
+    fn neighborhood(
+        &self,
+        seed: u32,
+        direction: Direction,
+        rel_type: &str,
+        max_hops: u32,
+        min_hops: u32,
+    ) -> Vec<u32> {
+        self.snapshot
+            .neighborhood(seed, direction.into(), rel_type, min_hops..=max_hops)
+            .iter()
+            .collect()
+    }
+
+    /// The dense `i64` column `key` as a list (one value per node id), or `None`
+    /// when the column is absent or not a dense `i64` column. Built on the
+    /// zero-copy slice reader; the slice is copied to cross PyO3.
+    fn i64_column(&self, key: &str) -> Option<Vec<i64>> {
+        self.snapshot
+            .col(key)
+            .map(|c| c.i64())
+            .and_then(|c| c.as_slice().map(<[i64]>::to_vec))
     }
 
     /// Weighted (or unweighted) shortest-path cost from `source` to `target`, or
