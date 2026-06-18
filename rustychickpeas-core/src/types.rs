@@ -70,6 +70,21 @@ pub enum NodeReference {
     },
 }
 
+/// A bare column name is the common case — reference nodes by an id column —
+/// so it converts straight to [`NodeReference::Id`]. Lets the loaders take
+/// `impl Into<NodeReference>` and accept either `"PersonId"` or a property spec.
+impl From<&str> for NodeReference {
+    fn from(column: &str) -> Self {
+        NodeReference::Id(column.to_string())
+    }
+}
+
+impl From<String> for NodeReference {
+    fn from(column: String) -> Self {
+        NodeReference::Id(column)
+    }
+}
+
 impl NodeReference {
     /// Create an ID-based node reference
     pub fn id(column: impl Into<String>) -> Self {

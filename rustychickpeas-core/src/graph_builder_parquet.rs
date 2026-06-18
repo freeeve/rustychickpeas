@@ -816,279 +816,6 @@ impl GraphBuilder {
         index
     }
 
-    /// Load relationships from a Parquet file into the builder
-    ///
-    /// If `rel_type_column` is None, `fixed_rel_type` must be provided.
-    /// If `rel_type_column` is Some, it reads the type from that column.
-    ///
-    /// # Arguments
-    /// * `path` - Path to Parquet file (local or S3)
-    /// * `start_node_column` - Column name for start node IDs
-    /// * `end_node_column` - Column name for end node IDs
-    /// * `rel_type_column` - Optional column name for relationship type
-    /// * `property_columns` - Optional list of property columns to load. If None, loads all except ID/type columns.
-    /// * `fixed_rel_type` - Fixed relationship type (used if rel_type_column is None)
-    /// * `deduplication` - Optional deduplication strategy
-    /// * `key_property_columns` - Optional list of property columns to use as uniqueness key when
-    ///   deduplication is CreateUniqueByRelTypeAndKeyProperties. If None, uses all property_columns.
-    #[allow(clippy::too_many_arguments)]
-    pub fn load_relationships_from_parquet(
-        &mut self,
-        path: &str,
-        start_node_column: &str,
-        end_node_column: &str,
-        rel_type_column: Option<&str>,
-        property_columns: Option<Vec<&str>>,
-        fixed_rel_type: Option<&str>,
-        deduplication: Option<crate::types::RelationshipDeduplication>,
-        key_property_columns: Option<Vec<&str>>,
-    ) -> Result<Vec<(u32, u32)>> {
-        use crate::types::RelationshipDeduplication;
-
-        // Create Parquet reader (handles both local and S3)
-        let (mut reader, schema) = create_parquet_reader(path)?;
-
-        // Set up deduplication tracking
-        let mut seen_by_type: HashMap<(u32, u32, u32), ()> = HashMap::new(); // (u, v, rel_type_id) -> ()
-        let mut seen_by_type_and_props: HashMap<(u32, u32, u32, Vec<ValueId>), ()> = HashMap::new(); // (u, v, rel_type_id, key_props) -> ()
-
-        // Find column indices (needed before processing batches)
-        let start_node_idx = schema
-            .fields()
-            .iter()
-            .position(|f| f.name() == start_node_column)
-            .ok_or_else(|| {
-                GraphError::SchemaError(format!(
-                    "Start node column '{}' not found in parquet schema",
-                    start_node_column
-                ))
-            })?;
-        let end_node_idx = schema
-            .fields()
-            .iter()
-            .position(|f| f.name() == end_node_column)
-            .ok_or_else(|| {
-                GraphError::SchemaError(format!(
-                    "End node column '{}' not found in parquet schema",
-                    end_node_column
-                ))
-            })?;
-
-        // Handle relationship type: either from column or fixed value
-        let rel_type_idx =
-            rel_type_column.and_then(|col| schema.fields().iter().position(|f| f.name() == col));
-
-        if let Some(rel_type_col) = rel_type_column {
-            if rel_type_idx.is_none() {
-                return Err(GraphError::SchemaError(format!(
-                    "Relationship type column '{}' not found in parquet schema",
-                    rel_type_col
-                )));
-            }
-        }
-
-        if rel_type_column.is_none() && fixed_rel_type.is_none() {
-            return Err(GraphError::BulkLoadError(
-                "Either rel_type_column or fixed_rel_type must be provided".to_string(),
-            ));
-        }
-
-        // Determine property columns
-        let all_columns: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
-        let prop_cols = property_columns.unwrap_or_else(|| {
-            all_columns
-                .iter()
-                .filter(|col| {
-                    col.as_str() != start_node_column
-                        && col.as_str() != end_node_column
-                        && rel_type_column
-                            .map(|rt_col| col.as_str() != rt_col)
-                            .unwrap_or(true)
-                })
-                .map(|s| s.as_str())
-                .collect()
-        });
-
-        // Determine effective key columns for deduplication
-        // If key_property_columns is specified, use those; otherwise use all prop_cols (backward compat)
-        let effective_key_cols: Vec<&str> = match (&deduplication, &key_property_columns) {
-            (
-                Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
-                Some(keys),
-            ) => keys.clone(),
-            (Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties), None) => {
-                // Backward compatibility: use all property columns
-                prop_cols.clone()
-            }
-            _ => Vec::new(), // Not used for other dedup strategies
-        };
-
-        // Stream batches and process them immediately (no accumulation in memory)
-        let mut rel_ids = Vec::new();
-        let mut first_batch = true;
-        let mut skipped_missing_nodes = 0u64;
-
-        while let Some(batch_result) = reader.next() {
-            let batch = batch_result
-                .map_err(|e| GraphError::BulkLoadError(format!("Failed to read batch: {}", e)))?;
-
-            if batch.num_rows() == 0 {
-                continue;
-            }
-
-            // Pre-allocate rel_ids Vec on first batch (estimate based on first batch size)
-            if first_batch {
-                rel_ids.reserve(batch.num_rows() * 10); // Conservative estimate
-                first_batch = false;
-            }
-            // Extract start/end node IDs using shared helper
-            let start_nodes = extract_node_ids_from_column(
-                batch.column(start_node_idx),
-                batch.num_rows(),
-                "Start",
-            )?;
-            let end_nodes =
-                extract_node_ids_from_column(batch.column(end_node_idx), batch.num_rows(), "End")?;
-
-            // Extract relationship types (either from column or use fixed type)
-            let rel_type_col = rel_type_idx.map(|idx| batch.column(idx));
-            let mut rel_types = Vec::with_capacity(batch.num_rows());
-
-            // Extract relationship types (supports both Utf8 and LargeUtf8)
-            if let Some(col) = &rel_type_col {
-                // Verify string column type
-                let has_strings = col.as_any().downcast_ref::<StringArray>().is_some()
-                    || col.as_any().downcast_ref::<LargeStringArray>().is_some();
-                if !has_strings {
-                    return Err(GraphError::SchemaError(
-                        "Relationship type column must be String (Utf8 or LargeUtf8)".to_string(),
-                    ));
-                }
-                for i in 0..batch.num_rows() {
-                    rel_types.push(extract_string_value(col, i));
-                }
-            } else if let Some(fixed_type) = fixed_rel_type {
-                for _i in 0..batch.num_rows() {
-                    rel_types.push(Some(fixed_type));
-                }
-            } else {
-                return Err(GraphError::BulkLoadError(
-                    "Either rel_type_column or fixed_rel_type must be provided".to_string(),
-                ));
-            }
-
-            // First, extract property values for deduplication if needed
-            // Uses effective_key_cols which is either explicit key_property_columns or all prop_cols
-            let mut key_props_per_row: Vec<Option<Vec<ValueId>>> = vec![None; batch.num_rows()];
-            if matches!(
-                deduplication,
-                Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties)
-            ) {
-                for (i, key_props_slot) in key_props_per_row.iter_mut().enumerate() {
-                    let mut key_props = Vec::new();
-                    for prop_col in &effective_key_cols {
-                        if let Some(column_idx) =
-                            schema.fields().iter().position(|f| f.name() == prop_col)
-                        {
-                            let column = batch.column(column_idx);
-                            let field = schema.field(column_idx);
-                            if let Some(v) =
-                                extract_value_id(column.as_ref(), field, i, &self.interner)
-                            {
-                                key_props.push(v);
-                            }
-                        }
-                    }
-                    if !key_props.is_empty() {
-                        *key_props_slot = Some(key_props);
-                    }
-                }
-            }
-
-            // Track relationship indices: row_index -> rel_index in self.rels
-            // This avoids O(n) search for each property set
-            let mut row_to_rel_idx: Vec<Option<usize>> = vec![None; batch.num_rows()];
-
-            // Add relationships with deduplication and node existence check
-            for i in 0..batch.num_rows() {
-                if let (Some(start_id), Some(end_id), Some(rel_type)) =
-                    (start_nodes[i], end_nodes[i], rel_types[i])
-                {
-                    // Skip relationships where start or end node doesn't exist in the builder
-                    if !self.known_nodes.contains(start_id) || !self.known_nodes.contains(end_id) {
-                        skipped_missing_nodes += 1;
-                        continue;
-                    }
-
-                    let rel_type_id = self.interner.get_or_intern(rel_type);
-                    let mut should_add = true;
-
-                    // Check deduplication
-                    match deduplication {
-                        Some(RelationshipDeduplication::CreateAll) | None => {
-                            should_add = true;
-                        }
-                        Some(RelationshipDeduplication::CreateUniqueByRelType) => {
-                            let key = (start_id, end_id, rel_type_id);
-                            if seen_by_type.contains_key(&key) {
-                                should_add = false;
-                            } else {
-                                seen_by_type.insert(key, ());
-                            }
-                        }
-                        Some(RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties) => {
-                            if let Some(Some(ref key_props)) = key_props_per_row.get(i) {
-                                let key = (start_id, end_id, rel_type_id, key_props.clone());
-                                if seen_by_type_and_props.contains_key(&key) {
-                                    should_add = false;
-                                } else {
-                                    seen_by_type_and_props.insert(key, ());
-                                }
-                            }
-                        }
-                    }
-
-                    if should_add {
-                        let rel_idx = self.rels.len(); // Index of the relationship we're about to add
-                        self.add_relationship(start_id, end_id, rel_type)?;
-                        rel_ids.push((start_id, end_id));
-                        row_to_rel_idx[i] = Some(rel_idx);
-                    }
-                }
-            }
-
-            // Extract and set relationship properties using tracked indices
-            for prop_col in &prop_cols {
-                if let Some(column_idx) = schema.fields().iter().position(|f| f.name() == prop_col)
-                {
-                    let column = batch.column(column_idx);
-                    let field = schema.field(column_idx);
-
-                    for (i, rel_idx_slot) in row_to_rel_idx.iter().enumerate() {
-                        if let Some(rel_idx) = *rel_idx_slot {
-                            set_relationship_property_from_arrow(
-                                self,
-                                rel_idx,
-                                prop_col,
-                                column,
-                                field.data_type(),
-                                i,
-                            )?;
-                        }
-                    }
-                }
-            }
-        }
-
-        if skipped_missing_nodes > 0 {
-            eprintln!(
-                "Warning: skipped {} relationships referencing non-existent nodes",
-                skipped_missing_nodes
-            );
-        }
-
-        Ok(rel_ids)
-    }
 
     /// Load relationships from Parquet with flexible node reference support
     ///
@@ -1110,11 +837,11 @@ impl GraphBuilder {
     /// # Returns
     /// * Vec of (start_node_id, end_node_id) pairs for created relationships
     #[allow(clippy::too_many_arguments)]
-    pub fn load_relationships_from_parquet_v2(
+    pub fn load_relationships_from_parquet(
         &mut self,
         path: &str,
-        start_node_ref: crate::types::NodeReference,
-        end_node_ref: crate::types::NodeReference,
+        start_node_ref: impl Into<crate::types::NodeReference>,
+        end_node_ref: impl Into<crate::types::NodeReference>,
         rel_type_column: Option<&str>,
         property_columns: Option<Vec<&str>>,
         fixed_rel_type: Option<&str>,
@@ -1122,6 +849,10 @@ impl GraphBuilder {
         key_property_columns: Option<Vec<&str>>,
     ) -> Result<Vec<(u32, u32)>> {
         use crate::types::{DedupKey, NodeReference, RelationshipDeduplication};
+
+        // Accept a bare column name (`From<&str>`) or an explicit reference spec.
+        let start_node_ref = start_node_ref.into();
+        let end_node_ref = end_node_ref.into();
 
         // Build property indexes for node lookup based on reference types
         enum NodeIndex {
@@ -1292,6 +1023,11 @@ impl GraphBuilder {
                             if !id_array.is_null(i) {
                                 *node_slot = Some(id_array.value(i));
                             }
+                        } else {
+                            return Err(GraphError::SchemaError(
+                                "Node ID column must be an integer type (Int64/Int32/UInt32)"
+                                    .to_string(),
+                            ));
                         }
                     }
                 }
@@ -1370,6 +1106,11 @@ impl GraphBuilder {
                             if !id_array.is_null(i) {
                                 *node_slot = Some(id_array.value(i));
                             }
+                        } else {
+                            return Err(GraphError::SchemaError(
+                                "Node ID column must be an integer type (Int64/Int32/UInt32)"
+                                    .to_string(),
+                            ));
                         }
                     }
                 }
@@ -1438,7 +1179,9 @@ impl GraphBuilder {
                         })
                         .collect()
                 } else {
-                    vec![None; batch.num_rows()]
+                    return Err(GraphError::SchemaError(
+                        "Relationship type column must be a string type".to_string(),
+                    ));
                 }
             } else {
                 vec![fixed_rel_type; batch.num_rows()]
@@ -5245,7 +4988,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_relationships_v2_with_id_reference() {
+    fn test_load_relationships_with_id_reference() {
         // Test v2 function with NodeReference::Id (same as v1 behavior)
         use crate::types::NodeReference;
         use arrow::array::{Int64Array, StringArray};
@@ -5285,7 +5028,7 @@ mod tests {
         }
 
         let rel_ids = builder
-            .load_relationships_from_parquet_v2(
+            .load_relationships_from_parquet(
                 file_path.to_str().unwrap(),
                 NodeReference::id("from"),
                 NodeReference::id("to"),
@@ -5303,7 +5046,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_relationships_v2_with_property_reference() {
+    fn test_load_relationships_with_property_reference() {
         // Test v2 function with NodeReference::Property (single property lookup)
         use crate::types::NodeReference;
         use arrow::array::StringArray;
@@ -5352,7 +5095,7 @@ mod tests {
 
         // Load relationships using property lookup
         let rel_ids = builder
-            .load_relationships_from_parquet_v2(
+            .load_relationships_from_parquet(
                 file_path.to_str().unwrap(),
                 NodeReference::property("from_uuid", "uuid", Some("Person")),
                 NodeReference::property("to_uuid", "uuid", Some("Person")),
@@ -5370,7 +5113,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_relationships_v2_with_composite_reference() {
+    fn test_load_relationships_with_composite_reference() {
         // Test v2 function with NodeReference::CompositeProperty
         use crate::types::NodeReference;
         use arrow::array::StringArray;
@@ -5427,7 +5170,7 @@ mod tests {
 
         // Load relationships using composite property lookup
         let rel_ids = builder
-            .load_relationships_from_parquet_v2(
+            .load_relationships_from_parquet(
                 file_path.to_str().unwrap(),
                 NodeReference::composite(
                     vec!["from_name".to_string(), "from_city".to_string()],

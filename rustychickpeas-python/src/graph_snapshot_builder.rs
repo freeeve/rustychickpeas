@@ -507,64 +507,6 @@ impl GraphSnapshotBuilder {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
-    /// Load relationships from a Parquet file into the builder
-    ///
-    /// Args:
-    ///     path: Path to Parquet file (local or S3)
-    ///     start_node_column: Column name for start node IDs
-    ///     end_node_column: Column name for end node IDs
-    ///     rel_type_column: Optional column name for relationship type
-    ///     property_columns: Optional list of property columns to load
-    ///     fixed_rel_type: Fixed relationship type (used if rel_type_column is None)
-    ///     deduplication: Optional deduplication strategy ("CreateAll", "CreateUniqueByRelType", "CreateUniqueByRelTypeAndKeyProperties")
-    ///     key_property_columns: Optional list of property columns to use as uniqueness key when
-    ///         deduplication is "CreateUniqueByRelTypeAndKeyProperties". If None, uses all property_columns.
-    #[pyo3(signature = (path, start_node_column, end_node_column, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn load_relationships_from_parquet(
-        &mut self,
-        path: String,
-        start_node_column: String,
-        end_node_column: String,
-        rel_type_column: Option<String>,
-        property_columns: Option<Vec<String>>,
-        fixed_rel_type: Option<String>,
-        deduplication: Option<String>,
-        key_property_columns: Option<Vec<String>>,
-    ) -> PyResult<Vec<(u32, u32)>> {
-        self.check_not_finalized()?;
-        let prop_cols = property_columns
-            .as_ref()
-            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        let key_cols = key_property_columns
-            .as_ref()
-            .map(|cols| cols.iter().map(|s| s.as_str()).collect());
-        let dedup = match deduplication.as_ref() {
-            Some(s) => {
-                match s.as_str() {
-                    "create_all" | "CreateAll" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateAll),
-                    "unique_by_type" | "CreateUniqueByRelType" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelType),
-                    "unique_by_type_and_key_properties" | "CreateUniqueByRelTypeAndKeyProperties" => Some(rustychickpeas_core::types::RelationshipDeduplication::CreateUniqueByRelTypeAndKeyProperties),
-                    other => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown deduplication strategy: '{}'. Valid options: 'create_all', 'unique_by_type', 'unique_by_type_and_key_properties'", other))),
-                }
-            }
-            None => None,
-        };
-
-        self.builder
-            .load_relationships_from_parquet(
-                &path,
-                &start_node_column,
-                &end_node_column,
-                rel_type_column.as_deref(),
-                prop_cols,
-                fixed_rel_type.as_deref(),
-                dedup,
-                key_cols,
-            )
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-    }
-
     /// Load nodes from a CSV file into the builder (.csv or .csv.gz).
     ///
     /// Args:
@@ -691,13 +633,13 @@ impl GraphSnapshotBuilder {
     ///     fixed_rel_type: Fixed relationship type (used if rel_type_column is None)
     ///     deduplication: Optional deduplication strategy
     ///     key_property_columns: Optional list of property columns for uniqueness
-    #[pyo3(signature = (path, start_node, end_node, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
+    #[pyo3(signature = (path, start_node_column, end_node_column, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, key_property_columns=None))]
     #[allow(clippy::too_many_arguments)]
-    fn load_relationships_from_parquet_v2(
+    fn load_relationships_from_parquet(
         &mut self,
         path: String,
-        start_node: &pyo3::types::PyAny,
-        end_node: &pyo3::types::PyAny,
+        start_node_column: &pyo3::types::PyAny,
+        end_node_column: &pyo3::types::PyAny,
         rel_type_column: Option<String>,
         property_columns: Option<Vec<String>>,
         fixed_rel_type: Option<String>,
@@ -705,9 +647,9 @@ impl GraphSnapshotBuilder {
         key_property_columns: Option<Vec<String>>,
     ) -> PyResult<Vec<(u32, u32)>> {
         self.check_not_finalized()?;
-        // Parse start_node reference
-        let start_ref = parse_node_reference(start_node)?;
-        let end_ref = parse_node_reference(end_node)?;
+        // A bare column name (str) or a property-lookup dict; see parse_node_reference.
+        let start_ref = parse_node_reference(start_node_column)?;
+        let end_ref = parse_node_reference(end_node_column)?;
 
         let prop_cols = property_columns
             .as_ref()
@@ -728,7 +670,7 @@ impl GraphSnapshotBuilder {
         };
 
         self.builder
-            .load_relationships_from_parquet_v2(
+            .load_relationships_from_parquet(
                 &path,
                 start_ref,
                 end_ref,
