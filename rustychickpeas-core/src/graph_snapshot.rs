@@ -645,6 +645,69 @@ impl<'a> Col<'a> {
     }
 }
 
+/// A resolved property value, narrowed to a typed read with [`Prop::str`] /
+/// [`Prop::i64`] / [`Prop::bool`] / [`Prop::f64`] — the single-value analogue of
+/// [`Col`], mirroring the polars `…​.i64()` shape. Build with
+/// [`GraphSnapshot::prop`]; use [`Prop::value`] for the raw [`ValueId`].
+#[derive(Clone, Copy)]
+pub struct Prop<'a> {
+    g: &'a GraphSnapshot,
+    value: ValueId,
+}
+
+impl<'a> Prop<'a> {
+    /// The raw [`ValueId`] — escape hatch for matching the variant directly.
+    #[inline]
+    pub fn value(self) -> ValueId {
+        self.value
+    }
+
+    /// The string value, or `None` if not a string **or empty**. Dense string
+    /// columns store a missing value as `""`, so this folds in the
+    /// `filter(|s| !s.is_empty())` callers would otherwise repeat.
+    #[inline]
+    pub fn str(self) -> Option<&'a str> {
+        match self.value {
+            ValueId::Str(id) => match self.g.resolve_string(id) {
+                Some(s) if !s.is_empty() => Some(s),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The `i64` value, or `None` if the property is not an `i64`.
+    #[inline]
+    pub fn i64(self) -> Option<i64> {
+        match self.value {
+            ValueId::I64(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The boolean value, or `None` if the property is not a boolean.
+    #[inline]
+    pub fn bool(self) -> Option<bool> {
+        match self.value {
+            ValueId::Bool(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The `f64` value, or `None` if the property is not an `f64`.
+    #[inline]
+    pub fn f64(self) -> Option<f64> {
+        self.value.to_f64()
+    }
+}
+
+impl core::fmt::Debug for Prop<'_> {
+    /// Show just the value; the snapshot back-reference is noise.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.value, f)
+    }
+}
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
@@ -2548,9 +2611,12 @@ impl GraphSnapshot {
     /// # Arguments
     /// * `node_id` - The node ID
     /// * `key` - The property key name (e.g., "name")
-    pub fn prop(&self, node_id: NodeId, key: &str) -> Option<ValueId> {
+    pub fn prop(&self, node_id: NodeId, key: &str) -> Option<Prop<'_>> {
         let key_id = self.property_key_from_str(key)?;
-        self.prop_id(node_id, key_id)
+        Some(Prop {
+            g: self,
+            value: self.prop_id(node_id, key_id)?,
+        })
     }
 
     /// Get property value for a node (internal ID-based version)
@@ -2598,17 +2664,11 @@ impl GraphSnapshot {
         })
     }
 
-    /// The string node property `key` for `node`, or `None` when absent **or
-    /// empty**. Dense string columns store a missing value as `""`, so callers
-    /// otherwise repeat `prop(..).filter(|s| !s.is_empty())`; this folds that in.
+    /// Thin alias of [`prop`](Self::prop)`(..).and_then(|p| p.`[`str`](Prop::str)`())`,
+    /// retained for brevity; prefer the `prop(..).and_then(|p| p.str())` chain. `None`
+    /// when absent **or empty** (dense string columns store a missing value as `""`).
     pub fn prop_str(&self, node: NodeId, key: &str) -> Option<&str> {
-        match self.prop(node, key) {
-            Some(ValueId::Str(id)) => match self.resolve_string(id) {
-                Some(s) if !s.is_empty() => Some(s),
-                _ => None,
-            },
-            _ => None,
-        }
+        self.prop(node, key).and_then(|p| p.str())
     }
 
     /// Get the version of this snapshot
@@ -3155,7 +3215,7 @@ mod tests {
         let prop = snapshot.prop(0, "name");
         assert!(prop.is_some());
         let alice_id = snapshot.value_id_from_str("Alice").unwrap();
-        assert_eq!(prop, Some(alice_id));
+        assert_eq!(prop.map(|p| p.value()), Some(alice_id));
     }
 
     #[test]

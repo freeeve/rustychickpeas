@@ -4833,7 +4833,7 @@ mod tests {
 
         let age1 = snapshot.prop(1, "age");
         assert!(age1.is_some(), "Snapshot node 1 should have 'age' property");
-        assert_eq!(age1, Some(ValueId::I64(30)));
+        assert_eq!(age1.map(|p| p.value()), Some(ValueId::I64(30)));
 
         // Verify all nodes have properties
         for node_id in [1u32, 2, 3] {
