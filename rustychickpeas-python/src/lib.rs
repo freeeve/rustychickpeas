@@ -26,7 +26,7 @@ pub(crate) use relationship::Relationship;
 pub(crate) use rusty_chickpeas::RustyChickpeas;
 
 #[pymodule]
-fn rustychickpeas(_py: Python, m: &PyModule) -> PyResult<()> {
+fn rustychickpeas(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Direction>()?;
     m.add_class::<Node>()?;
     m.add_class::<Relationship>()?;

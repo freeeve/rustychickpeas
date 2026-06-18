@@ -1,20 +1,23 @@
 //! Utility functions for Python bindings
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyLong};
+use pyo3::types::PyInt;
+use pyo3::IntoPyObjectExt;
 use rustychickpeas_core::graph_snapshot::Atoms;
 use rustychickpeas_core::ValueId;
 
 /// Helper to convert Python value to PropertyValue for GraphSnapshot queries
 /// Note: Check bool before int, as True/False can be extracted as int
-pub fn py_to_property_value(value: &PyAny) -> PyResult<rustychickpeas_core::PropertyValue> {
+pub fn py_to_property_value(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<rustychickpeas_core::PropertyValue> {
     use rustychickpeas_core::PropertyValue;
     // Check bool first, as True/False can be extracted as int
     if let Ok(b) = value.extract::<bool>() {
         Ok(PropertyValue::Boolean(b))
     } else if let Ok(s) = value.extract::<String>() {
         Ok(PropertyValue::String(s))
-    } else if value.is_instance_of::<PyLong>() {
+    } else if value.is_instance_of::<PyInt>() {
         match value.extract::<i64>() {
             Ok(i) => Ok(PropertyValue::Integer(i)),
             Err(_) => Err(PyErr::new::<pyo3::exceptions::PyOverflowError, _>(
@@ -42,11 +45,11 @@ pub fn stable_hash_u64(x: u64) -> u64 {
 }
 
 /// Convert a ValueId to a Python object, resolving strings through the Atoms table
-pub fn value_id_to_pyobject(py: Python, vid: ValueId, atoms: &Atoms) -> Option<PyObject> {
+pub fn value_id_to_pyobject(py: Python<'_>, vid: ValueId, atoms: &Atoms) -> Option<PyObject> {
     match vid {
-        ValueId::Str(sid) => atoms.resolve(sid).map(|s| s.to_object(py)),
-        ValueId::I64(i) => Some(i.to_object(py)),
-        ValueId::F64(bits) => Some(f64::from_bits(bits).to_object(py)),
-        ValueId::Bool(b) => Some(PyBool::new(py, b).into_py(py)),
+        ValueId::Str(sid) => atoms.resolve(sid).and_then(|s| s.into_py_any(py).ok()),
+        ValueId::I64(i) => i.into_py_any(py).ok(),
+        ValueId::F64(bits) => f64::from_bits(bits).into_py_any(py).ok(),
+        ValueId::Bool(b) => b.into_py_any(py).ok(),
     }
 }

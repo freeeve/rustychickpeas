@@ -72,7 +72,7 @@ impl GraphSnapshot {
     /// interned atom id. Returns `Ok(None)` when a string value is not interned
     /// in this snapshot — no node can carry it, so predicate/lookup callers
     /// short-circuit to "no match" rather than erroring.
-    fn py_value_to_id_opt(&self, value: &PyAny) -> PyResult<Option<ValueId>> {
+    fn py_value_to_id_opt(&self, value: &Bound<'_, PyAny>) -> PyResult<Option<ValueId>> {
         use rustychickpeas_core::PropertyValue;
         Ok(match py_to_property_value(value)? {
             PropertyValue::String(s) => self.get_string_id(&s).map(ValueId::Str),
@@ -386,7 +386,7 @@ impl GraphSnapshot {
         direction: Direction,
         rel_type: &str,
         key: &str,
-        value: &PyAny,
+        value: &Bound<'_, PyAny>,
     ) -> PyResult<bool> {
         let Some(value_id) = self.py_value_to_id_opt(value)? else {
             return Ok(false);
@@ -403,7 +403,7 @@ impl GraphSnapshot {
         &self,
         label: &str,
         key: &str,
-        value: &PyAny,
+        value: &Bound<'_, PyAny>,
     ) -> PyResult<Option<u32>> {
         let Some(value_id) = self.py_value_to_id_opt(value)? else {
             return Ok(None);
@@ -713,7 +713,7 @@ impl GraphSnapshot {
     /// * `key` - The property key
     /// * `value` - The property value to search for
     #[pyo3(signature = (label, key, value))]
-    fn nodes_with_property(&self, label: String, key: String, value: &PyAny) -> PyResult<Vec<u32>> {
+    fn nodes_with_property(&self, label: String, key: String, value: &Bound<'_, PyAny>) -> PyResult<Vec<u32>> {
         // Check if label exists - need to do this before calling nodes_with_property()
         // because it returns None for both "label doesn't exist" and "no matches"
         let label_id = self.label_from_str(&label);
@@ -773,6 +773,7 @@ impl GraphSnapshot {
     /// Create a GraphSnapshot from Parquet files using GraphBuilder
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (nodes_path=None, relationships_path=None, node_id_column=None, label_columns=None, node_property_columns=None, start_node_column=None, end_node_column=None, rel_type_column=None, rel_property_columns=None))]
     fn read_from_parquet(
         nodes_path: Option<String>,
         relationships_path: Option<String>,

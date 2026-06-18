@@ -29,6 +29,7 @@ impl RustyChickpeas {
     ///
     /// Capacity is just a performance hint. The builder automatically grows as needed up to
     /// the maximum limits (4.3B nodes, 18.4 quintillion relationships).
+    #[pyo3(signature = (version=None, capacity_nodes=None, capacity_rels=None))]
     fn create_builder(
         &self,
         version: Option<String>,
