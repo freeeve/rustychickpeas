@@ -1501,6 +1501,33 @@ impl GraphSnapshot {
         Ok((node_bitmap.iter().collect(), rel_bitmap.iter().collect()))
     }
 
+    /// Shortest hop-distance from `start` to every node reachable along `rel_types`
+    /// in `direction`, bounded to `max_depth` hops. Returns `{node_id: distance}`
+    /// (start is distance 0); `rel_types=None` follows every type. The typed
+    /// bounded BFS behind hop-distance filters (e.g. "friends 3..4 hops away").
+    #[pyo3(signature = (start, direction, *, rel_types=None, max_depth=None))]
+    fn bfs_distances(
+        &self,
+        py: Python<'_>,
+        start: u32,
+        direction: Direction,
+        rel_types: Option<Vec<String>>,
+        max_depth: Option<u32>,
+    ) -> std::collections::HashMap<u32, u32> {
+        let snapshot = self.snapshot.clone();
+        let dir: rustychickpeas_core::types::Direction = direction.into();
+        py.allow_threads(move || {
+            let types: Vec<&str> = rel_types
+                .as_ref()
+                .map(|t| t.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
+            snapshot
+                .bfs_distances(start, dir, types.as_slice(), max_depth)
+                .into_iter()
+                .collect()
+        })
+    }
+
     /// Check if a path exists between two nodes
     #[pyo3(signature = (from_node, to_node, direction, *, rel_types=None, max_depth=None))]
     fn can_reach(
