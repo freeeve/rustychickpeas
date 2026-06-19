@@ -144,6 +144,23 @@ cargo bench --bench graph_builder              # Specific suite
   `rustychickpeas-core` or changing an existing one's signature/return/semantics,
   propose the design and get the maintainer's agreement first — don't alter the
   core surface unilaterally. (Query-side/non-core crates don't need this gate.)
+- **The "primitive exercise"** — when proposing a new core/Python primitive, work
+  through these *before building*, with the maintainer:
+  1. **Reusability** — name the recurring pattern and which callers/queries need it.
+     A one-off doesn't belong in core; ≥2 real consumers (or a clear shape) justify it.
+  2. **Prior art** — check how graph DBs / graph theory name the concept (Cypher,
+     Gremlin `out`/`in`/`both`, NetworkX, Oracle `CONNECT_BY_ROOT`; successor/
+     predecessor, neighborhood/adjacency, one-mode/bipartite projection). Prefer
+     established terms over coinages (e.g. `roots_via` over `chain_roots`).
+  3. **Naming + ergonomics from *both* sides** — settle the name and call-site shape
+     in Python *and* Rust; keep cohesion with existing primitives (the `*_via`
+     family, the `neighbor_groups` builder). Decide naming/semantics together.
+  4. **Hot path = no Python callbacks.** A per-element Python closure in a native
+     kernel re-acquires the GIL per call and kills rayon parallelism. Express
+     filters/reductions declaratively (enums/specs, e.g. `AggOp`, `.bin()`), never
+     as closures crossing into Python. Rust-side closures are fine (zero-cost).
+  5. **Sketch both call sites**, then build only after sign-off. Gate the commit to
+     your own hunks (shared files are co-edited).
 - Rust 2021 edition, workspace-level version management
 - Semantic commit messages with module scope: `feat(core): ...`, `fix(python): ...`
 - Python API follows Pythonic naming (snake_case methods)
