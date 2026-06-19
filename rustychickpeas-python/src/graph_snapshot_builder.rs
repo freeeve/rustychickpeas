@@ -630,6 +630,30 @@ impl GraphSnapshotBuilder {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
+    /// Load several relationship types from one CSV file in a single pass.
+    ///
+    /// ``rels`` is a list of ``Rel(rel_type, start, end, props=...)`` where ``start`` /
+    /// ``end`` are ``Ref(column, label=None, property_key="id")`` and ``props`` are
+    /// ``Prop(name, column=None, type=None)``. The node index for each distinct
+    /// ``(property_key, label)`` is built once and the file is read once — so the
+    /// several rels that share a merged-FK file load far faster than one call each.
+    /// Returns the relationships added per ``Rel``, in order.
+    #[pyo3(signature = (path, rels, delimiter=",".to_string()))]
+    fn load_relationships_from_csv_multi(
+        &mut self,
+        path: String,
+        rels: Vec<Rel>,
+        delimiter: String,
+    ) -> PyResult<Vec<u64>> {
+        self.check_not_finalized()?;
+        let delim = delimiter.as_bytes().first().copied().unwrap_or(b',');
+        let specs: Vec<rustychickpeas_core::RelLoadSpec> =
+            rels.into_iter().map(|r| r.spec).collect();
+        self.builder
+            .load_relationships_from_csv_multi(&path, &specs, delim)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
     /// Load relationships from a Parquet file with flexible node reference support
     ///
     /// This version supports looking up nodes by:
@@ -905,5 +929,137 @@ impl GraphSnapshotBuilder {
         let snapshot = builder.finalize(keys_to_index.as_deref());
         manager.manager.add_snapshot(snapshot);
         Ok(())
+    }
+}
+
+/// A relationship endpoint for `load_relationships_from_csv_multi`: a CSV `column`
+/// holding either the internal node id (no `label`) or a value resolved to a node of
+/// `label` by its `property_key` (default `"id"`).
+#[pyclass]
+#[derive(Clone)]
+pub struct Ref {
+    node_ref: rustychickpeas_core::types::NodeReference,
+}
+
+#[pymethods]
+impl Ref {
+    #[new]
+    #[pyo3(signature = (column, label=None, property_key="id".to_string()))]
+    fn new(column: String, label: Option<String>, property_key: String) -> Ref {
+        use rustychickpeas_core::types::NodeReference;
+        let node_ref = match label {
+            Some(label) => NodeReference::Property {
+                column,
+                property_key,
+                label: Some(label),
+            },
+            None => NodeReference::Id(column),
+        };
+        Ref { node_ref }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Ref({:?})", self.node_ref)
+    }
+}
+
+/// A renamed/typed relationship property for `load_relationships_from_csv_multi`:
+/// store CSV `column` (default = `name`) under property `name`, parsed as `type`
+/// (`int` / `float` / `bool` / `str`, default auto-detect).
+#[pyclass]
+#[derive(Clone)]
+pub struct Prop {
+    spec: rustychickpeas_core::RelPropSpec,
+}
+
+#[pymethods]
+impl Prop {
+    #[new]
+    #[pyo3(signature = (name, column=None, r#type=None))]
+    fn new(
+        py: Python<'_>,
+        name: String,
+        column: Option<String>,
+        r#type: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Prop> {
+        let column = column.unwrap_or_else(|| name.clone());
+        let col_type = col_type_from_py(py, r#type.as_ref())?;
+        Ok(Prop {
+            spec: rustychickpeas_core::RelPropSpec {
+                name,
+                column,
+                col_type,
+            },
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Prop(name='{}', column='{}', type={:?})",
+            self.spec.name, self.spec.column, self.spec.col_type
+        )
+    }
+}
+
+/// One relationship type for `load_relationships_from_csv_multi`.
+#[pyclass]
+#[derive(Clone)]
+pub struct Rel {
+    spec: rustychickpeas_core::RelLoadSpec,
+}
+
+#[pymethods]
+impl Rel {
+    #[new]
+    #[pyo3(signature = (rel_type, start, end, props=None))]
+    fn new(rel_type: String, start: Ref, end: Ref, props: Option<Vec<Prop>>) -> Rel {
+        Rel {
+            spec: rustychickpeas_core::RelLoadSpec {
+                rel_type,
+                start: start.node_ref,
+                end: end.node_ref,
+                properties: props
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.spec)
+                    .collect(),
+            },
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Rel(rel_type='{}', start={:?}, end={:?}, props={})",
+            self.spec.rel_type,
+            self.spec.start,
+            self.spec.end,
+            self.spec.properties.len()
+        )
+    }
+}
+
+/// Map a Python type object (`int` / `float` / `bool` / `str`) to a `CsvColumnType`;
+/// `None` means auto-detect.
+fn col_type_from_py(
+    py: Python<'_>,
+    obj: Option<&Bound<'_, PyAny>>,
+) -> PyResult<rustychickpeas_core::CsvColumnType> {
+    use rustychickpeas_core::CsvColumnType;
+    let Some(obj) = obj else {
+        return Ok(CsvColumnType::Auto);
+    };
+    // bool is a subclass of int — check it first.
+    if obj.is(&py.get_type::<pyo3::types::PyBool>()) {
+        Ok(CsvColumnType::Bool)
+    } else if obj.is(&py.get_type::<pyo3::types::PyInt>()) {
+        Ok(CsvColumnType::Int64)
+    } else if obj.is(&py.get_type::<pyo3::types::PyFloat>()) {
+        Ok(CsvColumnType::Float64)
+    } else if obj.is(&py.get_type::<pyo3::types::PyString>()) {
+        Ok(CsvColumnType::String)
+    } else {
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Prop type must be int, float, bool, or str",
+        ))
     }
 }

@@ -27,7 +27,7 @@ pub use error::{GraphError, Result};
 pub use fulltext::FullTextField;
 pub use geo::{haversine_km, GeoIndex};
 pub use graph_builder::GraphBuilder;
-pub use graph_builder_csv::CsvColumnType;
+pub use graph_builder_csv::{CsvColumnType, RelLoadSpec, RelPropSpec};
 pub use graph_snapshot::{
     BoolCol, Col, Column, ColumnDtype, F64Col, GraphSnapshot, I64Col, NeighborsByType, Prop,
     PropExt, RelMatch, RelTypeFilter, RelationshipRef, RelationshipsByType, ShortestPaths, StrCol,

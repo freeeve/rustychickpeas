@@ -39,6 +39,9 @@ fn rustychickpeas(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<node_set::NodeSet>()?;
     m.add_class::<node_set::NodeSetIter>()?;
     m.add_class::<GraphSnapshotBuilder>()?;
+    m.add_class::<graph_snapshot_builder::Ref>()?;
+    m.add_class::<graph_snapshot_builder::Rel>()?;
+    m.add_class::<graph_snapshot_builder::Prop>()?;
     m.add_class::<RustyChickpeas>()?;
     m.add_function(wrap_pyfunction!(rrsr::write_rrsr, m)?)?;
     m.add_function(wrap_pyfunction!(rrsr::read_rrsr, m)?)?;

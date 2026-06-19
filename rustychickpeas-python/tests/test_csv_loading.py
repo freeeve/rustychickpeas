@@ -6,12 +6,56 @@ import tempfile
 
 import pytest
 
-from rustychickpeas import GraphSnapshotBuilder, Direction
+from rustychickpeas import GraphSnapshotBuilder, Direction, Ref, Rel, Prop
 
 
 def _write(path, text):
     with open(path, "w") as f:
         f.write(text)
+
+
+class TestMultiRelLoader:
+    """load_relationships_from_csv_multi with Ref/Rel/Prop typed specs."""
+
+    def test_multi_rel_one_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            nodes = os.path.join(d, "nodes.csv")
+            posts = os.path.join(d, "posts.csv")
+            _write(nodes, "id|label\n10|Person\n20|Person\n100|Post\n101|Post\n")
+            # merged-FK file: each Post row carries its creator + a weight.
+            _write(posts, "id|creator|w\n100|10|5\n101|20|7\n")
+
+            b = GraphSnapshotBuilder()
+            b.load_nodes_from_csv(
+                nodes, label_columns=["label"], property_columns=["id"], delimiter="|"
+            )
+            counts = b.load_relationships_from_csv_multi(
+                posts,
+                [
+                    Rel("hasCreator", Ref("creator", "Person"), Ref("id", "Post")),
+                    Rel("weighted", Ref("id", "Post"), Ref("creator", "Person"),
+                        props=[Prop("weight", "w", int)]),
+                ],
+                delimiter="|",
+            )
+            assert counts == [2, 2]
+            g = b.finalize()
+            assert g.relationship_count() == 4
+
+            # Load order: Person 10->0, 20->1; Post 100->2, 101->3.
+            # "weighted" goes Post -> Person and carries the renamed/typed prop.
+            rels = g.relationships(2, Direction.Outgoing, ["weighted"])
+            assert len(rels) == 1
+            assert rels[0].get_property("weight") == 5  # renamed "w"->"weight", typed int
+
+    def test_ref_rel_prop_repr(self):
+        assert "Person" in repr(Ref("creator", "Person"))
+        assert "hasCreator" in repr(Rel("hasCreator", Ref("a", "A"), Ref("b", "B")))
+        assert "weight" in repr(Prop("weight", "w", int))
+
+    def test_prop_bad_type_raises(self):
+        with pytest.raises(TypeError, match="int, float, bool, or str"):
+            Prop("x", "x", list)
 
 
 class TestCsvStringEndpoints:

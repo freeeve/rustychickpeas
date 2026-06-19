@@ -11,6 +11,7 @@ use hashbrown::HashMap;
 use roaring::RoaringBitmap;
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::rc::Rc;
 
 /// Helper to create a CSV reader from a file path
 /// Handles both plain CSV and gzip-compressed CSV (.csv.gz)
@@ -372,16 +373,18 @@ enum RefIndex {
     /// Column holds the node id directly (parsed as `u32`).
     Id { col: usize },
     /// Single-property lookup: parse the column cell, look it up in the property index.
+    /// The index is `Rc`-shared so the multi-rel loader can build it once and reuse it
+    /// across every endpoint with the same `(property_key, label)`.
     Single {
         col: usize,
         ty: CsvColumnType,
-        index: HashMap<ValueId, Vec<u32>>,
+        index: Rc<HashMap<ValueId, Vec<u32>>>,
     },
     /// Composite-property lookup: parse each column cell, look up the combined key.
     Composite {
         cols: Vec<usize>,
         tys: Vec<CsvColumnType>,
-        index: HashMap<crate::types::DedupKey, Vec<u32>>,
+        index: Rc<HashMap<crate::types::DedupKey, Vec<u32>>>,
     },
 }
 
@@ -428,7 +431,7 @@ fn build_ref_index(
             label,
         } => {
             let col = require_column_index(headers, column, ctx)?;
-            let index = builder.build_property_index(property_key, label.as_deref());
+            let index = Rc::new(builder.build_property_index(property_key, label.as_deref()));
             Ok(RefIndex::Single {
                 col,
                 ty: col_type(column),
@@ -446,7 +449,7 @@ fn build_ref_index(
                 .collect::<Result<Vec<_>>>()?;
             let tys = columns.iter().map(|c| col_type(c)).collect();
             let keys: Vec<&str> = property_keys.iter().map(|s| s.as_str()).collect();
-            let index = builder.build_composite_property_index(&keys, label.as_deref());
+            let index = Rc::new(builder.build_composite_property_index(&keys, label.as_deref()));
             Ok(RefIndex::Composite { cols, tys, index })
         }
     }
@@ -808,6 +811,200 @@ impl GraphBuilder {
         }
 
         Ok(rel_ids)
+    }
+
+    /// Load several relationship types from one CSV file in a single pass.
+    ///
+    /// Each [`RelLoadSpec`] gives a `rel_type`, the start/end [`NodeReference`]s, and
+    /// any renamed/typed properties. The node-lookup index for each distinct
+    /// `(property_key, label)` is built once and shared across all specs, and the file
+    /// is read only once — so loading the several relationships that live in one CSV
+    /// (e.g. an LDBC merged-FK message file: hasCreator/containerOf/msgCountry) costs
+    /// one read and one index per node type, not a re-read and re-index per rel.
+    ///
+    /// Returns the number of relationships added for each spec, in order.
+    pub fn load_relationships_from_csv_multi(
+        &mut self,
+        path: &str,
+        rels: &[RelLoadSpec],
+        delimiter: u8,
+    ) -> Result<Vec<u64>> {
+        let mut reader = create_csv_reader(path, delimiter)?;
+        let headers = reader
+            .headers()
+            .map_err(|e| GraphError::CsvError(format!("Failed to read CSV headers: {}", e)))?
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+
+        // Build endpoint resolvers, sharing each distinct property index across specs.
+        let mut single_cache: HashMap<(String, Option<String>), Rc<HashMap<ValueId, Vec<u32>>>> =
+            HashMap::new();
+        let mut composite_cache: HashMap<
+            (Vec<String>, Option<String>),
+            Rc<HashMap<crate::types::DedupKey, Vec<u32>>>,
+        > = HashMap::new();
+
+        let mut endpoints: Vec<(RefIndex, RefIndex)> = Vec::with_capacity(rels.len());
+        let mut props: Vec<Vec<(usize, u32, CsvColumnType)>> = Vec::with_capacity(rels.len());
+        for rel in rels {
+            let start = build_shared_ref(
+                self,
+                &headers,
+                &rel.start,
+                "Start node",
+                &mut single_cache,
+                &mut composite_cache,
+            )?;
+            let end = build_shared_ref(
+                self,
+                &headers,
+                &rel.end,
+                "End node",
+                &mut single_cache,
+                &mut composite_cache,
+            )?;
+            endpoints.push((start, end));
+            let mut p = Vec::with_capacity(rel.properties.len());
+            for prop in &rel.properties {
+                let col = require_column_index(&headers, &prop.column, "Relationship property")?;
+                let key = self.interner.get_or_intern(&prop.name);
+                p.push((col, key, prop.col_type));
+            }
+            props.push(p);
+        }
+
+        let mut counts = vec![0u64; rels.len()];
+        let mut row_num = 0usize;
+        for result in reader.records() {
+            let record = result.map_err(|e| {
+                GraphError::CsvError(format!(
+                    "Failed to read CSV record at row {}: {}",
+                    row_num + 2,
+                    e
+                ))
+            })?;
+            row_num += 1;
+
+            for (ri, (start_ref, end_ref)) in endpoints.iter().enumerate() {
+                let start = match resolve_ref_node(self, &record, start_ref, "start", row_num)? {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let end = match resolve_ref_node(self, &record, end_ref, "end", row_num)? {
+                    Some(id) => id,
+                    None => continue,
+                };
+                if !node_exists_in_builder(self, start) || !node_exists_in_builder(self, end) {
+                    continue;
+                }
+                let rel_idx = self.add_relationship(start, end, &rels[ri].rel_type)?;
+                counts[ri] += 1;
+                for (col, key, ty) in &props[ri] {
+                    let Some(cell) = record.get(*col) else { continue };
+                    if cell.is_empty() {
+                        continue;
+                    }
+                    match parse_csv_value(cell, self, *ty) {
+                        ValueId::I64(v) => {
+                            self.rel_col_i64.entry(*key).or_default().push((rel_idx, v));
+                        }
+                        ValueId::F64(bits) => {
+                            self.rel_col_f64
+                                .entry(*key)
+                                .or_default()
+                                .push((rel_idx, f64::from_bits(bits)));
+                        }
+                        ValueId::Bool(v) => {
+                            self.rel_col_bool.entry(*key).or_default().push((rel_idx, v));
+                        }
+                        ValueId::Str(v) => {
+                            self.rel_col_str.entry(*key).or_default().push((rel_idx, v));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(counts)
+    }
+}
+
+/// One relationship type to load via [`GraphBuilder::load_relationships_from_csv_multi`]:
+/// a `rel_type`, the start/end node references, and any renamed/typed properties.
+#[derive(Debug, Clone)]
+pub struct RelLoadSpec {
+    pub rel_type: String,
+    pub start: crate::types::NodeReference,
+    pub end: crate::types::NodeReference,
+    pub properties: Vec<RelPropSpec>,
+}
+
+/// A relationship property: store the CSV `column` under property `name`, parsed as
+/// `col_type` — rename + explicit type, unlike the single-rel loader's by-column-name,
+/// auto-typed handling.
+#[derive(Debug, Clone)]
+pub struct RelPropSpec {
+    pub name: String,
+    pub column: String,
+    pub col_type: CsvColumnType,
+}
+
+/// Build a [`RefIndex`] for one endpoint, reusing a previously-built property index for
+/// the same `(property_key, label)` from the caches (so the multi-rel loader builds each
+/// node index once).
+fn build_shared_ref(
+    builder: &GraphBuilder,
+    headers: &[String],
+    node_ref: &crate::types::NodeReference,
+    ctx: &str,
+    single_cache: &mut HashMap<(String, Option<String>), Rc<HashMap<ValueId, Vec<u32>>>>,
+    composite_cache: &mut HashMap<
+        (Vec<String>, Option<String>),
+        Rc<HashMap<crate::types::DedupKey, Vec<u32>>>,
+    >,
+) -> Result<RefIndex> {
+    use crate::types::NodeReference;
+    match node_ref {
+        NodeReference::Id(column) => Ok(RefIndex::Id {
+            col: require_column_index(headers, column, ctx)?,
+        }),
+        NodeReference::Property {
+            column,
+            property_key,
+            label,
+        } => {
+            let col = require_column_index(headers, column, ctx)?;
+            let index = single_cache
+                .entry((property_key.clone(), label.clone()))
+                .or_insert_with(|| {
+                    Rc::new(builder.build_property_index(property_key, label.as_deref()))
+                })
+                .clone();
+            Ok(RefIndex::Single {
+                col,
+                ty: CsvColumnType::Auto,
+                index,
+            })
+        }
+        NodeReference::CompositeProperty {
+            columns,
+            property_keys,
+            label,
+        } => {
+            let cols = columns
+                .iter()
+                .map(|c| require_column_index(headers, c, ctx))
+                .collect::<Result<Vec<_>>>()?;
+            let tys = vec![CsvColumnType::Auto; cols.len()];
+            let index = composite_cache
+                .entry((property_keys.clone(), label.clone()))
+                .or_insert_with(|| {
+                    let keys: Vec<&str> = property_keys.iter().map(|s| s.as_str()).collect();
+                    Rc::new(builder.build_composite_property_index(&keys, label.as_deref()))
+                })
+                .clone();
+            Ok(RefIndex::Composite { cols, tys, index })
+        }
     }
 }
 
@@ -1738,5 +1935,70 @@ mod tests {
 
         assert_eq!(rel_ids, vec![(0, 1)]);
         assert_eq!(builder.relationship_count(), 1);
+    }
+
+    #[test]
+    fn test_load_relationships_from_csv_multi() {
+        use crate::types::NodeReference;
+        let temp_dir = TempDir::new().unwrap();
+
+        // External ids collide across labels; resolved by ("id", label).
+        let nodes = temp_dir.path().join("nodes.csv");
+        let mut nf = File::create(&nodes).unwrap();
+        writeln!(nf, "id|label").unwrap();
+        writeln!(nf, "10|Person").unwrap();
+        writeln!(nf, "20|Person").unwrap();
+        writeln!(nf, "100|Post").unwrap();
+        writeln!(nf, "101|Post").unwrap();
+        drop(nf);
+
+        // One merged-FK file: each Post row carries its creator and a weight.
+        let posts = temp_dir.path().join("posts.csv");
+        let mut pf = File::create(&posts).unwrap();
+        writeln!(pf, "id|creator|w").unwrap();
+        writeln!(pf, "100|10|5").unwrap();
+        writeln!(pf, "101|20|7").unwrap();
+        drop(pf);
+
+        let mut b = GraphBuilder::new(None, None);
+        b.load_nodes_from_csv(
+            nodes.to_str().unwrap(),
+            None,
+            Some(vec!["label"]),
+            Some(vec!["id"]),
+            None,
+            None,
+            None,
+            b'|',
+        )
+        .unwrap();
+
+        let person = |c: &str| NodeReference::property(c, "id", Some("Person"));
+        let post = |c: &str| NodeReference::property(c, "id", Some("Post"));
+        // hasCreator and "weighted" (with a renamed, typed prop) share the Post and
+        // Person indexes, built once each.
+        let rels = vec![
+            RelLoadSpec {
+                rel_type: "hasCreator".to_string(),
+                start: person("creator"),
+                end: post("id"),
+                properties: vec![],
+            },
+            RelLoadSpec {
+                rel_type: "weighted".to_string(),
+                start: post("id"),
+                end: person("creator"),
+                properties: vec![RelPropSpec {
+                    name: "weight".to_string(),
+                    column: "w".to_string(),
+                    col_type: CsvColumnType::Int64,
+                }],
+            },
+        ];
+        let counts = b
+            .load_relationships_from_csv_multi(posts.to_str().unwrap(), &rels, b'|')
+            .unwrap();
+        assert_eq!(counts, vec![2, 2]);
+        assert_eq!(b.relationship_count(), 4);
     }
 }
