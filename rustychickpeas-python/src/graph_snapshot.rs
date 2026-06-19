@@ -463,15 +463,15 @@ impl GraphSnapshot {
 
     /// The root each node reaches by following the *functional* `rel` in `direction`
     /// (each node has one successor — e.g. a message's `replyOf` thread root); a node
-    /// already terminal maps to itself. Returns a `Roots` array indexed by node id —
+    /// already terminal maps to itself. Returns a `NodeArray` array indexed by node id —
     /// `roots[node]` or `memoryview(roots)` in a hot loop. The forest-root array is
     /// built once and cached on the snapshot, so this is the bulk form to reach for
     /// over a per-node `root_via`. `None` if `rel` is unknown.
-    fn roots_via(&self, rel: &str, direction: Direction) -> Option<Roots> {
+    fn roots_via(&self, rel: &str, direction: Direction) -> Option<NodeArray> {
         let rt = self.snapshot.relationship_type_from_str(rel)?;
         let inner = self.snapshot.chain_roots(direction.into(), rt);
         let len = inner.len() as ffi::Py_ssize_t;
-        Some(Roots {
+        Some(NodeArray {
             inner,
             shape: [len],
             strides: [4],
@@ -484,6 +484,30 @@ impl GraphSnapshot {
     fn root_via(&self, node: u32, rel: &str, direction: Direction) -> Option<u32> {
         let rt = self.snapshot.relationship_type_from_str(rel)?;
         Some(self.snapshot.chain_root(node, direction.into(), rt))
+    }
+
+    /// The single neighbor each node reaches via the *functional* `rel` in `direction`
+    /// (one hop — e.g. a message's `hasCreator` -> its creator). The depth-1 sibling of
+    /// `roots_via`: where that follows the chain to its terminal, this takes one step.
+    /// Returns a `NodeArray` indexed by node id; a node with no such neighbor maps to
+    /// `u32::MAX` (4294967295). Built fresh each call (one `first_neighbor` per node,
+    /// GIL released), so hold the result for a hot loop. `None` if `rel` is unknown.
+    fn neighbor_via(&self, py: Python<'_>, rel: &str, direction: Direction) -> Option<NodeArray> {
+        let rt = self.snapshot.relationship_type_from_str(rel)?;
+        let dir: rustychickpeas_core::Direction = direction.into();
+        let snapshot = self.snapshot.clone();
+        let inner: Arc<[u32]> = py.allow_threads(move || {
+            let v: Vec<u32> = (0..snapshot.n_nodes)
+                .map(|node| snapshot.first_neighbor(node, dir, rt).unwrap_or(u32::MAX))
+                .collect();
+            v.into()
+        });
+        let len = inner.len() as ffi::Py_ssize_t;
+        Some(NodeArray {
+            inner,
+            shape: [len],
+            strides: [4],
+        })
     }
 
     /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
@@ -1789,18 +1813,19 @@ impl Column {
     }
 }
 
-/// A `node -> chain root` array (see [`GraphSnapshot::roots_via`]), indexed by node
-/// id: `roots[node]` or `memoryview(roots)` for a hot loop. Holds an `Arc` to the
-/// snapshot's cached forest-root array (zero-copy buffer + O(1) `__getitem__`).
+/// A `node -> node id` array, indexed by node id: `arr[node]` or `memoryview(arr)`
+/// for a hot loop (zero-copy buffer, format 'I'/u32; `u32::MAX` = none). Returned by
+/// [`GraphSnapshot::roots_via`] (the chain terminal of a functional relation) and
+/// [`GraphSnapshot::neighbor_via`] (its one-hop neighbor).
 #[pyclass]
-pub struct Roots {
+pub struct NodeArray {
     inner: Arc<[u32]>,
     shape: [ffi::Py_ssize_t; 1],
     strides: [ffi::Py_ssize_t; 1],
 }
 
 #[pymethods]
-impl Roots {
+impl NodeArray {
     fn __len__(&self) -> usize {
         self.inner.len()
     }
@@ -1815,7 +1840,7 @@ impl Roots {
     }
 
     fn __repr__(&self) -> String {
-        format!("Roots(len={})", self.inner.len())
+        format!("NodeArray(len={})", self.inner.len())
     }
 
     /// The whole array as a Python list of node ids.

@@ -33,7 +33,7 @@ fn rustychickpeas(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Relationship>()?;
     m.add_class::<GraphSnapshot>()?;
     m.add_class::<graph_snapshot::Column>()?;
-    m.add_class::<graph_snapshot::Roots>()?;
+    m.add_class::<graph_snapshot::NodeArray>()?;
     m.add_class::<graph_snapshot::Aggregation>()?;
     m.add_class::<graph_snapshot::AggResult>()?;
     m.add_class::<graph_snapshot::NeighborGroups>()?;

@@ -37,3 +37,19 @@ def test_roots_via_unknown_rel():
     g = _thread()
     assert g.roots_via("nope", Direction.Outgoing) is None
     assert g.root_via(0, "nope", Direction.Outgoing) is None
+
+
+def test_neighbor_via():
+    # P0 created M2(Post), P1 created M3(Comment); M4(Post) has no creator. The
+    # one-hop functional neighbor (message -> creator); no-neighbor -> u32::MAX.
+    b = GraphSnapshotBuilder()
+    for nid, label in [(0, "Person"), (1, "Person"), (2, "Post"), (3, "Comment"), (4, "Post")]:
+        b.add_node([label], node_id=nid)
+    b.add_relationship(0, 2, "hasCreator")
+    b.add_relationship(1, 3, "hasCreator")
+    g = b.finalize()
+    none = 0xFFFFFFFF
+    cr = g.neighbor_via("hasCreator", Direction.Incoming)
+    assert [cr[i] for i in range(5)] == [none, none, 0, 1, none]
+    assert list(memoryview(cr)) == [none, none, 0, 1, none]
+    assert g.neighbor_via("nope", Direction.Incoming) is None
