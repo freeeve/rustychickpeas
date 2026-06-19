@@ -461,6 +461,31 @@ impl GraphSnapshot {
         self.snapshot.follow(start, &steps)
     }
 
+    /// The root each node reaches by following the *functional* `rel` in `direction`
+    /// (each node has one successor — e.g. a message's `replyOf` thread root); a node
+    /// already terminal maps to itself. Returns a `Roots` array indexed by node id —
+    /// `roots[node]` or `memoryview(roots)` in a hot loop. The forest-root array is
+    /// built once and cached on the snapshot, so this is the bulk form to reach for
+    /// over a per-node `root_via`. `None` if `rel` is unknown.
+    fn roots_via(&self, rel: &str, direction: Direction) -> Option<Roots> {
+        let rt = self.snapshot.relationship_type_from_str(rel)?;
+        let inner = self.snapshot.chain_roots(direction.into(), rt);
+        let len = inner.len() as ffi::Py_ssize_t;
+        Some(Roots {
+            inner,
+            shape: [len],
+            strides: [4],
+        })
+    }
+
+    /// The root of a single `node` via the functional `rel` in `direction` (see
+    /// `roots_via`). Convenience for a one-off lookup; in a per-node loop prefer
+    /// `roots_via` and index it. `None` if `rel` is unknown.
+    fn root_via(&self, node: u32, rel: &str, direction: Direction) -> Option<u32> {
+        let rt = self.snapshot.relationship_type_from_str(rel)?;
+        Some(self.snapshot.chain_root(node, direction.into(), rt))
+    }
+
     /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
     /// `direction`): group each source's neighbors by a projected attribute and
     /// reduce per source. Nothing runs until a terminal (`.sizes()` /
@@ -1762,6 +1787,85 @@ impl Column {
         // Nothing to free: format is static, shape/strides live in self, and
         // CPython decrefs view.obj.
     }
+}
+
+/// A `node -> chain root` array (see [`GraphSnapshot::roots_via`]), indexed by node
+/// id: `roots[node]` or `memoryview(roots)` for a hot loop. Holds an `Arc` to the
+/// snapshot's cached forest-root array (zero-copy buffer + O(1) `__getitem__`).
+#[pyclass]
+pub struct Roots {
+    inner: Arc<[u32]>,
+    shape: [ffi::Py_ssize_t; 1],
+    strides: [ffi::Py_ssize_t; 1],
+}
+
+#[pymethods]
+impl Roots {
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<u32> {
+        let n = self.inner.len() as isize;
+        let i = if index < 0 { index + n } else { index };
+        if i < 0 || i >= n {
+            return Err(pyo3::exceptions::PyIndexError::new_err("node id out of range"));
+        }
+        Ok(self.inner[i as usize])
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Roots(len={})", self.inner.len())
+    }
+
+    /// The whole array as a Python list of node ids.
+    fn to_pylist(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.inner.to_vec().into_py_any(py)
+    }
+
+    /// Buffer protocol: expose the u32 array zero-copy (read-only, 1-D, format 'I').
+    unsafe fn __getbuffer__(
+        slf: PyRef<'_, Self>,
+        view: *mut ffi::Py_buffer,
+        flags: c_int,
+    ) -> PyResult<()> {
+        if view.is_null() {
+            return Err(pyo3::exceptions::PyBufferError::new_err("view is null"));
+        }
+        if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {
+            return Err(pyo3::exceptions::PyBufferError::new_err(
+                "roots buffer is read-only",
+            ));
+        }
+        let obj = slf.as_ptr();
+        ffi::Py_INCREF(obj);
+        (*view).obj = obj;
+        (*view).buf = slf.inner.as_ptr() as *mut c_void;
+        (*view).len = (slf.inner.len() as isize) * 4;
+        (*view).readonly = 1;
+        (*view).itemsize = 4;
+        (*view).ndim = 1;
+        (*view).format = if (flags & ffi::PyBUF_FORMAT) == ffi::PyBUF_FORMAT {
+            b"I\0".as_ptr() as *mut c_char
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).shape = if (flags & ffi::PyBUF_ND) == ffi::PyBUF_ND {
+            slf.shape.as_ptr() as *mut ffi::Py_ssize_t
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).strides = if (flags & ffi::PyBUF_STRIDES) == ffi::PyBUF_STRIDES {
+            slf.strides.as_ptr() as *mut ffi::Py_ssize_t
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).suboffsets = std::ptr::null_mut();
+        (*view).internal = std::ptr::null_mut();
+        Ok(())
+    }
+
+    unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
 }
 
 /// One group dimension for the Python-side aggregation spec: a raw `i64` column,
