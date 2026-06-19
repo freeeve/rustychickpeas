@@ -29,9 +29,9 @@ pub use geo::{haversine_km, GeoIndex};
 pub use graph_builder::GraphBuilder;
 pub use graph_builder_csv::{CsvColumnType, RelLoadSpec, RelPropSpec};
 pub use graph_snapshot::{
-    BoolCol, Col, Column, ColumnDtype, F64Col, GraphSnapshot, I64Col, NeighborsByType, Prop,
-    PropExt, RelMatch, RelTypeFilter, RelationshipRef, RelationshipsByType, ShortestPaths, StrCol,
-    ValueId,
+    BoolCol, Col, Column, ColumnDtype, F64Col, GraphSnapshot, I64Col, NeighborGroups,
+    NeighborsByType, Prop, PropExt, RelMatch, RelTypeFilter, RelationshipRef, RelationshipsByType,
+    ShortestPaths, StrCol, ValueId,
 };
 pub use rusty_chickpeas::RustyChickpeas;
 pub use types::{

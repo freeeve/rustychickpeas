@@ -888,6 +888,103 @@ impl<'a> PropExt<'a> for Option<Prop<'a>> {
     }
 }
 
+/// A lazy query over each source node's neighbours of one relationship type,
+/// grouped by a projected attribute and reduced per source. Built by
+/// [`GraphSnapshot::neighbor_groups`]; nothing runs until a terminal
+/// ([`sizes`](Self::sizes) / [`top_by_size`](Self::top_by_size)) is called.
+///
+/// Each source's neighbours are projected through a
+/// [`follow`](GraphSnapshot::follow)-style chain to a "group" node; the cohort
+/// sharing one group is what gets counted. Reductions run in parallel over the
+/// sources with the projection and counting kept native, so the (often millions
+/// of) intermediate `(source, group)` pairs never cross back to the caller — the
+/// terminal reduces first.
+pub struct NeighborGroups<'a> {
+    graph: &'a GraphSnapshot,
+    sources: &'a [NodeId],
+    rel: &'a str,
+    direction: Direction,
+    project: Vec<(Direction, &'a str)>,
+}
+
+impl<'a> NeighborGroups<'a> {
+    /// Project each neighbour to its group node via a chain of first-neighbour
+    /// `(direction, rel_type)` steps (like [`follow`](GraphSnapshot::follow)).
+    /// Without a projection, neighbours group by their own id (every cohort is 1).
+    #[must_use]
+    pub fn project(mut self, steps: &[(Direction, &'a str)]) -> Self {
+        self.project = steps.to_vec();
+        self
+    }
+
+    /// Per source, the size of its largest cohort, as `(source, size)` — the raw
+    /// reduction. Sources with no projectable neighbours yield `0`. Runs in
+    /// parallel over the sources; an unknown `rel`/projection type yields all-zero
+    /// sizes.
+    pub fn sizes(&self) -> Vec<(NodeId, u32)> {
+        use rayon::prelude::*;
+        let g = self.graph;
+        let Some(rel_t) = g.relationship_type_from_str(self.rel) else {
+            return self.sources.iter().map(|&s| (s, 0)).collect();
+        };
+        let Some(proj_steps) = self
+            .project
+            .iter()
+            .map(|&(d, r)| g.relationship_type_from_str(r).map(|t| (d, t)))
+            .collect::<Option<Vec<(Direction, RelationshipType)>>>()
+        else {
+            return self.sources.iter().map(|&s| (s, 0)).collect();
+        };
+        self.sources
+            .par_iter()
+            .map(|&src| {
+                // Tally this source's neighbours by their projected group node and
+                // keep the largest cohort. The map is thread-local, so no sharing.
+                let mut counts: HashMap<NodeId, u32> = HashMap::new();
+                for m in g.neighbors_by_type(src, self.direction, rel_t) {
+                    let mut cur = m;
+                    let mut projected = true;
+                    for &(d, t) in &proj_steps {
+                        match g.first_neighbor(cur, d, t) {
+                            Some(next) => cur = next,
+                            None => {
+                                projected = false;
+                                break;
+                            }
+                        }
+                    }
+                    if projected {
+                        *counts.entry(cur).or_insert(0) += 1;
+                    }
+                }
+                (src, counts.values().copied().max().unwrap_or(0))
+            })
+            .collect()
+    }
+
+    /// The `n` sources with the largest cohorts, as `(source, size)`, size
+    /// descending. Ties break by the `tie` node property (read as i64, ascending)
+    /// when given — so a caller can match a query's output-id ordering — else by
+    /// source id ascending (always deterministic). Reduces in parallel via
+    /// [`sizes`](Self::sizes), then sorts.
+    pub fn top_by_size(&self, n: usize, tie: Option<&str>) -> Vec<(NodeId, u32)> {
+        let mut sizes = self.sizes();
+        match tie {
+            Some(key) => sizes.sort_by(|a, b| {
+                b.1.cmp(&a.1).then_with(|| {
+                    self.graph
+                        .prop(a.0, key)
+                        .i64_or(0)
+                        .cmp(&self.graph.prop(b.0, key).i64_or(0))
+                })
+            }),
+            None => sizes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0))),
+        }
+        sizes.truncate(n);
+        sizes
+    }
+}
+
 /// Immutable graph snapshot optimized for read-only queries
 #[derive(Debug)]
 pub struct GraphSnapshot {
@@ -2426,10 +2523,40 @@ impl GraphSnapshot {
         Some(cur)
     }
 
+    /// Build a [`NeighborGroups`] query over each source node's `rel` neighbours
+    /// (in `direction`): group every source's neighbours by a projected attribute
+    /// and reduce per source. Nothing runs until a terminal is called. E.g. BI
+    /// Q4's biggest single-country membership per forum:
+    ///
+    /// ```ignore
+    /// g.neighbor_groups(&forums, "hasMember", Direction::Outgoing)
+    ///     .project(&[(Direction::Outgoing, "isLocatedIn"), (Direction::Outgoing, "isPartOf")])
+    ///     .top_by_size(100, Some("flid"))
+    /// ```
+    pub fn neighbor_groups<'a>(
+        &'a self,
+        sources: &'a [NodeId],
+        rel: &'a str,
+        direction: Direction,
+    ) -> NeighborGroups<'a> {
+        NeighborGroups {
+            graph: self,
+            sources,
+            rel,
+            direction,
+            project: Vec::new(),
+        }
+    }
+
     /// Whether `node` has at least one `rel_types` neighbour in `direction` — the
     /// existence predicate (`neighbors_by_type(..).next().is_some()`) behind facet
     /// "has any X rel" checks.
-    pub fn has_rel(&self, node: NodeId, direction: Direction, rel_types: impl RelTypeFilter) -> bool {
+    pub fn has_rel(
+        &self,
+        node: NodeId,
+        direction: Direction,
+        rel_types: impl RelTypeFilter,
+    ) -> bool {
         self.first_neighbor(node, direction, rel_types).is_some()
     }
 
@@ -4559,6 +4686,57 @@ mod tests {
         let loops = snapshot.rel_type("loops").unwrap();
         let root = snapshot.chain_root(0, Direction::Outgoing, loops);
         assert!([0, 1, 2].contains(&root));
+    }
+
+    #[test]
+    fn test_neighbor_groups_sizes_and_top_by_size() {
+        // Two countries (0,1); cities 2->0, 3->1; persons 4,5 in country 0, 6 in
+        // country 1. Forums group their members by country; the largest cohort wins.
+        let mut b = GraphBuilder::new(Some(16), Some(16));
+        for id in 0..10 {
+            b.add_node(Some(id), &["N"]).unwrap();
+        }
+        b.add_relationship(2, 0, "isPartOf").unwrap();
+        b.add_relationship(3, 1, "isPartOf").unwrap();
+        b.add_relationship(4, 2, "isLocatedIn").unwrap();
+        b.add_relationship(5, 2, "isLocatedIn").unwrap();
+        b.add_relationship(6, 3, "isLocatedIn").unwrap();
+        // forum 7: members 4,5 (country 0), 6 (country 1) -> largest cohort 2.
+        b.add_relationship(7, 4, "hasMember").unwrap();
+        b.add_relationship(7, 5, "hasMember").unwrap();
+        b.add_relationship(7, 6, "hasMember").unwrap();
+        b.add_relationship(8, 6, "hasMember").unwrap(); // forum 8: largest cohort 1
+        b.add_relationship(9, 4, "hasMember").unwrap(); // forum 9: largest cohort 1
+        b.set_prop_i64(7, "fid", 100).unwrap();
+        b.set_prop_i64(8, "fid", 20).unwrap();
+        b.set_prop_i64(9, "fid", 10).unwrap();
+        let g = b.finalize(None);
+
+        let forums = [7u32, 8, 9];
+        let project = [
+            (Direction::Outgoing, "isLocatedIn"),
+            (Direction::Outgoing, "isPartOf"),
+        ];
+        let sizes = g
+            .neighbor_groups(&forums, "hasMember", Direction::Outgoing)
+            .project(&project)
+            .sizes();
+        assert_eq!(sizes, vec![(7, 2), (8, 1), (9, 1)]);
+
+        // No tie key: ties (forums 8,9 both size 1) break by source id ascending.
+        let by_id = g
+            .neighbor_groups(&forums, "hasMember", Direction::Outgoing)
+            .project(&project)
+            .top_by_size(3, None);
+        assert_eq!(by_id, vec![(7, 2), (8, 1), (9, 1)]);
+
+        // Tie by the "fid" property: among size-1 forums, fid 10 (forum 9) precedes
+        // fid 20 (forum 8).
+        let by_fid = g
+            .neighbor_groups(&forums, "hasMember", Direction::Outgoing)
+            .project(&project)
+            .top_by_size(2, Some("fid"));
+        assert_eq!(by_fid, vec![(7, 2), (9, 1)]);
     }
 
     #[test]

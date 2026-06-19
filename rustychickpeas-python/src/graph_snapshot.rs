@@ -461,6 +461,28 @@ impl GraphSnapshot {
         self.snapshot.follow(start, &steps)
     }
 
+    /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
+    /// `direction`): group each source's neighbors by a projected attribute and
+    /// reduce per source. Nothing runs until a terminal (`.sizes()` /
+    /// `.top_by_size(...)`). E.g. BI Q4's biggest single-country membership per
+    /// forum: ``g.neighbor_groups(forums, "hasMember", Direction.Outgoing)
+    /// .project([(Direction.Outgoing, "isLocatedIn"), (Direction.Outgoing, "isPartOf")])
+    /// .top_by_size(100, tie="flid")``.
+    fn neighbor_groups(
+        &self,
+        sources: Vec<u32>,
+        rel: String,
+        direction: Direction,
+    ) -> NeighborGroups {
+        NeighborGroups {
+            snapshot: self.snapshot.clone(),
+            sources,
+            rel,
+            direction: direction.into(),
+            project: Vec::new(),
+        }
+    }
+
     /// The string property `key` of `node_id`, or `None` when absent **or empty**
     /// (a dense string column stores a missing value as `""`).
     fn prop_str(&self, node_id: u32, key: &str) -> Option<String> {
@@ -1767,6 +1789,72 @@ fn build_core_agg<'a>(
         agg = agg.only_neighbors(ids.iter().copied());
     }
     Ok(agg)
+}
+
+/// Lazy neighbor-grouping query (see `GraphSnapshot.neighbor_groups`). Immutable:
+/// `.project(...)` returns a new builder; `.sizes()` / `.top_by_size(...)` run it
+/// in parallel with the GIL released.
+#[pyclass]
+#[derive(Clone)]
+pub struct NeighborGroups {
+    snapshot: Arc<CoreGraphSnapshot>,
+    sources: Vec<u32>,
+    rel: String,
+    direction: rustychickpeas_core::types::Direction,
+    project: Vec<(rustychickpeas_core::types::Direction, String)>,
+}
+
+#[pymethods]
+impl NeighborGroups {
+    /// Project each neighbor to its group node via a `follow`-style list of
+    /// `(direction, rel_type)` steps. Returns a new builder.
+    fn project(&self, steps: Vec<(Direction, String)>) -> NeighborGroups {
+        NeighborGroups {
+            snapshot: self.snapshot.clone(),
+            sources: self.sources.clone(),
+            rel: self.rel.clone(),
+            direction: self.direction,
+            project: steps.into_iter().map(|(d, r)| (d.into(), r)).collect(),
+        }
+    }
+
+    /// Per source, the size of its largest cohort: `(source, size)`.
+    fn sizes(&self, py: Python<'_>) -> Vec<(u32, u32)> {
+        let snapshot = self.snapshot.clone();
+        let sources = self.sources.clone();
+        let rel = self.rel.clone();
+        let direction = self.direction;
+        let project = self.project.clone();
+        py.allow_threads(move || {
+            let steps: Vec<(rustychickpeas_core::types::Direction, &str)> =
+                project.iter().map(|(d, r)| (*d, r.as_str())).collect();
+            snapshot
+                .neighbor_groups(&sources, &rel, direction)
+                .project(&steps)
+                .sizes()
+        })
+    }
+
+    /// The top `n` sources by largest cohort size: `(source, size)`, size
+    /// descending. Ties break by the `tie` node property (read as i64, ascending)
+    /// when given — so the order can match a query's output-id ordering — else by
+    /// source id ascending.
+    #[pyo3(signature = (n, tie=None))]
+    fn top_by_size(&self, py: Python<'_>, n: usize, tie: Option<String>) -> Vec<(u32, u32)> {
+        let snapshot = self.snapshot.clone();
+        let sources = self.sources.clone();
+        let rel = self.rel.clone();
+        let direction = self.direction;
+        let project = self.project.clone();
+        py.allow_threads(move || {
+            let steps: Vec<(rustychickpeas_core::types::Direction, &str)> =
+                project.iter().map(|(d, r)| (*d, r.as_str())).collect();
+            snapshot
+                .neighbor_groups(&sources, &rel, direction)
+                .project(&steps)
+                .top_by_size(n, tie.as_deref())
+        })
+    }
 }
 
 /// Fluent aggregation builder (immutable: each step returns a new builder), created
