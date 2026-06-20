@@ -581,6 +581,160 @@ impl GraphSnapshot {
         })
     }
 
+    /// Bulk-read a node's `rel_type` rels in `direction` as aligned arrays: the
+    /// neighbor ids plus one Python list per requested property key (read from the
+    /// rel column by CSR position, each column resolved once). The property-bearing
+    /// bulk sibling of `neighbor_ids` — avoids the per-rel `Relationship` object and
+    /// per-key `get_property` of `relationships()`. Returns `(neighbors, [values,
+    /// ...])` aligned by index; a property absent on a rel is `None`.
+    fn rels_with_props(
+        &self,
+        py: Python<'_>,
+        node_id: u32,
+        direction: Direction,
+        rel_type: &str,
+        prop_keys: Vec<String>,
+    ) -> PyResult<PyObject> {
+        use pyo3::types::PyList;
+        use rustychickpeas_core::{BoolCol, ColumnDtype, Direction as CoreDir, F64Col, I64Col};
+        enum H<'a> {
+            I64(I64Col<'a>),
+            F64(F64Col<'a>),
+            Bool(BoolCol<'a>),
+            None,
+        }
+        let snap = &self.snapshot;
+        let dir: CoreDir = direction.into();
+        let neighbors = PyList::empty(py);
+        let cols: Vec<Bound<PyList>> =
+            (0..prop_keys.len()).map(|_| PyList::empty(py)).collect();
+        let rt = match snap.rel_type(rel_type) {
+            Some(rt) if (node_id as usize) + 1 < snap.out_offsets.len() => rt,
+            _ => return (neighbors, cols).into_py_any(py),
+        };
+        // Resolve each rel column to a typed reader once (not per rel).
+        let hoisted: Vec<H> = prop_keys
+            .iter()
+            .map(|k| match snap.rel_col(k).map(|c| c.dtype()) {
+                Some(ColumnDtype::I64) => H::I64(snap.rel_col(k).unwrap().i64()),
+                Some(ColumnDtype::F64) => H::F64(snap.rel_col(k).unwrap().f64()),
+                Some(ColumnDtype::Bool) => H::Bool(snap.rel_col(k).unwrap().bool()),
+                _ => H::None,
+            })
+            .collect();
+        let n = node_id as usize;
+        let mut ranges: Vec<(usize, usize, bool)> = Vec::new();
+        if matches!(dir, CoreDir::Outgoing | CoreDir::Both) {
+            ranges.push((snap.out_offsets[n] as usize, snap.out_offsets[n + 1] as usize, true));
+        }
+        if matches!(dir, CoreDir::Incoming | CoreDir::Both) {
+            ranges.push((snap.in_offsets[n] as usize, snap.in_offsets[n + 1] as usize, false));
+        }
+        for (s, e, outgoing) in ranges {
+            for i in s..e {
+                let (rtype, nbr, pos) = if outgoing {
+                    (snap.out_types[i], snap.out_nbrs[i], i as u32)
+                } else {
+                    (snap.in_types[i], snap.in_nbrs[i], snap.in_to_out.get(i).copied().unwrap_or(i as u32))
+                };
+                if rtype != rt {
+                    continue;
+                }
+                neighbors.append(nbr)?;
+                for (j, h) in hoisted.iter().enumerate() {
+                    let v: PyObject = match h {
+                        H::I64(c) => c.get(pos).into_py_any(py)?,
+                        H::F64(c) => c.get(pos).into_py_any(py)?,
+                        H::Bool(c) => c.get(pos).into_py_any(py)?,
+                        H::None => py.None(),
+                    };
+                    cols[j].append(v)?;
+                }
+            }
+        }
+        (neighbors, cols).into_py_any(py)
+    }
+
+    /// Like `rels_with_props` but returns a `RelView` of zero-copy buffer arrays
+    /// (`memoryview`-able, no per-value Python boxing): `.neighbors` (u32) and
+    /// `.col(key)` (i64/f64). The native gather runs with the GIL released; a
+    /// reduction like `sum(memoryview(v.col("amt")))` then runs at C speed. Missing
+    /// props default to 0 (a typed buffer can't hold `None`).
+    fn rel_view(
+        &self,
+        py: Python<'_>,
+        node_id: u32,
+        direction: Direction,
+        rel_type: String,
+        prop_keys: Vec<String>,
+    ) -> RelView {
+        use rustychickpeas_core::{ColumnDtype, Direction as CoreDir, F64Col, I64Col};
+        enum KeyAcc<'a> {
+            I64(I64Col<'a>, Vec<i64>),
+            F64(F64Col<'a>, Vec<f64>),
+            None(Vec<i64>),
+        }
+        let snapshot = self.snapshot.clone();
+        let dir: CoreDir = direction.into();
+        let n = node_id as usize;
+        let (neighbors, cols): (Vec<u32>, Vec<(String, RelArrayData)>) = py.allow_threads(move || {
+            let snap = &snapshot;
+            let mut nbrs: Vec<u32> = Vec::new();
+            let mut accs: Vec<KeyAcc> = prop_keys
+                .iter()
+                .map(|k| match snap.rel_col(k).map(|c| c.dtype()) {
+                    Some(ColumnDtype::I64) => KeyAcc::I64(snap.rel_col(k).unwrap().i64(), Vec::new()),
+                    Some(ColumnDtype::F64) => KeyAcc::F64(snap.rel_col(k).unwrap().f64(), Vec::new()),
+                    _ => KeyAcc::None(Vec::new()),
+                })
+                .collect();
+            let rt = snap.rel_type(&rel_type);
+            if let (Some(rt), true) = (rt, n + 1 < snap.out_offsets.len()) {
+                let mut ranges: Vec<(usize, usize, bool)> = Vec::new();
+                if matches!(dir, CoreDir::Outgoing | CoreDir::Both) {
+                    ranges.push((snap.out_offsets[n] as usize, snap.out_offsets[n + 1] as usize, true));
+                }
+                if matches!(dir, CoreDir::Incoming | CoreDir::Both) {
+                    ranges.push((snap.in_offsets[n] as usize, snap.in_offsets[n + 1] as usize, false));
+                }
+                for (s, e, outgoing) in ranges {
+                    for i in s..e {
+                        let (rtype, nbr, pos) = if outgoing {
+                            (snap.out_types[i], snap.out_nbrs[i], i as u32)
+                        } else {
+                            (snap.in_types[i], snap.in_nbrs[i], snap.in_to_out.get(i).copied().unwrap_or(i as u32))
+                        };
+                        if rtype != rt {
+                            continue;
+                        }
+                        nbrs.push(nbr);
+                        for acc in accs.iter_mut() {
+                            match acc {
+                                KeyAcc::I64(c, v) => v.push(c.get(pos).unwrap_or(0)),
+                                KeyAcc::F64(c, v) => v.push(c.get(pos).unwrap_or(0.0)),
+                                KeyAcc::None(v) => v.push(0),
+                            }
+                        }
+                    }
+                }
+            }
+            let cols = prop_keys
+                .into_iter()
+                .zip(accs)
+                .map(|(k, acc)| match acc {
+                    KeyAcc::I64(_, v) => (k, RelArrayData::I64(v.into())),
+                    KeyAcc::F64(_, v) => (k, RelArrayData::F64(v.into())),
+                    KeyAcc::None(v) => (k, RelArrayData::I64(v.into())),
+                })
+                .collect();
+            (nbrs, cols)
+        });
+        RelView {
+            neighbors: neighbors.into(),
+            cols,
+        }
+    }
+
     /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
     /// `direction`): group each source's neighbors by a projected attribute and
     /// reduce per source. Nothing runs until a terminal (`.sizes()` /
@@ -2013,6 +2167,149 @@ impl PairWeights {
             d.set_item((a, b), c)?;
         }
         d.into_py_any(py)
+    }
+}
+
+/// Backing for a [`RelView`] column: a typed, `Arc`-shared array.
+enum RelArrayData {
+    U32(Arc<[u32]>),
+    I64(Arc<[i64]>),
+    F64(Arc<[f64]>),
+}
+
+impl RelArrayData {
+    fn len(&self) -> usize {
+        match self {
+            RelArrayData::U32(a) => a.len(),
+            RelArrayData::I64(a) => a.len(),
+            RelArrayData::F64(a) => a.len(),
+        }
+    }
+    fn clone_data(&self) -> RelArrayData {
+        match self {
+            RelArrayData::U32(a) => RelArrayData::U32(a.clone()),
+            RelArrayData::I64(a) => RelArrayData::I64(a.clone()),
+            RelArrayData::F64(a) => RelArrayData::F64(a.clone()),
+        }
+    }
+    fn ptr(&self) -> *mut c_void {
+        match self {
+            RelArrayData::U32(a) => a.as_ptr() as *mut c_void,
+            RelArrayData::I64(a) => a.as_ptr() as *mut c_void,
+            RelArrayData::F64(a) => a.as_ptr() as *mut c_void,
+        }
+    }
+    fn itemsize(&self) -> ffi::Py_ssize_t {
+        match self {
+            RelArrayData::U32(_) => 4,
+            _ => 8,
+        }
+    }
+    fn format(&self) -> *mut c_char {
+        let s: &[u8] = match self {
+            RelArrayData::U32(_) => b"I\0",
+            RelArrayData::I64(_) => b"q\0",
+            RelArrayData::F64(_) => b"d\0",
+        };
+        s.as_ptr() as *mut c_char
+    }
+}
+
+/// One column of a [`RelView`] as a read-only, 1-D, buffer-protocol array — zero-copy
+/// `memoryview(...)` (format `'I'`=u32, `'q'`=i64, `'d'`=f64).
+#[pyclass]
+pub struct RelArray {
+    data: RelArrayData,
+    shape: [ffi::Py_ssize_t; 1],
+    strides: [ffi::Py_ssize_t; 1],
+}
+
+impl RelArray {
+    fn new(data: RelArrayData) -> Self {
+        let shape = [data.len() as ffi::Py_ssize_t];
+        let strides = [data.itemsize()];
+        RelArray { data, shape, strides }
+    }
+}
+
+#[pymethods]
+impl RelArray {
+    fn __len__(&self) -> usize {
+        self.data.len()
+    }
+
+    unsafe fn __getbuffer__(
+        slf: PyRef<'_, Self>,
+        view: *mut ffi::Py_buffer,
+        flags: c_int,
+    ) -> PyResult<()> {
+        if view.is_null() {
+            return Err(pyo3::exceptions::PyBufferError::new_err("view is null"));
+        }
+        if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {
+            return Err(pyo3::exceptions::PyBufferError::new_err("RelArray is read-only"));
+        }
+        let obj = slf.as_ptr();
+        ffi::Py_INCREF(obj);
+        (*view).obj = obj;
+        (*view).buf = slf.data.ptr();
+        (*view).len = (slf.data.len() as ffi::Py_ssize_t) * slf.data.itemsize();
+        (*view).readonly = 1;
+        (*view).itemsize = slf.data.itemsize();
+        (*view).ndim = 1;
+        (*view).format = if (flags & ffi::PyBUF_FORMAT) == ffi::PyBUF_FORMAT {
+            slf.data.format()
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).shape = if (flags & ffi::PyBUF_ND) == ffi::PyBUF_ND {
+            slf.shape.as_ptr() as *mut ffi::Py_ssize_t
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).strides = if (flags & ffi::PyBUF_STRIDES) == ffi::PyBUF_STRIDES {
+            slf.strides.as_ptr() as *mut ffi::Py_ssize_t
+        } else {
+            std::ptr::null_mut()
+        };
+        (*view).suboffsets = std::ptr::null_mut();
+        (*view).internal = std::ptr::null_mut();
+        Ok(())
+    }
+
+    unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
+}
+
+/// A bulk view of one node's rels (from [`GraphSnapshot::rel_view`]): `.neighbors`
+/// (u32) and `.col(key)` (i64/f64) as aligned, zero-copy [`RelArray`] buffers.
+#[pyclass]
+pub struct RelView {
+    neighbors: Arc<[u32]>,
+    cols: Vec<(String, RelArrayData)>,
+}
+
+#[pymethods]
+impl RelView {
+    fn __len__(&self) -> usize {
+        self.neighbors.len()
+    }
+
+    #[getter]
+    fn neighbors(&self) -> RelArray {
+        RelArray::new(RelArrayData::U32(self.neighbors.clone()))
+    }
+
+    /// The aligned values for property `key` as a [`RelArray`], or `None` if `key`
+    /// was not requested.
+    fn col(&self, key: &str) -> Option<RelArray> {
+        self.cols
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, d)| RelArray::new(d.clone_data()))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("RelView(len={}, cols={})", self.neighbors.len(), self.cols.len())
     }
 }
 
