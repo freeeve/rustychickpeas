@@ -510,6 +510,29 @@ impl GraphSnapshot {
         })
     }
 
+    /// Fold relationship `rel` (in `direction`) into a `{(a, b): count}` dict by
+    /// projecting both endpoints of each edge through `projection` (a `NodeArray`,
+    /// e.g. from `neighbor_via` or `roots_via`) — the one-mode / bipartite projection
+    /// ("network folding") of a relation onto a derived node set. For each `rel` edge
+    /// `a -> b`, the unordered pair `(min, max)` of `projection[a]` / `projection[b]`
+    /// gets one count; self-pairs and endpoints mapping to the `u32::MAX` sentinel are
+    /// skipped. Runs the parallel core kernel with the GIL released. E.g. BI Q19's
+    /// person interaction graph: ``g.fold_via("replyOf", Direction.Outgoing,
+    /// g.neighbor_via("hasCreator", Direction.Incoming))``.
+    fn fold_via(
+        &self,
+        py: Python<'_>,
+        rel: &str,
+        direction: Direction,
+        projection: &NodeArray,
+    ) -> std::collections::HashMap<(u32, u32), u64> {
+        let snapshot = self.snapshot.clone();
+        let dir: rustychickpeas_core::Direction = direction.into();
+        let rel = rel.to_owned();
+        let proj = projection.inner.clone();
+        py.allow_threads(move || snapshot.fold_via(&rel, dir, proj.as_ref()).into_iter().collect())
+    }
+
     /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
     /// `direction`): group each source's neighbors by a projected attribute and
     /// reduce per source. Nothing runs until a terminal (`.sizes()` /

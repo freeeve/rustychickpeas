@@ -2548,6 +2548,60 @@ impl GraphSnapshot {
         }
     }
 
+    /// Fold relationship `rel` (in `direction`) into a weighted node-pair map by
+    /// projecting both endpoints of each edge through `projection` — the one-mode /
+    /// bipartite projection ("network folding") of a relation onto a derived node
+    /// set. For every `rel` edge `a -> b`, map `a' = projection[a]` and
+    /// `b' = projection[b]` and add one to the count of the *unordered* pair
+    /// `(min(a',b'), max(a',b'))`. Self-pairs (`a' == b'`) and endpoints projecting
+    /// to the `u32::MAX` sentinel (no neighbour) are skipped.
+    ///
+    /// `projection` is a flat `node -> node` array indexed by node id — typically the
+    /// `Vec`/slice behind a one-hop functional neighbour map (the binding's
+    /// `neighbor_via`) or a chain-root map ([`chain_roots`](Self::chain_roots)). The
+    /// canonical use is BI Q19 / IC14's interaction graph: fold `replyOf` edges
+    /// (comment -> parent) through each message's `hasCreator`, yielding a
+    /// person-pair -> reply-count map. Runs in parallel over the node range (each
+    /// worker folds into a thread-local map, merged at the end); an unknown `rel`
+    /// yields an empty map.
+    pub fn fold_via(
+        &self,
+        rel: &str,
+        direction: Direction,
+        projection: &[NodeId],
+    ) -> HashMap<(NodeId, NodeId), u64> {
+        use rayon::prelude::*;
+        let Some(rel_t) = self.relationship_type_from_str(rel) else {
+            return HashMap::new();
+        };
+        (0..self.n_nodes)
+            .into_par_iter()
+            .fold(HashMap::new, |mut acc, src| {
+                let Some(&a) = projection.get(src as usize) else {
+                    return acc;
+                };
+                if a == u32::MAX {
+                    return acc;
+                }
+                for dst in self.neighbors_by_type(src, direction, rel_t) {
+                    if let Some(&b) = projection.get(dst as usize) {
+                        if b != u32::MAX && a != b {
+                            let key = if a < b { (a, b) } else { (b, a) };
+                            *acc.entry(key).or_insert(0) += 1;
+                        }
+                    }
+                }
+                acc
+            })
+            .reduce(HashMap::new, |a, b| {
+                let (mut large, small) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+                for (k, v) in small {
+                    *large.entry(k).or_insert(0) += v;
+                }
+                large
+            })
+    }
+
     /// Whether `node` has at least one `rel_types` neighbour in `direction` — the
     /// existence predicate (`neighbors_by_type(..).next().is_some()`) behind facet
     /// "has any X rel" checks.
@@ -3346,6 +3400,48 @@ mod tests {
         // Unknown rel type matches nothing.
         assert!(g
             .neighbor_counts([0u32, 1, 2], Direction::Outgoing, "NOPE")
+            .is_empty());
+    }
+
+    #[test]
+    fn test_fold_via() {
+        // Persons 0..3, Messages 3..7. hasCreator points creator -> message (so a
+        // message's creator is its Incoming hasCreator neighbour, as the LDBC loader
+        // stores it); replyOf points reply -> parent.
+        let mut b = GraphBuilder::new(Some(20), Some(20));
+        for i in 0..3 {
+            b.add_node(Some(i), &["Person"]).unwrap();
+        }
+        for i in 3..7 {
+            b.add_node(Some(i), &["Msg"]).unwrap();
+        }
+        for &(c, m) in &[(0u32, 3u32), (1, 4), (0, 5), (2, 6)] {
+            b.add_relationship(c, m, "hasCreator").unwrap();
+        }
+        // Reply edges and the creator-pair each folds to:
+        //   4->3 (1,0)  5->3 (0,0 self, skip)  6->4 (2,1)  6->3 (2,0)  5->4 (0,1)
+        for &(reply, parent) in &[(4u32, 3u32), (5, 3), (6, 4), (6, 3), (5, 4)] {
+            b.add_relationship(reply, parent, "replyOf").unwrap();
+        }
+        let g = b.finalize(None);
+
+        // Projection = each node's creator (the neighbor_via("hasCreator", In) array).
+        let proj: Vec<u32> = (0..g.n_nodes)
+            .map(|n| {
+                g.first_neighbor(n, Direction::Incoming, "hasCreator")
+                    .unwrap_or(u32::MAX)
+            })
+            .collect();
+
+        let m = g.fold_via("replyOf", Direction::Outgoing, &proj);
+        assert_eq!(m.get(&(0, 1)), Some(&2)); // 4->3 and 5->4
+        assert_eq!(m.get(&(1, 2)), Some(&1)); // 6->4
+        assert_eq!(m.get(&(0, 2)), Some(&1)); // 6->3
+        assert_eq!(m.len(), 3); // 5->3 self-pair excluded
+
+        // Unknown rel folds to nothing.
+        assert!(g
+            .fold_via("NOPE", Direction::Outgoing, &proj)
             .is_empty());
     }
 
