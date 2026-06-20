@@ -75,10 +75,10 @@ pub struct GraphSnapshot {
                        // CSR offset arrays are sized by max_node_id + 2, which
                        // can exceed n_nodes + 1 when node IDs are sparse.
     pub n_rels: u64,   // Access via relationship_count() in Python
-    pub out_offsets: Vec<u32>,      // CSR offsets for outgoing edges
+    pub out_offsets: Vec<u32>,      // CSR offsets for outgoing rels
     pub out_nbrs: Vec<NodeId>,      // CSR neighbors (outgoing)
     pub out_types: Vec<RelationshipType>, // Relationship types, parallel to out_nbrs
-    pub in_offsets: Vec<u32>,       // CSR offsets for incoming edges
+    pub in_offsets: Vec<u32>,       // CSR offsets for incoming rels
     pub in_nbrs: Vec<NodeId>,       // CSR neighbors (incoming)
     pub in_types: Vec<RelationshipType>,  // Relationship types, parallel to in_nbrs
 
@@ -224,7 +224,7 @@ Node 2: neighbors at out_nbrs[4..6] = [0, 1]
 
 - **Cache-friendly**: Sequential memory access
 - **Fast lookups**: O(1) to get neighbor slice
-- **Memory efficient**: Only stores actual edges
+- **Memory efficient**: Only stores actual rels
 - **SIMD-friendly**: Can use vectorized operations
 
 ## Columnar Property Storage
