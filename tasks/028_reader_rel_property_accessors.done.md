@@ -13,7 +13,7 @@ filters had no place in the node-keyed record store. Resolved pragmatically with
   relationship property at a CSR position, resolving string atoms. Reuses the
   `column_value` helper from `node_prop` (028 adds no column-read code). Returns
   `None` for unknown keys, sparse misses, or a `topology_only` parse.
-- Wasm: `WasmGraph.outEdges(nodeId)` (flat `[nbr0, pos0, nbr1, pos1, …]`) and
+- Wasm: `WasmGraph.outRels(nodeId)` (flat `[nbr0, pos0, nbr1, pos1, …]`) and
   `WasmGraph.relProp(csrPos, key)` (natural JS value or `undefined`). The JS
   conversion is shared with `nodeProp` via a `prop_to_js` helper.
 
