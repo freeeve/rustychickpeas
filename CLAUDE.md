@@ -161,6 +161,14 @@ cargo bench --bench graph_builder              # Specific suite
      as closures crossing into Python. Rust-side closures are fine (zero-cost).
   5. **Sketch both call sites**, then build only after sign-off. Gate the commit to
      your own hunks (shared files are co-edited).
+- **No pyarrow/numpy to solve queries.** Query-side performance must come from our own
+  native column / bit stores (the dense `column()` buffers, `NodeSet`/RoaringBitmap, the
+  `aggregate`/`neighbor_*`/`fold_via`/`dijkstra` kernels, `roots_via`/`neighbor_via`
+  `NodeArray`s) — push the hot loop into Rust, not a third-party array lib. pyarrow/numpy
+  may appear ONLY in loading/building code, and even then only in core; never add either
+  as a dependency to make a query fast. A slow Python query → a native columnar kernel
+  reading the dense stores (after the primitive-exercise sign-off), not a vectorized
+  pyarrow/numpy pass.
 - Rust 2021 edition, workspace-level version management
 - Semantic commit messages with module scope: `feat(core): ...`, `fix(python): ...`
 - Python API follows Pythonic naming (snake_case methods)
