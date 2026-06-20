@@ -103,9 +103,9 @@ fn main() {
         build_shared_corpus(docs, &out_dir, &BuildConfig::default()).expect("build shared corpus");
 
     println!(
-        "wrote {}/index.rrs + graph.rcpg + records.{{idx,bin}}: {} works, {} citation edges over one id space",
+        "wrote {}/index.rrs + graph.rcpg + records.{{idx,bin}}: {} works, {} citation rels over one id space",
         out_dir.display(),
         manifest.n_docs,
-        manifest.n_edges
+        manifest.n_rels
     );
 }

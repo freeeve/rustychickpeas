@@ -223,11 +223,11 @@ impl GraphReader {
         }
     }
 
-    /// Outgoing edges of `node_id` as `(neighbor, csr_pos)` pairs. `csr_pos` is
+    /// Outgoing rels of `node_id` as `(neighbor, csr_pos)` pairs. `csr_pos` is
     /// the outgoing-CSR position that keys relationship-property columns, so
-    /// pair it with [`GraphReader::rel_prop`] to filter traversal by an edge
+    /// pair it with [`GraphReader::rel_prop`] to filter traversal by an rel
     /// property. Empty for IDs outside the CSR space.
-    pub fn out_edges(&self, node_id: u32) -> Vec<(u32, u32)> {
+    pub fn out_rels(&self, node_id: u32) -> Vec<(u32, u32)> {
         let i = node_id as usize;
         let offsets = &self.graph.out_offsets;
         if i + 1 >= offsets.len() {
@@ -243,9 +243,9 @@ impl GraphReader {
     }
 
     /// Value of relationship property `key` at outgoing-CSR position `csr_pos`
-    /// (from [`GraphReader::out_edges`]), or `None` when the key is unknown, the
+    /// (from [`GraphReader::out_rels`]), or `None` when the key is unknown, the
     /// column wasn't loaded (e.g. parsed via [`GraphReader::topology_only`]), or
-    /// the edge has no value in a sparse column. Relationship properties are
+    /// the rel has no value in a sparse column. Relationship properties are
     /// keyed by outgoing-CSR position, so incoming-side lookups aren't
     /// addressable here. Resolves string atoms, mirroring [`GraphReader::node_prop`].
     pub fn rel_prop(&self, csr_pos: u32, key: &str) -> Option<PropValue<'_>> {
@@ -348,7 +348,7 @@ impl GraphReader {
     /// The first neighbor of `node_id` reached via `rel_type` in `direction`,
     /// or `None`. Short-circuits the CSR scan, so it is cheaper than
     /// [`neighbors_by_type`](Self::neighbors_by_type) when one neighbor is all
-    /// you need (a single-cardinality edge like `isLocatedIn`). `Both` prefers
+    /// you need (a single-cardinality rel like `isLocatedIn`). `Both` prefers
     /// the first outgoing match, else the first incoming.
     pub fn first_neighbor(&self, node_id: u32, direction: Direction, rel_type: &str) -> Option<u32> {
         let type_atom = self.atom_id(rel_type)?;
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn rel_prop_over_resident_rel_columns() {
-        // Two nodes, one edge 0->1 (CITES) carrying a "weight" property = 42.
+        // Two nodes, one rel 0->1 (CITES) carrying a "weight" property = 42.
         let mut g = GraphSection {
             n_nodes: 2,
             n_rels: 1,
@@ -676,21 +676,21 @@ mod tests {
         rcpg::write(&g, &mut bytes).unwrap();
         let r = GraphReader::from_rcpg_bytes(&bytes).unwrap();
 
-        // out_edges yields (neighbor, csr_pos); the only edge is at position 0.
-        assert_eq!(r.out_edges(0), vec![(1, 0)]);
-        assert_eq!(r.out_edges(1), Vec::new());
-        // rel_prop reads the edge's properties at that position — int and float.
+        // out_rels yields (neighbor, csr_pos); the only rel is at position 0.
+        assert_eq!(r.out_rels(0), vec![(1, 0)]);
+        assert_eq!(r.out_rels(1), Vec::new());
+        // rel_prop reads the rel's properties at that position — int and float.
         assert_eq!(r.rel_prop(0, "weight"), Some(PropValue::Int(42)));
         assert_eq!(r.rel_prop(0, "score"), Some(PropValue::Float(0.75)));
         assert_eq!(r.rel_prop(0, "missing"), None);
 
-        // topology_only drops rel columns, but the topology (out_edges) stays.
+        // topology_only drops rel columns, but the topology (out_rels) stays.
         let r2 = GraphReader::topology_only(&bytes).unwrap();
         assert_eq!(r2.rel_prop(0, "weight"), None);
-        assert_eq!(r2.out_edges(0), vec![(1, 0)]);
+        assert_eq!(r2.out_rels(0), vec![(1, 0)]);
     }
 
-    /// A small typed graph for the traversal primitives. Edges:
+    /// A small typed graph for the traversal primitives. Rels:
     ///   0 -KNOWS-> 1, 0 -KNOWS-> 2, 0 -LIVES-> 4, 1 -KNOWS-> 3.
     /// Node "name": 1 = Bob, 2 = Carol. Round-tripped through the RCPG codec.
     fn traversal_reader() -> GraphReader {

@@ -57,7 +57,7 @@ pub struct Document {
 
 /// Knobs for the build; [`BuildConfig::default`] suits a citation corpus.
 pub struct BuildConfig {
-    /// Relationship type for the link edges (e.g. `"CITES"`).
+    /// Relationship type for the link rels (e.g. `"CITES"`).
     pub rel_type: String,
     /// Node label for every document node (e.g. `"Work"`).
     pub node_label: String,
@@ -83,8 +83,8 @@ impl Default for BuildConfig {
 pub struct Manifest {
     /// Number of documents (= node count = record count).
     pub n_docs: u32,
-    /// Number of link edges retained (links to unknown keys are dropped).
-    pub n_edges: u64,
+    /// Number of link rels retained (links to unknown keys are dropped).
+    pub n_rels: u64,
     /// External key -> assigned `u32` ID, for resolving inputs against the
     /// shared ID space after the build.
     pub id_of_key: HashMap<String, u32>,
@@ -128,18 +128,18 @@ pub fn build_artifacts(mut docs: Vec<Document>, cfg: &BuildConfig) -> Result<Art
     let mut index_rrs = Vec::new();
     roaringrange::build::write_index(&mut index_rrs, cfg.gram_size, 0, entries)?;
 
-    // 3. Graph (topology-only): node ID == doc ID; edges resolved key -> ID.
+    // 3. Graph (topology-only): node ID == doc ID; rels resolved key -> ID.
     let mut builder = GraphBuilder::with_version(&cfg.version, Some(n_docs as usize), None);
     let label = [cfg.node_label.as_str()];
     for id in 0..n_docs {
         builder.add_node(Some(id), &label)?;
     }
-    let mut n_edges = 0u64;
+    let mut n_rels = 0u64;
     for (id, d) in docs.iter().enumerate() {
         for link in &d.links {
             if let Some(&dst) = id_of_key.get(link) {
                 builder.add_relationship(id as u32, dst, &cfg.rel_type)?;
-                n_edges += 1;
+                n_rels += 1;
             }
         }
     }
@@ -163,7 +163,7 @@ pub fn build_artifacts(mut docs: Vec<Document>, cfg: &BuildConfig) -> Result<Art
         records_bin,
         manifest: Manifest {
             n_docs,
-            n_edges,
+            n_rels,
             id_of_key,
         },
     })
@@ -232,9 +232,9 @@ mod tests {
         assert_eq!(m.id_of_key["greenfield"], 0);
         assert_eq!(m.id_of_key["graphdb"], 1);
         assert_eq!(m.id_of_key["sqlite"], 2);
-        assert_eq!(m.n_edges, 3); // greenfield->{graphdb,sqlite}, graphdb->sqlite
+        assert_eq!(m.n_rels, 3); // greenfield->{graphdb,sqlite}, graphdb->sqlite
 
-        // 2. Graph: node ID == doc ID, edges resolved against the same space.
+        // 2. Graph: node ID == doc ID, rels resolved against the same space.
         let g = rcpg::parse(&a.graph_rcpg).unwrap();
         assert_eq!(g.n_nodes, 3);
         // greenfield (id 0) cites graphdb (id 1) and sqlite (id 2).
@@ -262,7 +262,7 @@ mod tests {
             "expected graphdb (id {}) in hits {hits:?}",
             m.id_of_key["graphdb"]
         );
-        // That same ID has an outgoing CITES edge and its own record.
+        // That same ID has an outgoing CITES rel and its own record.
         let hit = m.id_of_key["graphdb"];
         assert!(!g.out_neighbors(hit).is_empty());
         assert!(ri.record_range(hit).is_some());

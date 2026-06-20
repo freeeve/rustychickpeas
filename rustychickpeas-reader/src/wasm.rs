@@ -121,20 +121,20 @@ impl WasmGraph {
         prop_to_js(self.inner.node_prop(node_id, key))
     }
 
-    /// Outgoing edges of `nodeId` as a flat `[neighbor0, pos0, neighbor1, pos1,
+    /// Outgoing rels of `nodeId` as a flat `[neighbor0, pos0, neighbor1, pos1,
     /// …]` array; `pos` is the CSR position to pass to `relProp`.
-    #[wasm_bindgen(js_name = outEdges)]
-    pub fn out_edges(&self, node_id: u32) -> Vec<u32> {
+    #[wasm_bindgen(js_name = outRels)]
+    pub fn out_rels(&self, node_id: u32) -> Vec<u32> {
         self.inner
-            .out_edges(node_id)
+            .out_rels(node_id)
             .into_iter()
             .flat_map(|(n, p)| [n, p])
             .collect()
     }
 
     /// Value of relationship property `key` at outgoing-CSR position `csrPos`
-    /// (from `outEdges`), or `undefined`. Natural JS type, like `nodeProp` —
-    /// ready for edge-property traversal filters.
+    /// (from `outRels`), or `undefined`. Natural JS type, like `nodeProp` —
+    /// ready for rel-property traversal filters.
     #[wasm_bindgen(js_name = relProp)]
     pub fn rel_prop(&self, csr_pos: u32, key: &str) -> JsValue {
         prop_to_js(self.inner.rel_prop(csr_pos, key))
