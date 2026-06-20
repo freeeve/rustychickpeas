@@ -510,14 +510,16 @@ impl GraphSnapshot {
         })
     }
 
-    /// Fold relationship `rel` (in `direction`) into a `{(a, b): count}` dict by
-    /// projecting both endpoints of each edge through `projection` (a `NodeArray`,
-    /// e.g. from `neighbor_via` or `roots_via`) — the one-mode / bipartite projection
-    /// ("network folding") of a relation onto a derived node set. For each `rel` edge
-    /// `a -> b`, the unordered pair `(min, max)` of `projection[a]` / `projection[b]`
-    /// gets one count; self-pairs and endpoints mapping to the `u32::MAX` sentinel are
-    /// skipped. Runs the parallel core kernel with the GIL released. E.g. BI Q19's
-    /// person interaction graph: ``g.fold_via("replyOf", Direction.Outgoing,
+    /// Fold relationship `rel` (in `direction`) into a `PairWeights` map by projecting
+    /// both endpoints of each edge through `projection` (a `NodeArray`, e.g. from
+    /// `neighbor_via` or `roots_via`) — the one-mode / bipartite projection ("network
+    /// folding") of a relation onto a derived node set. For each `rel` edge `a -> b`,
+    /// the unordered pair `(min, max)` of `projection[a]` / `projection[b]` gets one
+    /// count; self-pairs and endpoints mapping to the `u32::MAX` sentinel are skipped.
+    /// Runs the parallel core kernel with the GIL released. The result stays resident
+    /// (no per-pair Python object) so it can drive a native weighted `dijkstra` without
+    /// a per-edge callback; `to_dict()` materializes it. E.g. BI Q19's person
+    /// interaction graph: ``g.fold_via("replyOf", Direction.Outgoing,
     /// g.neighbor_via("hasCreator", Direction.Incoming))``.
     fn fold_via(
         &self,
@@ -525,12 +527,58 @@ impl GraphSnapshot {
         rel: &str,
         direction: Direction,
         projection: &NodeArray,
-    ) -> std::collections::HashMap<(u32, u32), u64> {
+    ) -> PairWeights {
         let snapshot = self.snapshot.clone();
         let dir: rustychickpeas_core::Direction = direction.into();
         let rel = rel.to_owned();
         let proj = projection.inner.clone();
-        py.allow_threads(move || snapshot.fold_via(&rel, dir, proj.as_ref()).into_iter().collect())
+        let map: std::collections::HashMap<(u32, u32), u64> =
+            py.allow_threads(move || snapshot.fold_via(&rel, dir, proj.as_ref()).into_iter().collect());
+        PairWeights {
+            inner: Arc::new(map),
+        }
+    }
+
+    /// Single-source weighted shortest paths (Dijkstra) from `source` along `rel` in
+    /// `direction`, with edge costs derived from a resident `weights` map (`PairWeights`,
+    /// e.g. from `fold_via`). The cost of edge `(u, v)` is `1.0 / (weights[(u, v)] + base)`;
+    /// a pair absent from `weights` is untraversable when `prune_missing` (else costs
+    /// `1.0 / base`). Returns `{node_id: cost}` for every node reached (the source maps to
+    /// `0.0`); pass `target` to stop once it is settled. The weight lookup runs inside the
+    /// native kernel with the GIL released — no per-edge Python callback. E.g. BI Q19's
+    /// interaction path: ``g.dijkstra(p1, Direction.Outgoing, "knows", weights=interaction,
+    /// base=0.0, prune_missing=True)``.
+    #[pyo3(signature = (source, direction, rel, *, weights, base=0.0, prune_missing=false, target=None))]
+    fn dijkstra(
+        &self,
+        py: Python<'_>,
+        source: u32,
+        direction: Direction,
+        rel: &str,
+        weights: &PairWeights,
+        base: f64,
+        prune_missing: bool,
+        target: Option<u32>,
+    ) -> std::collections::HashMap<u32, f64> {
+        let snapshot = self.snapshot.clone();
+        let dir: rustychickpeas_core::Direction = direction.into();
+        let rel = rel.to_owned();
+        let map = weights.inner.clone();
+        py.allow_threads(move || {
+            let paths = snapshot.dijkstra(source, dir, rel.as_str(), target, |from, r| {
+                let key = if from < r.neighbor {
+                    (from, r.neighbor)
+                } else {
+                    (r.neighbor, from)
+                };
+                match map.get(&key) {
+                    Some(&w) => 1.0 / (w as f64 + base),
+                    None if prune_missing => f64::INFINITY,
+                    None => 1.0 / base,
+                }
+            });
+            paths.into_distances().into_iter().collect()
+        })
     }
 
     /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
@@ -1914,6 +1962,58 @@ impl NodeArray {
     }
 
     unsafe fn __releasebuffer__(&self, _view: *mut ffi::Py_buffer) {}
+}
+
+/// An immutable `(node, node) -> count` map keyed by the *unordered* pair — the
+/// resident result of [`GraphSnapshot::fold_via`] (a one-mode projection). Kept native
+/// so it can drive a weighted [`GraphSnapshot::dijkstra`] without a per-edge Python
+/// callback; dict-like for inspection (`pw[(a, b)]`, `(a, b) in pw`, `len(pw)`,
+/// `pw.to_dict()`). Lookups normalize the key to `(min, max)`.
+#[pyclass]
+pub struct PairWeights {
+    inner: Arc<std::collections::HashMap<(u32, u32), u64>>,
+}
+
+#[pymethods]
+impl PairWeights {
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn __contains__(&self, key: (u32, u32)) -> bool {
+        let (a, b) = key;
+        let k = if a < b { (a, b) } else { (b, a) };
+        self.inner.contains_key(&k)
+    }
+
+    fn __getitem__(&self, key: (u32, u32)) -> PyResult<u64> {
+        let (a, b) = key;
+        let k = if a < b { (a, b) } else { (b, a) };
+        self.inner
+            .get(&k)
+            .copied()
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(format!("{:?}", key)))
+    }
+
+    /// The count for the unordered pair `(a, b)`, or `default` (`None`) when absent.
+    #[pyo3(signature = (a, b, default=None))]
+    fn get(&self, a: u32, b: u32, default: Option<u64>) -> Option<u64> {
+        let k = if a < b { (a, b) } else { (b, a) };
+        self.inner.get(&k).copied().or(default)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PairWeights(pairs={})", self.inner.len())
+    }
+
+    /// Materialize as a Python dict `{(a, b): count}` (keys are `(min, max)`).
+    fn to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let d = pyo3::types::PyDict::new(py);
+        for (&(a, b), &c) in self.inner.iter() {
+            d.set_item((a, b), c)?;
+        }
+        d.into_py_any(py)
+    }
 }
 
 /// One group dimension for the Python-side aggregation spec: a raw `i64` column,

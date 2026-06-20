@@ -481,6 +481,14 @@ impl ShortestPaths {
         self.dist.contains_key(&node)
     }
 
+    /// All reached nodes paired with their shortest distance from the source,
+    /// consuming the result — the bulk export behind a `{node: distance}` map (the
+    /// per-node [`distance`](Self::distance) only answers nodes the caller already
+    /// knows). The source itself is included at distance `0.0`.
+    pub fn into_distances(self) -> HashMap<NodeId, f64> {
+        self.dist
+    }
+
     /// The shortest path from the source to `target` as a node sequence (source
     /// first, target last), or `None` if `target` was not reached.
     pub fn path_to(&self, target: NodeId) -> Option<Vec<NodeId>> {
