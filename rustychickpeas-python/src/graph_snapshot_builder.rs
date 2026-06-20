@@ -572,7 +572,7 @@ impl GraphSnapshotBuilder {
     ///     path: Path to the CSV file
     ///     start_node_column / end_node_column: String column name or property-lookup dict
     ///     rel_type_column: Column holding the relationship type (or use fixed_rel_type)
-    ///     property_columns: Columns to load as edge properties
+    ///     property_columns: Columns to load as rel properties
     ///     fixed_rel_type: A fixed relationship type for every row
     ///     deduplication: 'create_all' | 'unique_by_type' | 'unique_by_type_and_key_properties'
     #[pyo3(signature = (path, start_node_column, end_node_column, rel_type_column=None, property_columns=None, fixed_rel_type=None, deduplication=None, delimiter=",".to_string()))]

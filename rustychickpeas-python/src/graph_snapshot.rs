@@ -323,7 +323,7 @@ impl GraphSnapshot {
         }
     }
 
-    /// Histogram of the neighbours reached from `sources` via `rel_type` edges in
+    /// Histogram of the neighbours reached from `sources` via `rel_type` rels in
     /// `direction`: for each source node, count how many of its `rel_type`
     /// neighbours land on each target. Returns a dict mapping target node id to
     /// count. The whole aggregation runs in Rust on a single call, so it is far
@@ -511,14 +511,14 @@ impl GraphSnapshot {
     }
 
     /// Fold relationship `rel` (in `direction`) into a `PairWeights` map by projecting
-    /// both endpoints of each edge through `projection` (a `NodeArray`, e.g. from
+    /// both endpoints of each rel through `projection` (a `NodeArray`, e.g. from
     /// `neighbor_via` or `roots_via`) — the one-mode / bipartite projection ("network
-    /// folding") of a relation onto a derived node set. For each `rel` edge `a -> b`,
+    /// folding") of a relation onto a derived node set. For each `rel` rel `a -> b`,
     /// the unordered pair `(min, max)` of `projection[a]` / `projection[b]` gets one
     /// count; self-pairs and endpoints mapping to the `u32::MAX` sentinel are skipped.
     /// Runs the parallel core kernel with the GIL released. The result stays resident
     /// (no per-pair Python object) so it can drive a native weighted `dijkstra` without
-    /// a per-edge callback; `to_dict()` materializes it. E.g. BI Q19's person
+    /// a per-rel callback; `to_dict()` materializes it. E.g. BI Q19's person
     /// interaction graph: ``g.fold_via("replyOf", Direction.Outgoing,
     /// g.neighbor_via("hasCreator", Direction.Incoming))``.
     fn fold_via(
@@ -540,12 +540,12 @@ impl GraphSnapshot {
     }
 
     /// Single-source weighted shortest paths (Dijkstra) from `source` along `rel` in
-    /// `direction`, with edge costs derived from a resident `weights` map (`PairWeights`,
-    /// e.g. from `fold_via`). The cost of edge `(u, v)` is `1.0 / (weights[(u, v)] + base)`;
+    /// `direction`, with rel costs derived from a resident `weights` map (`PairWeights`,
+    /// e.g. from `fold_via`). The cost of rel `(u, v)` is `1.0 / (weights[(u, v)] + base)`;
     /// a pair absent from `weights` is untraversable when `prune_missing` (else costs
     /// `1.0 / base`). Returns `{node_id: cost}` for every node reached (the source maps to
     /// `0.0`); pass `target` to stop once it is settled. The weight lookup runs inside the
-    /// native kernel with the GIL released — no per-edge Python callback. E.g. BI Q19's
+    /// native kernel with the GIL released — no per-rel Python callback. E.g. BI Q19's
     /// interaction path: ``g.dijkstra(p1, Direction.Outgoing, "knows", weights=interaction,
     /// base=0.0, prune_missing=True)``.
     #[pyo3(signature = (source, direction, rel, *, weights, base=0.0, prune_missing=false, target=None))]
@@ -662,8 +662,8 @@ impl GraphSnapshot {
     /// it passes every `pre_filters` predicate `(column, op, value)` (op ∈
     /// `<,<=,>,>=,==,!=`); rows additionally passing every `group_filters` predicate
     /// are grouped. The group key is the label index (when `group_label`), then each
-    /// `group_cols` value, then a bucket index per `group_bins` `(column, edges)`
-    /// (bucket = count of `edges <= value`). Returns `(rows, total)` with
+    /// `group_cols` value, then a bucket index per `group_bins` `(column, bounds)`
+    /// (bucket = count of `bounds <= value`). Returns `(rows, total)` with
     /// `rows = [(key_tuple, count, sum), ...]`. All referenced columns must be dense
     /// `i64` columns; a missing label or non-dense/-i64 column raises `ValueError`.
     #[pyo3(signature = (labels, pre_filters=vec![], group_filters=vec![], group_label=false, group_cols=vec![], group_bins=vec![], sum_col=None))]
@@ -705,7 +705,7 @@ impl GraphSnapshot {
 
     /// Start a fluent aggregation over the given node labels — the Pythonic front
     /// for [`group_reduce`](Self::group_reduce). Chain `.where(col, op, value)` /
-    /// `.having(col, op, value)` / `.by(col)` / `.bin(col, edges)` / `.by_label()` /
+    /// `.having(col, op, value)` / `.by(col)` / `.bin(col, bounds)` / `.by_label()` /
     /// `.sum(col)`, then `.run()` for a result with `.total` and self-describing dict
     /// `.rows` (the source label comes back as its name). The heavy scan runs in Rust
     /// with the GIL released — no numpy/pyarrow needed.
@@ -727,8 +727,8 @@ impl GraphSnapshot {
     /// Weighted (or unweighted) shortest-path cost from `source` to `target`, or
     /// `None` if `target` is unreachable.
     ///
-    /// With `weight_property`, each followed edge costs that f64/i64 edge
-    /// property (an edge that lacks it is skipped); without it, every edge costs
+    /// With `weight_property`, each followed rel costs that f64/i64 rel
+    /// property (an rel that lacks it is skipped); without it, every rel costs
     /// 1.0 (a hop count). `rel_types` optionally restricts which relationship
     /// types are followed (all types when `None`). Weights must be non-negative;
     /// the search is a bidirectional Dijkstra.
@@ -795,7 +795,7 @@ impl GraphSnapshot {
         }
     }
 
-    /// Get all nodes (returns all node IDs that have data: labels, edges, or properties)
+    /// Get all nodes (returns all node IDs that have data: labels, rels, or properties)
     fn all_nodes(&self) -> PyResult<Vec<u32>> {
         use std::collections::HashSet;
         let mut nodes = HashSet::new();
@@ -807,8 +807,8 @@ impl GraphSnapshot {
             }
         }
 
-        // Add nodes with edges (check CSR arrays)
-        // Nodes with outgoing edges
+        // Add nodes with rels (check CSR arrays)
+        // Nodes with outgoing rels
         for node_id in 0..self.snapshot.out_offsets.len().saturating_sub(1) {
             let start = self.snapshot.out_offsets[node_id] as usize;
             let end = self.snapshot.out_offsets[node_id + 1] as usize;
@@ -817,7 +817,7 @@ impl GraphSnapshot {
             }
         }
 
-        // Nodes with incoming edges
+        // Nodes with incoming rels
         for node_id in 0..self.snapshot.in_offsets.len().saturating_sub(1) {
             let start = self.snapshot.in_offsets[node_id] as usize;
             let end = self.snapshot.in_offsets[node_id + 1] as usize;
@@ -1115,8 +1115,8 @@ impl GraphSnapshot {
     /// * `source_nodes` - List of starting node IDs for forward traversal
     /// * `target_nodes` - List of starting node IDs for backward traversal
     /// * `direction` - Direction of traversal (Direction.Outgoing, Direction.Incoming, or Direction.Both)
-    ///   - Outgoing: Forward search uses outgoing edges, backward uses incoming (default for finding paths from source to target)
-    ///   - Incoming: Forward search uses incoming edges, backward uses outgoing (reverse direction)
+    ///   - Outgoing: Forward search uses outgoing rels, backward uses incoming (default for finding paths from source to target)
+    ///   - Incoming: Forward search uses incoming rels, backward uses outgoing (reverse direction)
     ///   - Both: Both searches use both directions (bidirectional traversal)
     /// * `rel_types` - Optional list of relationship type names to filter by
     /// * `node_filter` - Optional callable that takes (node_id: int) and returns bool.
@@ -1370,15 +1370,15 @@ impl GraphSnapshot {
 
     /// BFS traversal from a set of starting nodes
     ///
-    /// Performs BFS from the starting nodes, following edges in the specified direction.
+    /// Performs BFS from the starting nodes, following rels in the specified direction.
     /// Returns all nodes and relationships visited during the traversal.
     ///
     /// # Arguments
     /// * `start_nodes` - List of starting node IDs
     /// * `direction` - Direction of traversal (Direction.Outgoing, Direction.Incoming, or Direction.Both)
-    ///   - Outgoing: Follow outgoing edges
-    ///   - Incoming: Follow incoming edges
-    ///   - Both: Follow both outgoing and incoming edges
+    ///   - Outgoing: Follow outgoing rels
+    ///   - Incoming: Follow incoming rels
+    ///   - Both: Follow both outgoing and incoming rels
     /// * `rel_types` - Optional list of relationship type names to filter by
     /// * `node_filter` - Optional callable that takes (node_id: int) and returns bool.
     ///   Returns True to include/continue from a node.
@@ -1966,7 +1966,7 @@ impl NodeArray {
 
 /// An immutable `(node, node) -> count` map keyed by the *unordered* pair — the
 /// resident result of [`GraphSnapshot::fold_via`] (a one-mode projection). Kept native
-/// so it can drive a weighted [`GraphSnapshot::dijkstra`] without a per-edge Python
+/// so it can drive a weighted [`GraphSnapshot::dijkstra`] without a per-rel Python
 /// callback; dict-like for inspection (`pw[(a, b)]`, `(a, b) in pw`, `len(pw)`,
 /// `pw.to_dict()`). Lookups normalize the key to `(min, max)`.
 #[pyclass]
@@ -2017,7 +2017,7 @@ impl PairWeights {
 }
 
 /// One group dimension for the Python-side aggregation spec: a raw `i64` column,
-/// or a column bucketed by ascending `edges`.
+/// or a column bucketed by ascending `bounds`.
 #[derive(Clone)]
 enum GroupSpec {
     Col(String),
@@ -2196,11 +2196,11 @@ impl Aggregation {
         a
     }
 
-    /// Group by a column bucketed at ascending `edges` (bucket = count of
-    /// `edges <= value`); the row field is `"{column}_bin"`.
-    fn bin(&self, column: String, edges: Vec<i64>) -> Aggregation {
+    /// Group by a column bucketed at ascending `bounds` (bucket = count of
+    /// `bounds <= value`); the row field is `"{column}_bin"`.
+    fn bin(&self, column: String, bounds: Vec<i64>) -> Aggregation {
         let mut a = self.clone();
-        a.group.push(GroupSpec::Bin(column, edges));
+        a.group.push(GroupSpec::Bin(column, bounds));
         a
     }
 
@@ -2211,7 +2211,7 @@ impl Aggregation {
         a
     }
 
-    /// Count edges of `rel_type`/`direction` out of each source node instead of
+    /// Count rels of `rel_type`/`direction` out of each source node instead of
     /// counting nodes, grouping additionally by the neighbor id (row field
     /// `"neighbor"`). `total` still counts source nodes.
     fn through(&self, rel_type: String, direction: Direction) -> Aggregation {

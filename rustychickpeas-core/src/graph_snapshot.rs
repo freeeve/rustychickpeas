@@ -419,9 +419,9 @@ pub struct RelationshipRef {
 
 /// Recompute the incoming->outgoing CSR position map from the adjacency arrays
 /// alone (used when a snapshot is reconstructed without builder permutations,
-/// e.g. on deserialization). Pairs the k-th `u->v` edge of a given type in the
-/// outgoing CSR with the k-th such edge in the incoming CSR; both CSRs preserve
-/// insertion order within a group, so the pairing matches the original edges.
+/// e.g. on deserialization). Pairs the k-th `u->v` rel of a given type in the
+/// outgoing CSR with the k-th such rel in the incoming CSR; both CSRs preserve
+/// insertion order within a group, so the pairing matches the original rels.
 pub(crate) fn compute_in_to_out_from_csr(
     out_offsets: &[u32],
     out_nbrs: &[NodeId],
@@ -1022,7 +1022,7 @@ pub struct GraphSnapshot {
     /// Contains destination node IDs
     pub out_nbrs: Vec<NodeId>,
     /// Outgoing relationship types: len = n_rels
-    /// Parallel to out_nbrs, contains relationship type for each edge
+    /// Parallel to out_nbrs, contains relationship type for each rel
     pub out_types: Vec<RelationshipType>,
     // CSR (incoming relationships) - optional
     /// Incoming offsets: len = max_node_id + 2 (same sizing as `out_offsets`;
@@ -1032,11 +1032,11 @@ pub struct GraphSnapshot {
     /// Contains source node IDs
     pub in_nbrs: Vec<NodeId>,
     /// Incoming relationship types: len = n_rels
-    /// Parallel to in_nbrs, contains relationship type for each edge
+    /// Parallel to in_nbrs, contains relationship type for each rel
     pub in_types: Vec<RelationshipType>,
 
     /// Maps an incoming CSR position to the outgoing CSR position of the same
-    /// edge, so relationship properties (stored by outgoing position) can be
+    /// rel, so relationship properties (stored by outgoing position) can be
     /// read for incoming relationships. Empty when the graph has no
     /// relationship properties (the map would be unused).
     pub in_to_out: Vec<u32>,
@@ -1436,12 +1436,12 @@ impl GraphSnapshot {
     ) -> NeighborsByType<'_> {
         let node = node_id as usize;
         let out = if matches!(direction, Direction::Outgoing | Direction::Both) {
-            edge_range(&self.out_offsets, node)
+            rel_range(&self.out_offsets, node)
         } else {
             0..0
         };
         let inc = if matches!(direction, Direction::Incoming | Direction::Both) {
-            edge_range(&self.in_offsets, node)
+            rel_range(&self.in_offsets, node)
         } else {
             0..0
         };
@@ -1500,7 +1500,7 @@ impl GraphSnapshot {
     /// for incoming relationships as well as outgoing (the incoming position is
     /// mapped to where the property is stored). Use this when a query must read
     /// a per-relationship property during traversal, e.g. filtering `KNOWS`
-    /// edges by a `creationDate`.
+    /// rels by a `creationDate`.
     pub fn relationships(
         &self,
         node_id: NodeId,
@@ -1521,12 +1521,12 @@ impl GraphSnapshot {
     ) -> RelationshipsByType<'_> {
         let node = node_id as usize;
         let out = if matches!(direction, Direction::Outgoing | Direction::Both) {
-            edge_range(&self.out_offsets, node)
+            rel_range(&self.out_offsets, node)
         } else {
             0..0
         };
         let inc = if matches!(direction, Direction::Incoming | Direction::Both) {
-            edge_range(&self.in_offsets, node)
+            rel_range(&self.in_offsets, node)
         } else {
             0..0
         };
@@ -1542,7 +1542,7 @@ impl GraphSnapshot {
     ///
     /// The `weight` closure returns the cost of traversing a relationship; it
     /// receives the step's source node and the [`RelationshipRef`], so it can
-    /// read a stored edge weight via [`RelationshipRef::pos`] (with
+    /// read a stored rel weight via [`RelationshipRef::pos`] (with
     /// [`rel_prop`](Self::rel_prop)) or compute a
     /// derived cost. Weights must be **non-negative** (Dijkstra's assumption).
     ///
@@ -1601,8 +1601,8 @@ impl GraphSnapshot {
     /// fewer nodes than a one-directional search for a point-to-point query on a
     /// large, well-connected component. Returns `None` if `target` is unreachable.
     ///
-    /// `weight` returns a non-negative edge cost, as in [`dijkstra`](Self::dijkstra)
-    /// (an infinite weight prunes the edge). The backward search follows the
+    /// `weight` returns a non-negative rel cost, as in [`dijkstra`](Self::dijkstra)
+    /// (an infinite weight prunes the rel). The backward search follows the
     /// reverse of `direction`, so `weight` must be symmetric — the usual case for
     /// an undirected `Direction::Both` graph (e.g. `KNOWS`). When you need
     /// distances to *many* targets from one source, or the path itself, use the
@@ -1796,8 +1796,8 @@ impl GraphSnapshot {
     /// * `source_nodes` - Starting nodes for forward traversal
     /// * `target_nodes` - Starting nodes for backward traversal
     /// * `direction` - Direction of traversal:
-    ///   - `Outgoing`: Forward search uses outgoing edges, backward search uses incoming edges (default for finding paths from source to target)
-    ///   - `Incoming`: Forward search uses incoming edges, backward search uses outgoing edges (reverse direction)
+    ///   - `Outgoing`: Forward search uses outgoing rels, backward search uses incoming rels (default for finding paths from source to target)
+    ///   - `Incoming`: Forward search uses incoming rels, backward search uses outgoing rels (reverse direction)
     ///   - `Both`: Both searches use both directions (bidirectional traversal)
     /// * `rel_types` - Optional filter: only follow relationships of these types
     /// * `node_filter` - Optional filter: returns `true` to include/continue from a node.
@@ -1995,15 +1995,15 @@ impl GraphSnapshot {
 
     /// BFS traversal from a set of starting nodes
     ///
-    /// Performs BFS from the starting nodes, following edges in the specified direction.
+    /// Performs BFS from the starting nodes, following rels in the specified direction.
     /// Returns all nodes and relationships visited during the traversal.
     ///
     /// # Arguments
     /// * `start_nodes` - Starting nodes for traversal
     /// * `direction` - Direction of traversal:
-    ///   - `Outgoing`: Follow outgoing edges
-    ///   - `Incoming`: Follow incoming edges
-    ///   - `Both`: Follow both outgoing and incoming edges
+    ///   - `Outgoing`: Follow outgoing rels
+    ///   - `Incoming`: Follow incoming rels
+    ///   - `Both`: Follow both outgoing and incoming rels
     /// * `rel_types` - Optional filter: only follow relationships of these types
     /// * `node_filter` - Optional filter: returns `true` to include/continue from a node.
     ///   Takes `(node_id, snapshot)` and should return `true` to include the node.
@@ -2120,17 +2120,17 @@ impl GraphSnapshot {
 
     /// The per-node forest-root array for the functional `rel_type` chain in
     /// `direction`: index it by `node` to get the terminal of that node's chain —
-    /// the node reached by following the single outgoing `rel_type` edge until one
-    /// with no such edge (a node already terminal maps to itself).
+    /// the node reached by following the single outgoing `rel_type` rel until one
+    /// with no such rel (a node already terminal maps to itself).
     ///
     /// The array is built once per `(direction, rel_type)` in `O(node_count)` with
     /// path compression, then cached, so a hot loop should call this **once** and
     /// index the returned slice lock-free rather than calling
     /// [`chain_root`](Self::chain_root) per node. Intended for a relationship that
     /// is *functional* in `direction` (each node has at most one outgoing
-    /// `rel_type` edge), so the reachable structure is a forest — e.g. walking
+    /// `rel_type` rel), so the reachable structure is a forest — e.g. walking
     /// `replyOf` from a reply up to its root message. Malformed, non-functional
-    /// data (a node with several such edges, or a cycle) follows the first
+    /// data (a node with several such rels, or a cycle) follows the first
     /// neighbor in CSR order and is broken by a `node_count` depth cap, resolving
     /// deterministically. Pass a pre-resolved [`RelationshipType`] (via
     /// [`rel_type`](Self::rel_type)).
@@ -2195,7 +2195,7 @@ impl GraphSnapshot {
                 }
                 match self.neighbors_with(cur, direction, matcher.clone()).next() {
                     // `path.len() <= n` bounds a malformed cycle (a valid chain has
-                    // at most `n - 1` edges, so this never trips on a forest).
+                    // at most `n - 1` rels, so this never trips on a forest).
                     Some(parent) if path.len() <= n => {
                         path.push(cur);
                         cur = parent;
@@ -2491,7 +2491,7 @@ impl GraphSnapshot {
     /// test. `set` can be a label's nodes ([`nodes_with_label`](Self::nodes_with_label)),
     /// an [`full_text_search`](Self::full_text_search) / geo result, or any precomputed [`NodeSet`]; this
     /// generalizes "typed neighbours carrying a label" and the per-candidate set
-    /// intersections in co-occurrence queries. Duplicate edges are preserved, so
+    /// intersections in co-occurrence queries. Duplicate rels are preserved, so
     /// it still composes with counting. `rel_types` accepts a single type, a slice
     /// of types, or `None` for any type (see [`RelTypeFilter`]).
     pub fn neighbors_in_set<'a>(
@@ -2557,9 +2557,9 @@ impl GraphSnapshot {
     }
 
     /// Fold relationship `rel` (in `direction`) into a weighted node-pair map by
-    /// projecting both endpoints of each edge through `projection` — the one-mode /
+    /// projecting both endpoints of each rel through `projection` — the one-mode /
     /// bipartite projection ("network folding") of a relation onto a derived node
-    /// set. For every `rel` edge `a -> b`, map `a' = projection[a]` and
+    /// set. For every `rel` rel `a -> b`, map `a' = projection[a]` and
     /// `b' = projection[b]` and add one to the count of the *unordered* pair
     /// `(min(a',b'), max(a',b'))`. Self-pairs (`a' == b'`) and endpoints projecting
     /// to the `u32::MAX` sentinel (no neighbour) are skipped.
@@ -2567,7 +2567,7 @@ impl GraphSnapshot {
     /// `projection` is a flat `node -> node` array indexed by node id — typically the
     /// `Vec`/slice behind a one-hop functional neighbour map (the binding's
     /// `neighbor_via`) or a chain-root map ([`chain_roots`](Self::chain_roots)). The
-    /// canonical use is BI Q19 / IC14's interaction graph: fold `replyOf` edges
+    /// canonical use is BI Q19 / IC14's interaction graph: fold `replyOf` rels
     /// (comment -> parent) through each message's `hasCreator`, yielding a
     /// person-pair -> reply-count map. Runs in parallel over the node range (each
     /// worker folds into a thread-local map, merged at the end); an unknown `rel`
@@ -2708,7 +2708,7 @@ impl GraphSnapshot {
 
     /// Histogram of the neighbour nodes reached from `sources` via `rel_type` in
     /// `direction` (how many of the sources point to each neighbour) — the
-    /// "count edges into each neighbour" aggregation behind many group-by-count
+    /// "count rels into each neighbour" aggregation behind many group-by-count
     /// queries.
     pub fn neighbor_counts(
         &self,
@@ -3074,7 +3074,7 @@ impl GraphSnapshot {
     }
 
     /// Resolve a relationship-type name to its interned [`RelationshipType`], or
-    /// `None` if no edge of that type exists. Short alias for
+    /// `None` if no rel of that type exists. Short alias for
     /// [`relationship_type_from_str`](Self::relationship_type_from_str); resolve
     /// once and pass the result to a traversal method in a hot loop to skip the
     /// per-call string lookup.
@@ -3426,7 +3426,7 @@ mod tests {
         for &(c, m) in &[(0u32, 3u32), (1, 4), (0, 5), (2, 6)] {
             b.add_relationship(c, m, "hasCreator").unwrap();
         }
-        // Reply edges and the creator-pair each folds to:
+        // Reply rels and the creator-pair each folds to:
         //   4->3 (1,0)  5->3 (0,0 self, skip)  6->4 (2,1)  6->3 (2,0)  5->4 (0,1)
         for &(reply, parent) in &[(4u32, 3u32), (5, 3), (6, 4), (6, 3), (5, 4)] {
             b.add_relationship(reply, parent, "replyOf").unwrap();
@@ -3579,10 +3579,10 @@ mod tests {
         // Graph: 0 -> 1 -> 2
 
         // With Direction::Both, can traverse in both directions
-        // From 2, can reach 1 via incoming edge
+        // From 2, can reach 1 via incoming rel
         assert!(snapshot.can_reach(2, 1, Direction::Both, None, None));
 
-        // From 2, can reach 0 via incoming edges (2 <- 1 <- 0)
+        // From 2, can reach 0 via incoming rels (2 <- 1 <- 0)
         assert!(snapshot.can_reach(2, 0, Direction::Both, None, None));
 
         // From 0, can still reach 2 via outgoing (0 -> 1 -> 2)
@@ -4161,7 +4161,7 @@ mod tests {
         assert!(!g.has_rel(0, Direction::Outgoing, "mentions"));
         assert!(!g.has_rel(1, Direction::Outgoing, "about"));
 
-        // has_neighbor_with_property: a neighbour reached by `edge` has `key` == value.
+        // has_neighbor_with_property: a neighbour reached by `rel` has `key` == value.
         assert!(g.has_neighbor_with_property(0, Direction::Outgoing, "about", "uri", "u:x"));
         assert!(g.has_neighbor_with_property(0, Direction::Outgoing, "category", "uri", "u:cat"));
         // The cat is reached by `category`, not `about`, so this is false.
@@ -4679,7 +4679,7 @@ mod tests {
             None,
         );
 
-        // Should find nodes reachable by following incoming edges: 3, 2, 4, 1, 0
+        // Should find nodes reachable by following incoming rels: 3, 2, 4, 1, 0
         assert!(nodes.contains(0));
         assert!(nodes.contains(1));
         assert!(nodes.contains(2));
@@ -4758,7 +4758,7 @@ mod tests {
         for n in [0, 1, 2, 3, 4] {
             assert_eq!(snapshot.chain_root(n, Direction::Outgoing, reply_of), 0);
         }
-        // A node with no parent edge is its own root.
+        // A node with no parent rel is its own root.
         assert_eq!(snapshot.chain_root(5, Direction::Outgoing, reply_of), 5);
         // The cached second call returns the same terminal.
         assert_eq!(snapshot.chain_root(4, Direction::Outgoing, reply_of), 0);
@@ -4854,7 +4854,7 @@ mod tests {
         assert_eq!(dist.get(&2), Some(&2));
         // 3 is reached at depth 2 via 0->4->3, not depth 3 via 0->1->2->3.
         assert_eq!(dist.get(&3), Some(&2));
-        // 5 sits behind a WORKS_FOR edge, so a KNOWS BFS never reaches it.
+        // 5 sits behind a WORKS_FOR rel, so a KNOWS BFS never reaches it.
         assert_eq!(dist.get(&5), None);
     }
 
@@ -4873,7 +4873,7 @@ mod tests {
     }
 }
 
-/// How a relationship-type filter matches an edge's [`RelationshipType`].
+/// How a relationship-type filter matches an rel's [`RelationshipType`].
 ///
 /// Opaque, produced from a [`RelTypeFilter`] argument. The common single-type
 /// filter is stored as one value (no allocation, single-compare matching); two or
@@ -4962,7 +4962,7 @@ impl RelTypeFilter for RelationshipType {
 impl RelTypeFilter for &str {
     #[inline]
     fn into_match(self, graph: &GraphSnapshot) -> RelMatch {
-        // An unresolvable name has no edges, so it matches nothing.
+        // An unresolvable name has no rels, so it matches nothing.
         graph.relationship_type_from_str(self).into_iter().collect()
     }
 }
@@ -5016,9 +5016,9 @@ impl<T: RelTypeFilter> RelTypeFilter for Option<T> {
     }
 }
 
-/// CSR edge-index range `[start, end)` for a node in a direction's offset array.
+/// CSR rel-index range `[start, end)` for a node in a direction's offset array.
 #[inline]
-fn edge_range(offsets: &[u32], node: usize) -> core::ops::Range<usize> {
+fn rel_range(offsets: &[u32], node: usize) -> core::ops::Range<usize> {
     if node + 1 >= offsets.len() {
         return 0..0;
     }

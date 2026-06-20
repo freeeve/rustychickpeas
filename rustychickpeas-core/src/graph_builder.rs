@@ -11,7 +11,7 @@ use crate::types::{Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
 
-/// Minimum column span (relationship count for edge columns, node count for node
+/// Minimum column span (relationship count for rel columns, node count for node
 /// columns) before a moderately-sparse column is stored as rank/select instead of
 /// a binary-searched sparse column. Below this the sparse array stays small enough
 /// that binary search is cache-friendly and the rank index isn't worth its cost.
@@ -886,7 +886,7 @@ impl GraphBuilder {
 
     /// Build CSR incoming adjacency arrays, plus a `builder_to_in_csr` mapping
     /// (builder relationship index -> position in the incoming CSR arrays). The
-    /// mapping lets `finalize` pair each incoming edge with its outgoing CSR
+    /// mapping lets `finalize` pair each incoming rel with its outgoing CSR
     /// position, where relationship properties are stored.
     fn build_csr_incoming(
         &self,
@@ -2223,7 +2223,7 @@ mod tests {
     #[test]
     fn test_dijkstra_weighted_paths() {
         use crate::types::Direction;
-        // Weights stored as edge properties; the cost closure reads them via the
+        // Weights stored as rel properties; the cost closure reads them via the
         // relationship position (the composition the relationships() API enables).
         let mut b = GraphBuilder::new(None, None);
         for id in 1..=5 {
