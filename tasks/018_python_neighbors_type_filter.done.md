@@ -13,5 +13,5 @@ While here, the binding resolves type names via the private
 `relationship_type_from_str` accessor now that it exists, so the bindings
 don't reach into core internals.
 
-Add a test covering type-filtered neighbors (a node with edges of two types,
+Add a test covering type-filtered neighbors (a node with rels of two types,
 filtering to one).

@@ -7,5 +7,5 @@ proptest-based tests in rustychickpeas-core/tests/property_tests.rs:
   ints/floats/bools survive write -> load_nodes_from_csv
 - Parquet round-trip: random typed columns with nulls survive
   write -> load_nodes_from_parquet
-- Graph round-trip: random edge lists -> finalize -> CSR neighbors match
+- Graph round-trip: random rel lists -> finalize -> CSR neighbors match
   a naive adjacency model; label index membership correct

@@ -7,7 +7,7 @@ over ONE rank-ordered u32 ID space: doc IDs (roaringrange index/records)
 - emits the roaringrange index family AND graph.rcpg (topology-only) +
   records.{idx,bin} from the same corpus
 - demo candidate: an OpenAlex slice (one topic's citation neighborhood or
-  top-N-cited works) — full 1.8B-edge graph exceeds the resident wasm
+  top-N-cited works) — full 1.8B-rel graph exceeds the resident wasm
   budget (~tens of millions of rels)
 
 Open design point from 2026-06-11 discussion: relationship-property
@@ -24,16 +24,16 @@ bytes) takes a `Document { key, text, rank, links, record }` corpus and:
    matching roaringrange's rank-ordered doc-ID space;
 2. emits `index.rrs` — trigram postings keyed by the assigned ID, via
    `roaringrange::{ngram_keys, build::serialize_posting, build::write_index}`;
-3. emits `graph.rcpg` — topology-only; node ID == doc ID, link edges resolved
+3. emits `graph.rcpg` — topology-only; node ID == doc ID, link rels resolved
    `key -> id` through the same map (core `GraphBuilder` + `write_rcpg_with`);
 4. emits `records.{idx,bin}` — payloads in ID order (`format::rrsr::write`).
 
 A `shared_id_alignment` test proves the payoff: a search hit's doc ID indexes
-directly into the graph (has the right CITES edges) and the record store.
+directly into the graph (has the right CITES rels) and the record store.
 
 ### Synthetic driver
 `examples/generate_shared_demo.rs` builds a deterministic power-law citation
-corpus (300 works, ~1050 edges) and regenerates the demo artifacts. Real
+corpus (300 works, ~1050 rels) and regenerates the demo artifacts. Real
 OpenAlex ingest is a thin follow-up adapter over the same `Document` model.
 
 ### Browser search wiring (reader)
@@ -55,12 +55,12 @@ OpenAlex ingest is a thin follow-up adapter over the same `Document` model.
 ## Follow-ups
 - rel-property filters — **resolved** in
   [028](028_reader_rel_property_accessors.done.md) via option (a): resident rel
-  columns with `GraphReader::out_edges` + `rel_prop` (a rel-records store stays a
-  future option for heavy edge payloads).
+  columns with `GraphReader::out_rels` + `rel_prop` (a rel-records store stays a
+  future option for heavy rel payloads).
 - OpenAlex ingest — **done (MVP)** in the sibling `rustychickpeas-openalex` repo (kept
   separate so the ingest-only deps `serde_json`/`flate2` stay out of this
   workspace). Maps OpenAlex works → the `Document` model, top-N-cited slicing via
-  a bounded heap, reads `.jsonl[.gz]`, in-slice edge filtering; tested on a
+  a bounded heap, reads `.jsonl[.gz]`, in-slice rel filtering; tested on a
   synthetic sample + an end-to-end run. Future ("full") work: S3 streaming,
   topic/concept slicing, abstract reconstruction.
 

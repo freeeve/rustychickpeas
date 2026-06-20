@@ -32,6 +32,6 @@ Column::get dense/sparse lookup.
 
 Non-core (reader crate), so no core API sign-off gate. `rel_prop` left out —
 rel columns are keyed by outgoing-CSR position, which isn't a natural public
-argument; add it if a browser consumer needs edge-property filters.
+argument; add it if a browser consumer needs rel-property filters.
 
 **Status: done.**

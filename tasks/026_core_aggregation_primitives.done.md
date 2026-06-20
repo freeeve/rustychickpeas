@@ -8,7 +8,7 @@ never landed a competing method and has since moved to graphalytics), so
 
 Variants **skipped after review** (weak fit): `neighbor_counts_where` is Rust-only
 (closures don't cross PyO3), redundant for source/target-only filters, and doesn't
-even fit IC5 (filter depends on the member, not the post→forum edge); a core
+even fit IC5 (filter depends on the member, not the post→forum rel); a core
 top-k must pick one tiebreak, but real queries tiebreak by name/property and would
 take the full map anyway. Add either only when a concrete consumer needs it.
 SPB `target_counts` unification still open (coordinate with that session).
@@ -51,7 +51,7 @@ scratch** — the same trick `bfs_distances` uses internally:
 ```rust
 struct CountScratch { val: Vec<u32>, gen: Vec<u32>, cur: u32, touched: Vec<u32> }
 // borrow: cur += 1 (no O(n) clear; zero `gen` once on u32 wrap)
-// per edge: if gen[t]!=cur { gen[t]=cur; val[t]=0; touched.push(t) } val[t]+=1
+// per rel: if gen[t]!=cur { gen[t]=cur; val[t]=0; touched.push(t) } val[t]+=1
 // drain: HashMap::with_capacity(touched.len()); for &t in &touched { out.insert(t, val[t]) }
 thread_local! { static COUNT_SCRATCH: RefCell<CountScratch> = ... }   // private, never pub
 ```
@@ -83,7 +83,7 @@ point SPB's callers at it, rather than shipping two competing primitives.
 Only if needed, and named to match `neighbor_counts` / `neighbors_by_type`:
 
 - `neighbor_counts_where(sources, dir, rel_type, keep: impl Fn(src, tgt)->bool)` —
-  Rust-only per-edge filter (covers IC5's per-member qualifying-forum set). Not
+  Rust-only per-rel filter (covers IC5's per-member qualifying-forum set). Not
   Python-exposed (closures don't cross FFI).
 - a top-k form to avoid materializing the whole map for "top-N" queries — naming
   TBD under the convention (e.g. `neighbor_counts_top` returning a sorted `Vec`).
@@ -92,7 +92,7 @@ Only if needed, and named to match `neighbor_counts` / `neighbors_by_type`:
 
 1. **Scope now:** just (1) fast internals + (2) Python exposure of `neighbor_counts`?
    Or also the `_where` / top-k variants in the same pass?
-2. **Count unit:** keep `usize` multiplicity (every matching edge) as today; add a
+2. **Count unit:** keep `usize` multiplicity (every matching rel) as today; add a
    distinct-source variant only if a query needs it.
 3. **`u32` vs `usize`** in the result — keep the existing `usize` for source-compat.
 4. **SPB coordination:** confirm `target_counts` folds into `neighbor_counts`

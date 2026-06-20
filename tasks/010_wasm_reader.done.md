@@ -22,8 +22,8 @@ Implementation notes:
   RecordStore reader (vendoring as fallback if publishing/feature flags
   get in the way). Still add a conformance test against
   roaringrange-written record stores.
-- Memory budget: resident adjacency is ~8 bytes/edge (u32 neighbor x2
-  directions) + offsets; fine up to tens of millions of edges in a browser
+- Memory budget: resident adjacency is ~8 bytes/rel (u32 neighbor x2
+  directions) + offsets; fine up to tens of millions of rels in a browser
   tab. Document the practical ceiling; huge graphs (OpenAlex-scale
   citation graph) would need the range-fetched-adjacency variant — out of
   scope here, noted for later.

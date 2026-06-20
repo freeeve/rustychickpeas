@@ -7,7 +7,7 @@ filters had no place in the node-keyed record store. Resolved pragmatically with
 
 ## Done
 
-- `GraphReader::out_edges(node_id) -> Vec<(neighbor, csr_pos)>` — outgoing edges
+- `GraphReader::out_rels(node_id) -> Vec<(neighbor, csr_pos)>` — outgoing rels
   paired with their outgoing-CSR position, the key into the rel-property columns.
 - `GraphReader::rel_prop(csr_pos, key) -> Option<PropValue>` — reads a
   relationship property at a CSR position, resolving string atoms. Reuses the
@@ -17,28 +17,28 @@ filters had no place in the node-keyed record store. Resolved pragmatically with
   `WasmGraph.relProp(csrPos, key)` (natural JS value or `undefined`). The JS
   conversion is shared with `nodeProp` via a `prop_to_js` helper.
 
-Usage — filter a traversal by edge property:
+Usage — filter a traversal by rel property:
 ```rust
-for (nbr, pos) in reader.out_edges(node) {
+for (nbr, pos) in reader.out_rels(node) {
     if reader.rel_prop(pos, "year") == Some(PropValue::Int(2020)) {
-        // follow this edge
+        // follow this rel
     }
 }
 ```
 
 ## Scope / limits
 
-- Properties are keyed by **outgoing-CSR position**, so incoming-side edge-property
+- Properties are keyed by **outgoing-CSR position**, so incoming-side rel-property
   lookups aren't addressable through this API (inherent to the storage). Filter on
   the outgoing side.
 - **Option (b)** — a separate range-fetched rel-records store keyed by CSR
-  position — stays a future option for *heavy* edge payloads; resident columns
-  are the right default for the small edge data (weights, dates) that's typical.
+  position — stays a future option for *heavy* rel payloads; resident columns
+  are the right default for the small rel data (weights, dates) that's typical.
 
 ## Verification
 
 Round-trip test: a 2-node graph with a `weight` rel column written through the
-RCPG codec, then `out_edges` + `rel_prop` read it back; `topology_only` drops the
+RCPG codec, then `out_rels` + `rel_prop` read it back; `topology_only` drops the
 column but keeps the topology. `cargo test -p rustychickpeas-reader` green; clippy
 clean native + `wasm32`; rustfmt.
 

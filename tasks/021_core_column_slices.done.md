@@ -14,10 +14,10 @@ Remaining call sites now wired in `rustychickpeas-ldbc`:
   Q13/Q14/Q18/Q19/Q20 (faithful_b), Q10/Q16 (faithful_c). Q14 also uses the
   hoisted column for its hot candidate-selection tiebreak. (Q4 already
   precomputes its forum-ranking keys; left as-is.)
-- Edge columns — Q11 `kd` (knows creationDate, faithful_a) and Q20 `cy`
+- Rel columns — Q11 `kd` (knows creationDate, faithful_a) and Q20 `cy`
   (studyAt classYear, in `build_studyat`, faithful_b) read via a hoisted
   `rel_columns` ref indexed by CSR position, instead of
-  `relationship_property` (which re-resolves the key) per edge.
+  `relationship_property` (which re-resolves the key) per rel.
 
 Verification: full SF1 BI suite re-emitted via `LDBC_EMIT_JSON`; all 23
 result JSON files byte-identical to the pre-change baseline (0 differ).
