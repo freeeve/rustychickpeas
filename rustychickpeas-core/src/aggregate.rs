@@ -56,7 +56,7 @@ impl AggOp {
 }
 
 /// One group dimension: a raw `i64` column value, or a column bucketed at ascending
-/// `edges` (bucket = count of `edges <= value`).
+/// `bounds` (bucket = count of `bounds <= value`).
 #[derive(Clone)]
 enum GroupDim {
     Col(String),
@@ -74,7 +74,7 @@ pub struct Aggregation<'a> {
     by_label: bool,
     group: Vec<GroupDim>,
     sum: Option<String>,
-    /// When set, count *edges* of this relationship type/direction out of each
+    /// When set, count *rels* of this relationship type/direction out of each
     /// source node, grouping additionally by the neighbor (the `"neighbor"` field).
     through: Option<(String, Direction)>,
     /// With `through`, restrict counting to neighbors in this set (others skipped).
@@ -149,9 +149,9 @@ impl<'a> Aggregation<'a> {
         self
     }
 
-    /// Group by a column bucketed at ascending `edges` (field = `"{column}_bin"`).
-    pub fn bin(mut self, column: impl Into<String>, edges: Vec<i64>) -> Self {
-        self.group.push(GroupDim::Bin(column.into(), edges));
+    /// Group by a column bucketed at ascending `bounds` (field = `"{column}_bin"`).
+    pub fn bin(mut self, column: impl Into<String>, bounds: Vec<i64>) -> Self {
+        self.group.push(GroupDim::Bin(column.into(), bounds));
         self
     }
 
@@ -161,7 +161,7 @@ impl<'a> Aggregation<'a> {
         self
     }
 
-    /// Count *edges* of `rel_type`/`direction` out of each (filtered) source node
+    /// Count *rels* of `rel_type`/`direction` out of each (filtered) source node
     /// instead of counting nodes, grouping additionally by the neighbor node id
     /// (appended as the `"neighbor"` field). `total` still counts source nodes.
     pub fn through(mut self, rel_type: impl Into<String>, direction: Direction) -> Self {
@@ -186,8 +186,8 @@ impl<'a> Aggregation<'a> {
             .iter()
             .map(|d| match d {
                 GroupDim::Col(c) => Ok(ResolvedGroup::Col(dense_i64(g, c)?)),
-                GroupDim::Bin(c, edges) => {
-                    Ok(ResolvedGroup::Bin(dense_i64(g, c)?, edges.as_slice()))
+                GroupDim::Bin(c, bounds) => {
+                    Ok(ResolvedGroup::Bin(dense_i64(g, c)?, bounds.as_slice()))
                 }
             })
             .collect::<Result<_>>()?;
@@ -206,9 +206,9 @@ impl<'a> Aggregation<'a> {
 
         let by_label = self.by_label;
         let source_dims = by_label as usize + gspecs.len();
-        // `through` switches the reduction from counting nodes to counting edges of a
+        // `through` switches the reduction from counting nodes to counting rels of a
         // relationship type, grouping additionally by the neighbor. A missing type
-        // simply yields no edges.
+        // simply yields no rels.
         let is_through = self.through.is_some();
         let through_rt: Option<RelationshipType> =
             self.through.as_ref().and_then(|(name, _)| g.rel_type(name));
@@ -317,7 +317,7 @@ impl<'a> Aggregation<'a> {
     }
 }
 
-/// A group column resolved to its dense `i64` slice (and bin edges for `Bin`).
+/// A group column resolved to its dense `i64` slice (and bin bounds for `Bin`).
 enum ResolvedGroup<'a> {
     Col(&'a [i64]),
     Bin(&'a [i64], &'a [i64]),
@@ -370,9 +370,9 @@ fn source_key_parts(
     for g in gspecs {
         let v = match g {
             ResolvedGroup::Col(s) => s[i],
-            ResolvedGroup::Bin(s, edges) => {
+            ResolvedGroup::Bin(s, bounds) => {
                 let val = s[i];
-                edges.iter().filter(|&&e| val >= e).count() as i64
+                bounds.iter().filter(|&&e| val >= e).count() as i64
             }
         };
         push(v);
@@ -381,7 +381,7 @@ fn source_key_parts(
 }
 
 /// Build a group key from `sk` source dimensions (in `buf`/`overflow`) plus one
-/// appended neighbor value — for the `through` edge-counting path.
+/// appended neighbor value — for the `through` rel-counting path.
 #[inline]
 fn key_with_neighbor(sk: usize, buf: &[i64; 4], overflow: &[i64], neighbor: i64) -> GroupKey {
     if sk < 4 {
@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_through_counts_edges_by_neighbor() {
+    fn aggregate_through_counts_rels_by_neighbor() {
         let mut b = GraphBuilder::new(Some(4), Some(4));
         for (id, label) in [(0u32, "Post"), (1, "Post"), (2, "Tag"), (3, "Tag")] {
             b.add_node(Some(id), &[label]).unwrap();
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(res.fields, vec!["neighbor"]);
         let mut got: Vec<(i64, u64)> = res.rows.iter().map(|r| (r.key[0], r.count)).collect();
         got.sort();
-        assert_eq!(got, vec![(2, 2), (3, 1)]); // tag2 has 2 edges, tag3 has 1
+        assert_eq!(got, vec![(2, 2), (3, 1)]); // tag2 has 2 rels, tag3 has 1
 
         // only_neighbors restricts the count to the given set.
         let res = g

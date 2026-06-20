@@ -102,7 +102,7 @@ impl Node {
                     }
 
                     // Canonical outgoing CSR index: O(1) via the in->out map when
-                    // present (deserialized graphs), else scan the source's out-edges.
+                    // present (deserialized graphs), else scan the source's out-rels.
                     let rel_index = match self.snapshot.in_to_out.get(idx) {
                         Some(&out) => out,
                         None => {
@@ -166,7 +166,7 @@ impl Node {
                     }
 
                     // Canonical outgoing CSR index: O(1) via the in->out map when
-                    // present, else scan the source's out-edges.
+                    // present, else scan the source's out-rels.
                     let rel_index = match self.snapshot.in_to_out.get(in_idx) {
                         Some(&out) => out,
                         None => {
