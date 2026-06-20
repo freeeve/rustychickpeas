@@ -1180,6 +1180,56 @@ impl GraphSnapshot {
         }
     }
 
+    /// Full-text search: node ids of `label` whose `key` string property contains
+    /// every whitespace/punctuation-delimited token in `query` (lowercased,
+    /// boolean AND), via the core lazily-built inverted index. Returns the node
+    /// ids ascending; empty for an unknown label/key, an empty query, or a token
+    /// no document contains. Wraps `GraphSnapshot::full_text_search`.
+    fn full_text_search(&self, label: &str, key: &str, query: &str) -> Vec<u32> {
+        self.snapshot.full_text_search(label, key, query).iter().collect()
+    }
+
+    /// Geo search: node ids of `label` whose `(lat_key, lon_key)` coordinates fall
+    /// within `km` great-circle kilometres of `(lat, lon)`, via the core geo k-d
+    /// tree. Returns the node ids ascending. Wraps
+    /// `GraphSnapshot::geo_within_radius`.
+    fn geo_within_radius(
+        &self,
+        label: &str,
+        lat_key: &str,
+        lon_key: &str,
+        lat: f64,
+        lon: f64,
+        km: f64,
+    ) -> Vec<u32> {
+        self.snapshot
+            .geo_within_radius(label, lat_key, lon_key, lat, lon, km)
+            .iter()
+            .collect()
+    }
+
+    /// Geo search: node ids of `label` whose `(lat_key, lon_key)` coordinates fall
+    /// in the lat/lon rectangle with corners `(min_lat, min_lon)` and
+    /// `(max_lat, max_lon)` (a `min_lon > max_lon` box crosses the antimeridian),
+    /// via the core geo k-d tree. Returns the node ids ascending. Wraps
+    /// `GraphSnapshot::geo_within_bbox`.
+    #[allow(clippy::too_many_arguments)]
+    fn geo_within_bbox(
+        &self,
+        label: &str,
+        lat_key: &str,
+        lon_key: &str,
+        min_lat: f64,
+        min_lon: f64,
+        max_lat: f64,
+        max_lon: f64,
+    ) -> Vec<u32> {
+        self.snapshot
+            .geo_within_bbox(label, lat_key, lon_key, (min_lat, min_lon), (max_lat, max_lon))
+            .iter()
+            .collect()
+    }
+
     /// Get the version of this snapshot
     fn version(&self) -> PyResult<Option<String>> {
         Ok(self.snapshot.version().map(|s| s.to_string()))
