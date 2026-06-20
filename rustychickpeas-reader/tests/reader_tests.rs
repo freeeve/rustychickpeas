@@ -69,7 +69,7 @@ fn reader_bfs() {
     let bytes = demo_graph_bytes();
     let reader = GraphReader::from_rcpg_bytes(&bytes).unwrap();
 
-    // 0 -> {1, 2} -> {7} (2 was already seen via the direct edge)
+    // 0 -> {1, 2} -> {7} (2 was already seen via the direct rel)
     assert_eq!(reader.bfs(0, 1, Direction::Outgoing), vec![1, 2]);
     assert_eq!(reader.bfs(0, 3, Direction::Outgoing), vec![1, 2, 7]);
     assert_eq!(reader.bfs(7, 2, Direction::Incoming), vec![2, 1, 0]);

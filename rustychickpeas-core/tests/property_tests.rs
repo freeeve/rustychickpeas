@@ -2,7 +2,7 @@
 //!
 //! These use proptest to exercise edge cases that example-based tests miss:
 //! hostile CSV strings, null-heavy parquet columns, representation switching
-//! in NodeSet, and sparse/duplicated edge lists.
+//! in NodeSet, and sparse/duplicated rel lists.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -87,15 +87,15 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// CSR construction: random edge lists must round-trip through finalize()
+// CSR construction: random rel lists must round-trip through finalize()
 // ---------------------------------------------------------------------------
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
     #[test]
-    fn csr_neighbors_match_edge_list(
+    fn csr_neighbors_match_rel_list(
         n in 1u32..150,
-        edges in proptest::collection::vec((0u32..150, 0u32..150, 0usize..2), 0..400),
+        rels in proptest::collection::vec((0u32..150, 0u32..150, 0usize..2), 0..400),
         labels in proptest::collection::vec(0usize..3, 1..150),
     ) {
         const REL_TYPES: [&str; 2] = ["A", "B"];
@@ -111,18 +111,18 @@ proptest! {
 
         let mut out_model: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         let mut in_model: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        let mut edge_count = 0u64;
-        for (u, v, t) in edges {
+        let mut rel_count = 0u64;
+        for (u, v, t) in rels {
             let (u, v) = (u % n, v % n);
             builder.add_relationship(u, v, REL_TYPES[t]).unwrap();
             out_model.entry(u).or_default().push(v);
             in_model.entry(v).or_default().push(u);
-            edge_count += 1;
+            rel_count += 1;
         }
 
         let snapshot = builder.finalize(None);
         prop_assert_eq!(snapshot.n_nodes, n);
-        prop_assert_eq!(snapshot.n_rels, edge_count);
+        prop_assert_eq!(snapshot.n_rels, rel_count);
 
         for id in 0..n {
             let mut out: Vec<u32> = snapshot.neighbors(id, Direction::Outgoing).collect();

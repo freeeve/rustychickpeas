@@ -75,7 +75,7 @@ def test_string_id_vectorized_filter():
     assert g.string_id("not-present") is None
 
 
-def test_aggregate_through_counts_edges_by_neighbor():
+def test_aggregate_through_counts_rels_by_neighbor():
     b = GraphSnapshotBuilder()
     for nid, label in [(0, "Post"), (1, "Post"), (2, "Tag"), (3, "Tag")]:
         b.add_node([label], node_id=nid)
@@ -87,7 +87,7 @@ def test_aggregate_through_counts_edges_by_neighbor():
     res = g.aggregate("Post").through("hasTag", Direction.Outgoing).run()
     assert res.total == 2  # two source Post nodes
     counts = {r["neighbor"]: r["count"] for r in res.rows}
-    assert counts == {2: 2, 3: 1}  # tag 2 has 2 edges, tag 3 has 1
+    assert counts == {2: 2, 3: 1}  # tag 2 has 2 rels, tag 3 has 1
 
     # only_neighbors restricts counting to the given set.
     res = (

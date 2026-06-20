@@ -7,7 +7,7 @@ from rustychickpeas import GraphSnapshotBuilder, Direction
 def _interaction_graph():
     # Persons 0..2 (+ isolated person 7), Messages 3..6. hasCreator points creator ->
     # message (a message's creator is its Incoming hasCreator neighbor, as the LDBC
-    # loader stores it); replyOf points reply -> parent. knows edges (both directions)
+    # loader stores it); replyOf points reply -> parent. knows rels (both directions)
     # let dijkstra run over the projected interaction graph. Contiguous ids (fold_via /
     # neighbor_via / dijkstra all index by node id).
     b = GraphSnapshotBuilder()
@@ -68,7 +68,7 @@ def test_dijkstra_prune_missing():
 
 
 def test_dijkstra_base_no_prune():
-    # Q15 mode: cost(u,v) = 1/(w+1); every knows edge traversable (absent -> 1/1).
+    # Q15 mode: cost(u,v) = 1/(w+1); every knows rel traversable (absent -> 1/1).
     g = _interaction_graph()
     dist = g.dijkstra(0, Direction.Outgoing, "knows",
                       weights=_interaction(g), base=1.0, prune_missing=False)

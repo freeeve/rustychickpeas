@@ -26,5 +26,5 @@ def test_bfs_distances_max_depth():
 
 def test_bfs_distances_rel_type_filter():
     g = _line_graph()
-    # No "likes" edges, so only the start node is reachable.
+    # No "likes" rels, so only the start node is reachable.
     assert g.bfs_distances(0, Direction.Outgoing, rel_types=["likes"]) == {0: 0}

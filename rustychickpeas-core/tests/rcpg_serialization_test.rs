@@ -168,7 +168,7 @@ proptest! {
     fn rcpg_random_graph_round_trip(
         // sparse IDs on purpose: stride creates gaps in the ID space
         ids in proptest::collection::btree_set(0u32..500, 1..60),
-        edges in proptest::collection::vec((0usize..60, 0usize..60, 0usize..2), 0..150),
+        rels in proptest::collection::vec((0usize..60, 0usize..60, 0usize..2), 0..150),
         props in proptest::collection::btree_map(0usize..60, ("[a-z]{0,12}", proptest::num::i64::ANY), 0..30),
     ) {
         const REL_TYPES: [&str; 2] = ["A", "B"];
@@ -178,7 +178,7 @@ proptest! {
         for &id in &ids {
             builder.add_node(Some(id), &["Node"]).unwrap();
         }
-        for (u, v, t) in &edges {
+        for (u, v, t) in &rels {
             let (u, v) = (ids[u % ids.len()], ids[v % ids.len()]);
             builder.add_relationship(u, v, REL_TYPES[*t]).unwrap();
         }

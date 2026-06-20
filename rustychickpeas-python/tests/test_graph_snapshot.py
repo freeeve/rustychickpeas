@@ -588,7 +588,7 @@ class TestBFS:
         """Test BFS with incoming direction (reverse traversal)"""
         nodes, _ = bfs_snapshot.bfs([3], Direction.Incoming)
         
-        # Should find nodes reachable by following incoming edges
+        # Should find nodes reachable by following incoming rels
         assert 0 in nodes
         assert 1 in nodes
         assert 2 in nodes
@@ -790,7 +790,7 @@ class TestBFS:
         """Test BFS with incoming direction (reverse traversal)"""
         nodes, _ = bfs_snapshot.bfs([3], Direction.Incoming)
         
-        # Should find nodes reachable by following incoming edges
+        # Should find nodes reachable by following incoming rels
         assert 0 in nodes
         assert 1 in nodes
         assert 2 in nodes
@@ -922,7 +922,7 @@ class TestBFS:
         """Test BFS with incoming direction (reverse traversal)"""
         nodes, _ = bfs_snapshot.bfs([3], Direction.Incoming)
         
-        # Should find nodes reachable by following incoming edges
+        # Should find nodes reachable by following incoming rels
         assert 0 in nodes
         assert 1 in nodes
         assert 2 in nodes
@@ -971,7 +971,7 @@ class TestShortestPath:
         return manager.graph_snapshot("test")
 
     def test_unweighted_is_hop_count(self, weighted_snapshot):
-        # Fewest hops 0->3 is the direct edge: 1 hop.
+        # Fewest hops 0->3 is the direct rel: 1 hop.
         assert weighted_snapshot.shortest_path(0, 3) == 1.0
 
     def test_weighted_takes_cheap_path(self, weighted_snapshot):
