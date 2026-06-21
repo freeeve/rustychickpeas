@@ -4,6 +4,7 @@
 //! interface for easy porting of graph database stored procedures.
 
 pub mod aggregate;
+pub mod analytics;
 pub mod bitmap;
 pub mod error;
 pub mod fulltext;
