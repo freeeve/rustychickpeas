@@ -10,7 +10,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.8.0" }
+rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.9.0" }
 roaring = { workspace = true }
 # Record store reader (RRSR v1 + v2/zstd) and the RangeFetch abstraction.
 # Pinned to a rev so builds are reproducible; bump deliberately.
