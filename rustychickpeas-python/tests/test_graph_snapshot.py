@@ -972,7 +972,7 @@ class TestShortestPath:
 
     def test_unweighted_is_hop_count(self, weighted_snapshot):
         # Fewest hops 0->3 is the direct rel: 1 hop.
-        assert weighted_snapshot.shortest_path(0, 3) == 1.0
+        assert weighted_snapshot.shortest_path(0, 3) == pytest.approx(1.0)
 
     def test_weighted_takes_cheap_path(self, weighted_snapshot):
         # Cheapest 0->3 is 0->2->3 = 0.1 + 0.1.
@@ -980,7 +980,7 @@ class TestShortestPath:
         assert cost == pytest.approx(0.2)
 
     def test_source_equals_target(self, weighted_snapshot):
-        assert weighted_snapshot.shortest_path(2, 2) == 0.0
+        assert weighted_snapshot.shortest_path(2, 2) == pytest.approx(0.0)
 
     def test_unreachable_returns_none(self, weighted_snapshot):
         assert weighted_snapshot.shortest_path(0, 4) is None

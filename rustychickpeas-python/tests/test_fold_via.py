@@ -72,14 +72,14 @@ def test_dijkstra_base_no_prune():
     g = _interaction_graph()
     dist = g.dijkstra(0, Direction.Outgoing, "knows",
                       weights=_interaction(g), base=1.0, prune_missing=False)
-    assert dist[0] == 0.0
+    assert abs(dist[0]) < 1e-12
     assert abs(dist[1] - 1 / 3) < 1e-12        # 1/(2+1)
-    assert dist[2] == 0.5                        # 1/(1+1) direct beats 1/3 + 1/2
-    assert dist[7] == 1.0                        # absent pair -> 1/(0+1)
+    assert abs(dist[2] - 0.5) < 1e-12            # 1/(1+1) direct beats 1/3 + 1/2
+    assert abs(dist[7] - 1.0) < 1e-12            # absent pair -> 1/(0+1)
 
 
 def test_dijkstra_target_early_exit():
     g = _interaction_graph()
     dist = g.dijkstra(0, Direction.Outgoing, "knows",
                       weights=_interaction(g), base=0.0, prune_missing=True, target=2)
-    assert dist[2] == 1.0
+    assert abs(dist[2] - 1.0) < 1e-12

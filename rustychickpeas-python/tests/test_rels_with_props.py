@@ -44,7 +44,7 @@ def test_rel_view_buffers():
     assert list(memoryview(v.col("ts"))) == [100, 200]
     assert memoryview(v.col("ts")).format == "q"
     assert list(memoryview(v.col("amt"))) == [5.0, 7.5]
-    assert sum(memoryview(v.col("amt"))) == 12.5  # C-speed reduction
+    assert abs(sum(memoryview(v.col("amt"))) - 12.5) < 1e-9  # C-speed reduction
     assert v.col("missing") is None
 
 

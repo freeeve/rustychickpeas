@@ -121,7 +121,7 @@ def test_node_set():
     assert (a | b).to_list() == [1, 2, 3, 4]
     assert (a - b).to_list() == [1]
     assert a.intersect(b).to_list() == [2, 3]
-    assert sorted(list(a)) == [1, 2, 3]  # __iter__
+    assert sorted(a) == [1, 2, 3]  # __iter__ (sorted() consumes the iterable directly)
     assert NodeSet().is_empty() and not NodeSet()
     assert NodeSet([1])  # __bool__
     # composes with query results without a Python set()

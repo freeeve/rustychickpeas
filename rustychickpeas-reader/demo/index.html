@@ -22,14 +22,14 @@
 
   <h2>1. search (resident trigram index)</h2>
   <p>
-    <input id="q" type="text" placeholder="e.g. graph database" value="graph database">
+    <input id="q" type="text" aria-label="search query" placeholder="e.g. graph database" value="graph database">
     <button id="search">search</button>
   </p>
   <div id="hits"></div>
 
   <h2>2. traverse (resident graph) — one shared id space</h2>
   <p>
-    node <input id="node" type="number" value="0" min="0" style="width: 5rem">
+    node <input id="node" type="number" aria-label="node id" value="0" min="0" style="width: 5rem">
     <button id="show">show</button>
     <button id="bfs">bfs depth 2</button>
   </p>

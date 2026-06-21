@@ -29,11 +29,11 @@ def _build_weighted(n, rels):
 def test_sssp_weighted_and_unweighted():
     g = _build_weighted(4, [(0, 1, 2.0), (1, 2, 3.0), (0, 2, 10.0)])
     d = g.sssp(0, True, "weight")
-    assert d[0] == 0.0 and d[1] == 2.0 and d[2] == 5.0
+    assert abs(d[0]) < 1e-9 and abs(d[1] - 2.0) < 1e-9 and abs(d[2] - 5.0) < 1e-9
     assert math.isinf(d[3])
     # unit weights (weight_key=None): the direct 0->2 hop wins at distance 1.
     du = g.sssp(0, True, None)
-    assert du[2] == 1.0
+    assert abs(du[2] - 1.0) < 1e-9
 
 
 def test_wcc_label_is_min_node_id():
@@ -62,7 +62,7 @@ def test_lcc_triangle_with_pendant():
     c = g.lcc(False)
     assert abs(c[0] - 1.0 / 3.0) < 1e-9
     assert abs(c[1] - 1.0) < 1e-9 and abs(c[2] - 1.0) < 1e-9
-    assert c[3] == 0.0
+    assert abs(c[3]) < 1e-9
 
 
 def test_co_occurring_count_and_distinct():

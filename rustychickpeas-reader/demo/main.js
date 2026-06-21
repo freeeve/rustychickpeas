@@ -117,4 +117,4 @@ async function boot() {
   }
 }
 
-boot();
+await boot();
