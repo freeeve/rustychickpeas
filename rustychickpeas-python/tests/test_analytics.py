@@ -63,3 +63,32 @@ def test_lcc_triangle_with_pendant():
     assert abs(c[0] - 1.0 / 3.0) < 1e-9
     assert abs(c[1] - 1.0) < 1e-9 and abs(c[2] - 1.0) < 1e-9
     assert c[3] == 0.0
+
+
+def test_co_occurring_count_and_distinct():
+    from rustychickpeas import Direction
+
+    # Entities A=0,B=1,C=2; works 3,4,5 (work -about-> entity), each with a `day`.
+    b = GraphSnapshotBuilder(capacity_nodes=6, capacity_rels=6)
+    for i in range(6):
+        b.add_node(["V"], node_id=i)
+    for w, e in [(3, 0), (3, 1), (4, 0), (4, 1), (5, 0), (5, 2)]:
+        b.add_relationship(w, e, "about")
+    b.set_prop(3, "day", 10)
+    b.set_prop(4, "day", 10)
+    b.set_prop(5, "day", 20)
+    g = b.finalize()
+
+    counts = g.co_occurring(0, "about", Direction.Incoming)  # default weight="count"
+    assert counts == {1: 2, 2: 1}  # B shares 2 works with A, C shares 1; seed excluded
+
+    days = g.co_occurring(0, "about", Direction.Incoming, "distinct", "day")
+    assert days == {1: 1, 2: 1}  # B's two works share day 10 -> 1 distinct day
+
+    # unknown rel -> empty; distinct without a key -> error
+    assert g.co_occurring(0, "nope", Direction.Incoming) == {}
+    try:
+        g.co_occurring(0, "about", Direction.Incoming, "distinct")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass

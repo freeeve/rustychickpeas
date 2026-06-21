@@ -1294,6 +1294,52 @@ impl GraphSnapshot {
         py.allow_threads(move || snapshot.sssp(source, directed, weight_key.as_deref()))
     }
 
+    /// Seeded co-occurrence — one-mode / bipartite projection by shared neighbour.
+    /// From `seed`, over relationship `rel`, the nodes that share a `rel`-neighbour
+    /// with `seed` (seed -> shared centers -> their other `rel`-neighbours), `seed`
+    /// excluded. `weight="count"` (default) weighs each co-occurring node by its
+    /// shared-center count; `weight="distinct"` (with `distinct_key`) by the number
+    /// of distinct values of that property over the shared centers (e.g. distinct
+    /// days). Returns `{other: weight}`. GIL released.
+    /// Wraps `GraphSnapshot::co_occurring`.
+    #[pyo3(signature = (seed, rel, direction, weight=None, distinct_key=None))]
+    fn co_occurring(
+        &self,
+        py: Python<'_>,
+        seed: u32,
+        rel: String,
+        direction: Direction,
+        weight: Option<String>,
+        distinct_key: Option<String>,
+    ) -> PyResult<std::collections::HashMap<u32, u64>> {
+        // Validate the weight mode up front (under the GIL), then run released.
+        let mode = match weight.as_deref() {
+            None | Some("count") => None,
+            Some("distinct") => Some(distinct_key.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "weight='distinct' requires distinct_key",
+                )
+            })?),
+            Some(other) => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "unknown weight '{}' (use 'count' or 'distinct')",
+                    other
+                )))
+            }
+        };
+        let snapshot = self.snapshot.clone();
+        let dir: rustychickpeas_core::Direction = direction.into();
+        let out: std::collections::HashMap<u32, u64> = py.allow_threads(move || {
+            let w = match &mode {
+                None => rustychickpeas_core::CoWeight::Count,
+                Some(k) => rustychickpeas_core::CoWeight::Distinct(k.as_str()),
+            };
+            // core returns a hashbrown map; collect into std so PyO3 hands back a dict.
+            snapshot.co_occurring(seed, &rel, dir, w).into_iter().collect()
+        });
+        Ok(out)
+    }
+
     /// Get the version of this snapshot
     fn version(&self) -> PyResult<Option<String>> {
         Ok(self.snapshot.version().map(|s| s.to_string()))

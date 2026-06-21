@@ -414,6 +414,40 @@ mod tests {
     }
 
     #[test]
+    fn co_occurring_count_and_distinct() {
+        use crate::graph_snapshot::CoWeight;
+        use crate::types::Direction;
+        // Entities A=0,B=1,C=2; works 3,4,5 (work -about-> entity), each with a `day`.
+        let mut b = GraphBuilder::new(Some(6), Some(6));
+        for i in 0..6 {
+            b.add_node(Some(i), &["V"]).unwrap();
+        }
+        for (w, e) in [(3, 0), (3, 1), (4, 0), (4, 1), (5, 0), (5, 2)] {
+            b.add_relationship(w, e, "about").unwrap();
+        }
+        b.set_prop_i64(3, "day", 10).unwrap();
+        b.set_prop_i64(4, "day", 10).unwrap();
+        b.set_prop_i64(5, "day", 20).unwrap();
+        let g = b.finalize(None);
+
+        // Seed A=0: works about A = {3,4,5}; their other about-targets -> B via 3,4; C via 5.
+        let counts = g.co_occurring(0, "about", Direction::Incoming, CoWeight::Count);
+        assert_eq!(counts.get(&1), Some(&2)); // B shares 2 works with A
+        assert_eq!(counts.get(&2), Some(&1)); // C shares 1
+        assert_eq!(counts.get(&0), None); // seed excluded
+
+        // Distinct days: B's shared works 3,4 are both day 10 -> 1 distinct day; C -> 1.
+        let days = g.co_occurring(0, "about", Direction::Incoming, CoWeight::Distinct("day"));
+        assert_eq!(days.get(&1), Some(&1));
+        assert_eq!(days.get(&2), Some(&1));
+        // Unknown rel / key -> empty.
+        assert!(g.co_occurring(0, "nope", Direction::Incoming, CoWeight::Count).is_empty());
+        assert!(g
+            .co_occurring(0, "about", Direction::Incoming, CoWeight::Distinct("nokey"))
+            .is_empty());
+    }
+
+    #[test]
     fn cdlp_triangle_and_seeded() {
         let g = build(3, &[(0, 1), (1, 2), (2, 0)]);
         assert_eq!(g.cdlp(false, 2), vec![0, 0, 0]);

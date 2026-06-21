@@ -401,6 +401,19 @@ impl Atoms {
 /// the queried node, and the CSR position used to read the relationship's
 /// properties via [`GraphSnapshot::rel_prop`] — which the plain
 /// neighbor accessors do not expose. `pos` is valid for property access in
+/// Weight mode for [`GraphSnapshot::co_occurring`] — how each co-occurring node's
+/// weight is accumulated over the shared centers (declarative, so the kernel needs
+/// no per-element callback).
+#[derive(Debug, Clone, Copy)]
+pub enum CoWeight<'a> {
+    /// The number of shared centers (co-occurrence events) per co-occurring node.
+    Count,
+    /// The number of *distinct* values of the property `key` (read off each shared
+    /// center) per co-occurring node — e.g. distinct co-occurrence days. A center
+    /// lacking `key` contributes nothing.
+    Distinct(&'a str),
+}
+
 /// **both** directions (for incoming relationships it is mapped to the position
 /// where the property is stored).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2608,6 +2621,60 @@ impl GraphSnapshot {
                 }
                 large
             })
+    }
+
+    /// Seeded co-occurrence — one-mode / bipartite projection by shared neighbour.
+    /// From `seed`, over relationship `rel`: the nodes that share a `rel`-neighbour
+    /// with `seed` (`seed -(rel,direction)-> shared centers -(rel, reversed)-> the
+    /// co-occurring nodes`), `seed` itself excluded. Each co-occurring node's weight
+    /// is its shared-center count ([`CoWeight::Count`]) or the number of distinct
+    /// values of a center property ([`CoWeight::Distinct`], e.g. distinct days).
+    /// Returns `{other: weight}`. The seeded row of the node-node co-occurrence
+    /// matrix; the by-shared-neighbour complement of [`fold_via`](Self::fold_via)'s
+    /// by-rel-endpoint projection. Unknown `rel`/`key` yields an empty map.
+    pub fn co_occurring(
+        &self,
+        seed: NodeId,
+        rel: &str,
+        direction: Direction,
+        weight: CoWeight,
+    ) -> HashMap<NodeId, u64> {
+        let Some(rel_t) = self.relationship_type_from_str(rel) else {
+            return HashMap::new();
+        };
+        let back = Self::reverse_direction(direction);
+        match weight {
+            CoWeight::Count => {
+                let mut counts: HashMap<NodeId, u64> = HashMap::new();
+                for center in self.neighbors_by_type(seed, direction, rel_t) {
+                    for other in self.neighbors_by_type(center, back, rel_t) {
+                        if other != seed {
+                            *counts.entry(other).or_insert(0) += 1;
+                        }
+                    }
+                }
+                counts
+            }
+            CoWeight::Distinct(key) => {
+                let Some(key_id) = self.property_key_from_str(key) else {
+                    return HashMap::new();
+                };
+                let mut sets: HashMap<NodeId, std::collections::HashSet<ValueId>> = HashMap::new();
+                for center in self.neighbors_by_type(seed, direction, rel_t) {
+                    // The distinct value carried by this center (e.g. its day); a
+                    // center without it contributes no co-occurrence.
+                    let Some(val) = self.prop_id(center, key_id) else {
+                        continue;
+                    };
+                    for other in self.neighbors_by_type(center, back, rel_t) {
+                        if other != seed {
+                            sets.entry(other).or_default().insert(val);
+                        }
+                    }
+                }
+                sets.into_iter().map(|(o, s)| (o, s.len() as u64)).collect()
+            }
+        }
     }
 
     /// Whether `node` has at least one `rel_types` neighbour in `direction` — the
