@@ -350,7 +350,12 @@ impl GraphReader {
     /// [`neighbors_by_type`](Self::neighbors_by_type) when one neighbor is all
     /// you need (a single-cardinality rel like `isLocatedIn`). `Both` prefers
     /// the first outgoing match, else the first incoming.
-    pub fn first_neighbor(&self, node_id: u32, direction: Direction, rel_type: &str) -> Option<u32> {
+    pub fn first_neighbor(
+        &self,
+        node_id: u32,
+        direction: Direction,
+        rel_type: &str,
+    ) -> Option<u32> {
         let type_atom = self.atom_id(rel_type)?;
         if matches!(direction, Direction::Outgoing | Direction::Both) {
             if let Some(n) = self.first_neighbor_dir(node_id, type_atom, Direction::Outgoing) {
@@ -376,7 +381,9 @@ impl GraphReader {
         if start > end || end > nbrs.len() || end > types.len() {
             return None;
         }
-        (start..end).find(|&k| types[k] == type_atom).map(|k| nbrs[k])
+        (start..end)
+            .find(|&k| types[k] == type_atom)
+            .map(|k| nbrs[k])
     }
 
     /// Typed neighbors via a pre-resolved relationship-type atom (both
@@ -729,7 +736,10 @@ mod tests {
         assert_eq!(r.first_neighbor(3, Direction::Outgoing, "KNOWS"), None); // leaf
         assert_eq!(r.first_neighbor(3, Direction::Incoming, "KNOWS"), Some(1));
         // follow chains first_neighbor: 0 -KNOWS-> 1 -KNOWS-> 3.
-        let path = &[(Direction::Outgoing, "KNOWS"), (Direction::Outgoing, "KNOWS")];
+        let path = &[
+            (Direction::Outgoing, "KNOWS"),
+            (Direction::Outgoing, "KNOWS"),
+        ];
         assert_eq!(r.follow(0, path), Some(3));
         assert_eq!(r.follow(0, &[]), Some(0)); // no steps -> start
         assert_eq!(r.follow(0, &[(Direction::Outgoing, "NOPE")]), None);
@@ -746,20 +756,44 @@ mod tests {
         assert_eq!(r.degree(0, Direction::Outgoing), 3);
         assert_eq!(r.degree(0, Direction::Incoming), 0);
         assert_eq!(r.degree(1, Direction::Both), 2); // 1 out (->3) + 1 in (0->)
-        // deduped union of KNOWS+LIVES from 0, ascending.
+                                                     // deduped union of KNOWS+LIVES from 0, ascending.
         assert_eq!(
             r.neighbors_by_types(0, Direction::Outgoing, &["KNOWS", "LIVES"]),
             vec![1, 2, 4]
         );
         // typed 2-hop neighborhood from 0 via KNOWS: {1,2} then {3}.
-        let nbhd: Vec<u32> = r.neighborhood(0, Direction::Outgoing, "KNOWS", 2).iter().collect();
+        let nbhd: Vec<u32> = r
+            .neighborhood(0, Direction::Outgoing, "KNOWS", 2)
+            .iter()
+            .collect();
         assert_eq!(nbhd, vec![1, 2, 3]);
-        let one: Vec<u32> = r.neighborhood(0, Direction::Outgoing, "KNOWS", 1).iter().collect();
+        let one: Vec<u32> = r
+            .neighborhood(0, Direction::Outgoing, "KNOWS", 1)
+            .iter()
+            .collect();
         assert_eq!(one, vec![1, 2]);
         // has_neighbor_with_property reads the neighbor's resident node property.
-        assert!(r.has_neighbor_with_property(0, Direction::Outgoing, "KNOWS", "name", PropValue::Str("Bob")));
-        assert!(!r.has_neighbor_with_property(0, Direction::Outgoing, "KNOWS", "name", PropValue::Str("Zara")));
+        assert!(r.has_neighbor_with_property(
+            0,
+            Direction::Outgoing,
+            "KNOWS",
+            "name",
+            PropValue::Str("Bob")
+        ));
+        assert!(!r.has_neighbor_with_property(
+            0,
+            Direction::Outgoing,
+            "KNOWS",
+            "name",
+            PropValue::Str("Zara")
+        ));
         // the LIVES neighbor (node 4) carries no name, so no Bob match that way.
-        assert!(!r.has_neighbor_with_property(0, Direction::Outgoing, "LIVES", "name", PropValue::Str("Bob")));
+        assert!(!r.has_neighbor_with_property(
+            0,
+            Direction::Outgoing,
+            "LIVES",
+            "name",
+            PropValue::Str("Bob")
+        ));
     }
 }

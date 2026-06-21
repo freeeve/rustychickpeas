@@ -166,7 +166,8 @@ impl WasmGraph {
     /// Whether `nodeId` has any neighbor via `relType` in `direction`.
     #[wasm_bindgen(js_name = hasRel)]
     pub fn has_rel(&self, node_id: u32, direction: u8, rel_type: &str) -> bool {
-        self.inner.has_rel(node_id, dir_from_u8(direction), rel_type)
+        self.inner
+            .has_rel(node_id, dir_from_u8(direction), rel_type)
     }
 
     /// Whether `nodeId` has a neighbor (via `relType`, `direction`) whose string
@@ -193,7 +194,12 @@ impl WasmGraph {
     /// Deduplicated union of the neighbors of `nodeId` reached via any of
     /// `relTypes` in `direction`, ascending by id.
     #[wasm_bindgen(js_name = neighborsByTypes)]
-    pub fn neighbors_by_types(&self, node_id: u32, direction: u8, rel_types: Vec<String>) -> Vec<u32> {
+    pub fn neighbors_by_types(
+        &self,
+        node_id: u32,
+        direction: u8,
+        rel_types: Vec<String>,
+    ) -> Vec<u32> {
         let refs: Vec<&str> = rel_types.iter().map(String::as_str).collect();
         self.inner
             .neighbors_by_types(node_id, dir_from_u8(direction), &refs)
@@ -206,7 +212,13 @@ impl WasmGraph {
 
     /// All nodes within `1..=maxHops` of `seed` via `relType` in `direction`
     /// (the typed k-hop neighborhood), as a sorted id array; excludes `seed`.
-    pub fn neighborhood(&self, seed: u32, direction: u8, rel_type: &str, max_hops: u32) -> Vec<u32> {
+    pub fn neighborhood(
+        &self,
+        seed: u32,
+        direction: u8,
+        rel_type: &str,
+        max_hops: u32,
+    ) -> Vec<u32> {
         self.inner
             .neighborhood(seed, dir_from_u8(direction), rel_type, max_hops)
             .iter()
