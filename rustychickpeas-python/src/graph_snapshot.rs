@@ -423,9 +423,13 @@ impl GraphSnapshot {
         let Some(value_id) = self.py_value_to_id_opt(value)? else {
             return Ok(false);
         };
-        Ok(self
-            .snapshot
-            .has_neighbor_with_property(node_id, direction.into(), rel_type, key, value_id))
+        Ok(self.snapshot.has_neighbor_with_property(
+            node_id,
+            direction.into(),
+            rel_type,
+            key,
+            value_id,
+        ))
     }
 
     /// The smallest node carrying `label` with property `key` == `value`, or
@@ -532,8 +536,12 @@ impl GraphSnapshot {
         let dir: rustychickpeas_core::Direction = direction.into();
         let rel = rel.to_owned();
         let proj = projection.inner.clone();
-        let map: std::collections::HashMap<(u32, u32), u64> =
-            py.allow_threads(move || snapshot.fold_via(&rel, dir, proj.as_ref()).into_iter().collect());
+        let map: std::collections::HashMap<(u32, u32), u64> = py.allow_threads(move || {
+            snapshot
+                .fold_via(&rel, dir, proj.as_ref())
+                .into_iter()
+                .collect()
+        });
         PairWeights {
             inner: Arc::new(map),
         }
@@ -548,6 +556,7 @@ impl GraphSnapshot {
     /// native kernel with the GIL released — no per-rel Python callback. E.g. BI Q19's
     /// interaction path: ``g.dijkstra(p1, Direction.Outgoing, "knows", weights=interaction,
     /// base=0.0, prune_missing=True)``.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (source, direction, rel, *, weights, base=0.0, prune_missing=false, target=None))]
     fn dijkstra(
         &self,
@@ -606,8 +615,7 @@ impl GraphSnapshot {
         let snap = &self.snapshot;
         let dir: CoreDir = direction.into();
         let neighbors = PyList::empty(py);
-        let cols: Vec<Bound<PyList>> =
-            (0..prop_keys.len()).map(|_| PyList::empty(py)).collect();
+        let cols: Vec<Bound<PyList>> = (0..prop_keys.len()).map(|_| PyList::empty(py)).collect();
         let rt = match snap.rel_type(rel_type) {
             Some(rt) if (node_id as usize) + 1 < snap.out_offsets.len() => rt,
             _ => return (neighbors, cols).into_py_any(py),
@@ -625,17 +633,29 @@ impl GraphSnapshot {
         let n = node_id as usize;
         let mut ranges: Vec<(usize, usize, bool)> = Vec::new();
         if matches!(dir, CoreDir::Outgoing | CoreDir::Both) {
-            ranges.push((snap.out_offsets[n] as usize, snap.out_offsets[n + 1] as usize, true));
+            ranges.push((
+                snap.out_offsets[n] as usize,
+                snap.out_offsets[n + 1] as usize,
+                true,
+            ));
         }
         if matches!(dir, CoreDir::Incoming | CoreDir::Both) {
-            ranges.push((snap.in_offsets[n] as usize, snap.in_offsets[n + 1] as usize, false));
+            ranges.push((
+                snap.in_offsets[n] as usize,
+                snap.in_offsets[n + 1] as usize,
+                false,
+            ));
         }
         for (s, e, outgoing) in ranges {
             for i in s..e {
                 let (rtype, nbr, pos) = if outgoing {
                     (snap.out_types[i], snap.out_nbrs[i], i as u32)
                 } else {
-                    (snap.in_types[i], snap.in_nbrs[i], snap.in_to_out.get(i).copied().unwrap_or(i as u32))
+                    (
+                        snap.in_types[i],
+                        snap.in_nbrs[i],
+                        snap.in_to_out.get(i).copied().unwrap_or(i as u32),
+                    )
                 };
                 if rtype != rt {
                     continue;
@@ -677,58 +697,75 @@ impl GraphSnapshot {
         let snapshot = self.snapshot.clone();
         let dir: CoreDir = direction.into();
         let n = node_id as usize;
-        let (neighbors, cols): (Vec<u32>, Vec<(String, RelArrayData)>) = py.allow_threads(move || {
-            let snap = &snapshot;
-            let mut nbrs: Vec<u32> = Vec::new();
-            let mut accs: Vec<KeyAcc> = prop_keys
-                .iter()
-                .map(|k| match snap.rel_col(k).map(|c| c.dtype()) {
-                    Some(ColumnDtype::I64) => KeyAcc::I64(snap.rel_col(k).unwrap().i64(), Vec::new()),
-                    Some(ColumnDtype::F64) => KeyAcc::F64(snap.rel_col(k).unwrap().f64(), Vec::new()),
-                    _ => KeyAcc::None(Vec::new()),
-                })
-                .collect();
-            let rt = snap.rel_type(&rel_type);
-            if let (Some(rt), true) = (rt, n + 1 < snap.out_offsets.len()) {
-                let mut ranges: Vec<(usize, usize, bool)> = Vec::new();
-                if matches!(dir, CoreDir::Outgoing | CoreDir::Both) {
-                    ranges.push((snap.out_offsets[n] as usize, snap.out_offsets[n + 1] as usize, true));
-                }
-                if matches!(dir, CoreDir::Incoming | CoreDir::Both) {
-                    ranges.push((snap.in_offsets[n] as usize, snap.in_offsets[n + 1] as usize, false));
-                }
-                for (s, e, outgoing) in ranges {
-                    for i in s..e {
-                        let (rtype, nbr, pos) = if outgoing {
-                            (snap.out_types[i], snap.out_nbrs[i], i as u32)
-                        } else {
-                            (snap.in_types[i], snap.in_nbrs[i], snap.in_to_out.get(i).copied().unwrap_or(i as u32))
-                        };
-                        if rtype != rt {
-                            continue;
+        let (neighbors, cols): (Vec<u32>, Vec<(String, RelArrayData)>) =
+            py.allow_threads(move || {
+                let snap = &snapshot;
+                let mut nbrs: Vec<u32> = Vec::new();
+                let mut accs: Vec<KeyAcc> = prop_keys
+                    .iter()
+                    .map(|k| match snap.rel_col(k).map(|c| c.dtype()) {
+                        Some(ColumnDtype::I64) => {
+                            KeyAcc::I64(snap.rel_col(k).unwrap().i64(), Vec::new())
                         }
-                        nbrs.push(nbr);
-                        for acc in accs.iter_mut() {
-                            match acc {
-                                KeyAcc::I64(c, v) => v.push(c.get(pos).unwrap_or(0)),
-                                KeyAcc::F64(c, v) => v.push(c.get(pos).unwrap_or(0.0)),
-                                KeyAcc::None(v) => v.push(0),
+                        Some(ColumnDtype::F64) => {
+                            KeyAcc::F64(snap.rel_col(k).unwrap().f64(), Vec::new())
+                        }
+                        _ => KeyAcc::None(Vec::new()),
+                    })
+                    .collect();
+                let rt = snap.rel_type(&rel_type);
+                if let (Some(rt), true) = (rt, n + 1 < snap.out_offsets.len()) {
+                    let mut ranges: Vec<(usize, usize, bool)> = Vec::new();
+                    if matches!(dir, CoreDir::Outgoing | CoreDir::Both) {
+                        ranges.push((
+                            snap.out_offsets[n] as usize,
+                            snap.out_offsets[n + 1] as usize,
+                            true,
+                        ));
+                    }
+                    if matches!(dir, CoreDir::Incoming | CoreDir::Both) {
+                        ranges.push((
+                            snap.in_offsets[n] as usize,
+                            snap.in_offsets[n + 1] as usize,
+                            false,
+                        ));
+                    }
+                    for (s, e, outgoing) in ranges {
+                        for i in s..e {
+                            let (rtype, nbr, pos) = if outgoing {
+                                (snap.out_types[i], snap.out_nbrs[i], i as u32)
+                            } else {
+                                (
+                                    snap.in_types[i],
+                                    snap.in_nbrs[i],
+                                    snap.in_to_out.get(i).copied().unwrap_or(i as u32),
+                                )
+                            };
+                            if rtype != rt {
+                                continue;
+                            }
+                            nbrs.push(nbr);
+                            for acc in accs.iter_mut() {
+                                match acc {
+                                    KeyAcc::I64(c, v) => v.push(c.get(pos).unwrap_or(0)),
+                                    KeyAcc::F64(c, v) => v.push(c.get(pos).unwrap_or(0.0)),
+                                    KeyAcc::None(v) => v.push(0),
+                                }
                             }
                         }
                     }
                 }
-            }
-            let cols = prop_keys
-                .into_iter()
-                .zip(accs)
-                .map(|(k, acc)| match acc {
-                    KeyAcc::I64(_, v) => (k, RelArrayData::I64(v.into())),
-                    KeyAcc::F64(_, v) => (k, RelArrayData::F64(v.into())),
-                    KeyAcc::None(v) => (k, RelArrayData::I64(v.into())),
-                })
-                .collect();
-            (nbrs, cols)
-        });
+                let cols = prop_keys
+                    .into_iter()
+                    .zip(accs)
+                    .map(|(k, acc)| match acc {
+                        KeyAcc::I64(_, v) => (k, RelArrayData::I64(v.into())),
+                        KeyAcc::F64(_, v) => (k, RelArrayData::F64(v.into())),
+                        KeyAcc::None(v) => (k, RelArrayData::I64(v.into())),
+                    })
+                    .collect();
+                (nbrs, cols)
+            });
         RelView {
             neighbors: neighbors.into(),
             cols,
@@ -1130,7 +1167,12 @@ impl GraphSnapshot {
     /// * `key` - The property key
     /// * `value` - The property value to search for
     #[pyo3(signature = (label, key, value))]
-    fn nodes_with_property(&self, label: String, key: String, value: &Bound<'_, PyAny>) -> PyResult<Vec<u32>> {
+    fn nodes_with_property(
+        &self,
+        label: String,
+        key: String,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<Vec<u32>> {
         // Check if label exists - need to do this before calling nodes_with_property()
         // because it returns None for both "label doesn't exist" and "no matches"
         let label_id = self.label_from_str(&label);
@@ -1188,7 +1230,10 @@ impl GraphSnapshot {
     /// ids ascending; empty for an unknown label/key, an empty query, or a token
     /// no document contains. Wraps `GraphSnapshot::full_text_search`.
     fn full_text_search(&self, label: &str, key: &str, query: &str) -> Vec<u32> {
-        self.snapshot.full_text_search(label, key, query).iter().collect()
+        self.snapshot
+            .full_text_search(label, key, query)
+            .iter()
+            .collect()
     }
 
     /// Geo search: node ids of `label` whose `(lat_key, lon_key)` coordinates fall
@@ -1227,7 +1272,13 @@ impl GraphSnapshot {
         max_lon: f64,
     ) -> Vec<u32> {
         self.snapshot
-            .geo_within_bbox(label, lat_key, lon_key, (min_lat, min_lon), (max_lat, max_lon))
+            .geo_within_bbox(
+                label,
+                lat_key,
+                lon_key,
+                (min_lat, min_lon),
+                (max_lat, max_lon),
+            )
             .iter()
             .collect()
     }
@@ -1337,7 +1388,10 @@ impl GraphSnapshot {
                 Some(k) => rustychickpeas_core::CoWeight::Distinct(k.as_str()),
             };
             // core returns a hashbrown map; collect into std so PyO3 hands back a dict.
-            snapshot.co_occurring(seed, &rel, dir, w).into_iter().collect()
+            snapshot
+                .co_occurring(seed, &rel, dir, w)
+                .into_iter()
+                .collect()
         });
         Ok(out)
     }
@@ -1510,8 +1564,6 @@ impl GraphSnapshot {
         // per invocation via Python::with_gil.
         let (node_bitmap, rel_bitmap) = py.allow_threads(|| {
             if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
-                let nf_obj = nf_obj.clone();
-                let rf_obj = rf_obj.clone();
                 let nf_err = error_cell.clone();
                 let rf_err = error_cell.clone();
                 self.snapshot.bidirectional_bfs(
@@ -1555,7 +1607,6 @@ impl GraphSnapshot {
                             {
                                 return false;
                             }
-                            let rf_obj = rf_obj.clone();
                             Python::with_gil(|py| {
                                 let rel_type_str = snapshot
                                     .resolve_string(rel_type.id())
@@ -1578,7 +1629,6 @@ impl GraphSnapshot {
                     max_depth,
                 )
             } else if let Some(nf_obj) = node_filter.as_ref() {
-                let nf_obj = nf_obj.clone();
                 let nf_err = error_cell.clone();
                 type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
                 self.snapshot.bidirectional_bfs::<_, RelFilter>(
@@ -1612,7 +1662,6 @@ impl GraphSnapshot {
                     max_depth,
                 )
             } else if let Some(rf_obj) = rel_filter.as_ref() {
-                let rf_obj = rf_obj.clone();
                 let rf_err = error_cell.clone();
                 type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
                 self.snapshot.bidirectional_bfs::<NodeFilter, _>(
@@ -1635,7 +1684,6 @@ impl GraphSnapshot {
                             {
                                 return false;
                             }
-                            let rf_obj = rf_obj.clone();
                             Python::with_gil(|py| {
                                 let rel_type_str = snapshot
                                     .resolve_string(rel_type.id())
@@ -1767,8 +1815,6 @@ impl GraphSnapshot {
         // per invocation via Python::with_gil.
         let (node_bitmap, rel_bitmap) = py.allow_threads(|| {
             if let (Some(nf_obj), Some(rf_obj)) = (node_filter.as_ref(), rel_filter.as_ref()) {
-                let nf_obj = nf_obj.clone();
-                let rf_obj = rf_obj.clone();
                 let nf_err = error_cell.clone();
                 let rf_err = error_cell.clone();
                 self.snapshot.bfs(
@@ -1811,7 +1857,6 @@ impl GraphSnapshot {
                             {
                                 return false;
                             }
-                            let rf_obj = rf_obj.clone();
                             Python::with_gil(|py| {
                                 let rel_type_str = snapshot
                                     .resolve_string(rel_type.id())
@@ -1834,7 +1879,6 @@ impl GraphSnapshot {
                     max_depth,
                 )
             } else if let Some(nf_obj) = node_filter.as_ref() {
-                let nf_obj = nf_obj.clone();
                 let nf_err = error_cell.clone();
                 type RelFilter = fn(u32, u32, RelationshipType, u32, &CoreGraphSnapshot) -> bool;
                 self.snapshot.bfs::<_, RelFilter>(
@@ -1867,7 +1911,6 @@ impl GraphSnapshot {
                     max_depth,
                 )
             } else if let Some(rf_obj) = rel_filter.as_ref() {
-                let rf_obj = rf_obj.clone();
                 let rf_err = error_cell.clone();
                 type NodeFilter = fn(u32, &CoreGraphSnapshot) -> bool;
                 self.snapshot.bfs::<NodeFilter, _>(
@@ -1889,7 +1932,6 @@ impl GraphSnapshot {
                             {
                                 return false;
                             }
-                            let rf_obj = rf_obj.clone();
                             Python::with_gil(|py| {
                                 let rel_type_str = snapshot
                                     .resolve_string(rel_type.id())
@@ -2064,15 +2106,33 @@ impl Column {
     fn buffer_ptr_format(&self) -> (*const u8, &'static [u8]) {
         match self.dtype {
             ColumnDtype::I64 => {
-                let s = self.snapshot.col(&self.key).unwrap().i64().as_slice().unwrap();
+                let s = self
+                    .snapshot
+                    .col(&self.key)
+                    .unwrap()
+                    .i64()
+                    .as_slice()
+                    .unwrap();
                 (s.as_ptr() as *const u8, b"q\0")
             }
             ColumnDtype::F64 => {
-                let s = self.snapshot.col(&self.key).unwrap().f64().as_slice().unwrap();
+                let s = self
+                    .snapshot
+                    .col(&self.key)
+                    .unwrap()
+                    .f64()
+                    .as_slice()
+                    .unwrap();
                 (s.as_ptr() as *const u8, b"d\0")
             }
             ColumnDtype::Str => {
-                let s = self.snapshot.col(&self.key).unwrap().str().as_ids().unwrap();
+                let s = self
+                    .snapshot
+                    .col(&self.key)
+                    .unwrap()
+                    .str()
+                    .as_ids()
+                    .unwrap();
                 (s.as_ptr() as *const u8, b"I\0")
             }
             ColumnDtype::Bool => (self.bool_bytes.as_ref().unwrap().as_ptr(), b"B\0"),
@@ -2139,7 +2199,13 @@ impl Column {
                 v.into_py_any(py)
             }
             ColumnDtype::Str => {
-                let ids = self.snapshot.col(&self.key).unwrap().str().as_ids().unwrap();
+                let ids = self
+                    .snapshot
+                    .col(&self.key)
+                    .unwrap()
+                    .str()
+                    .as_ids()
+                    .unwrap();
                 let v: Vec<&str> = ids
                     .iter()
                     .map(|&id| self.snapshot.resolve_string(id).unwrap_or(""))
@@ -2221,7 +2287,9 @@ impl NodeArray {
         let n = self.inner.len() as isize;
         let i = if index < 0 { index + n } else { index };
         if i < 0 || i >= n {
-            return Err(pyo3::exceptions::PyIndexError::new_err("node id out of range"));
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "node id out of range",
+            ));
         }
         Ok(self.inner[i as usize])
     }
@@ -2258,7 +2326,7 @@ impl NodeArray {
         (*view).itemsize = 4;
         (*view).ndim = 1;
         (*view).format = if (flags & ffi::PyBUF_FORMAT) == ffi::PyBUF_FORMAT {
-            b"I\0".as_ptr() as *mut c_char
+            c"I".as_ptr() as *mut c_char
         } else {
             std::ptr::null_mut()
         };
@@ -2390,7 +2458,11 @@ impl RelArray {
     fn new(data: RelArrayData) -> Self {
         let shape = [data.len() as ffi::Py_ssize_t];
         let strides = [data.itemsize()];
-        RelArray { data, shape, strides }
+        RelArray {
+            data,
+            shape,
+            strides,
+        }
     }
 }
 
@@ -2409,7 +2481,9 @@ impl RelArray {
             return Err(pyo3::exceptions::PyBufferError::new_err("view is null"));
         }
         if (flags & ffi::PyBUF_WRITABLE) == ffi::PyBUF_WRITABLE {
-            return Err(pyo3::exceptions::PyBufferError::new_err("RelArray is read-only"));
+            return Err(pyo3::exceptions::PyBufferError::new_err(
+                "RelArray is read-only",
+            ));
         }
         let obj = slf.as_ptr();
         ffi::Py_INCREF(obj);
@@ -2471,7 +2545,11 @@ impl RelView {
     }
 
     fn __repr__(&self) -> String {
-        format!("RelView(len={}, cols={})", self.neighbors.len(), self.cols.len())
+        format!(
+            "RelView(len={}, cols={})",
+            self.neighbors.len(),
+            self.cols.len()
+        )
     }
 }
 
@@ -2485,7 +2563,6 @@ enum GroupSpec {
 
 /// Build the core [`rustychickpeas_core::Aggregation`] from a Python-side spec.
 /// All the scan/parallelism lives in core; this just translates the spec.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn build_core_agg<'a>(
     snapshot: &'a CoreGraphSnapshot,
@@ -2670,7 +2747,8 @@ impl Aggregation {
             }
         }
         let mut a = self.clone();
-        a.projected_filters.push((projection.inner.to_vec(), column, allowed));
+        a.projected_filters
+            .push((projection.inner.to_vec(), column, allowed));
         Ok(a)
     }
 
@@ -2786,6 +2864,9 @@ pub struct AggResult {
 impl AggResult {
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
         let n = self.rows.bind(py).len()?;
-        Ok(format!("AggResult(total={}, rows={} groups)", self.total, n))
+        Ok(format!(
+            "AggResult(total={}, rows={} groups)",
+            self.total, n
+        ))
     }
 }

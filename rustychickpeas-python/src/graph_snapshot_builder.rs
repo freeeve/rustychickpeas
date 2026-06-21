@@ -1049,13 +1049,13 @@ fn col_type_from_py(
         return Ok(CsvColumnType::Auto);
     };
     // bool is a subclass of int — check it first.
-    if obj.is(&py.get_type::<pyo3::types::PyBool>()) {
+    if obj.is(py.get_type::<pyo3::types::PyBool>()) {
         Ok(CsvColumnType::Bool)
-    } else if obj.is(&py.get_type::<pyo3::types::PyInt>()) {
+    } else if obj.is(py.get_type::<pyo3::types::PyInt>()) {
         Ok(CsvColumnType::Int64)
-    } else if obj.is(&py.get_type::<pyo3::types::PyFloat>()) {
+    } else if obj.is(py.get_type::<pyo3::types::PyFloat>()) {
         Ok(CsvColumnType::Float64)
-    } else if obj.is(&py.get_type::<pyo3::types::PyString>()) {
+    } else if obj.is(py.get_type::<pyo3::types::PyString>()) {
         Ok(CsvColumnType::String)
     } else {
         Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(

@@ -30,7 +30,7 @@ pub use geo::{haversine_km, GeoIndex};
 pub use graph_builder::GraphBuilder;
 pub use graph_builder_csv::{CsvColumnType, RelLoadSpec, RelPropSpec};
 pub use graph_snapshot::{
-    BoolCol, Col, Column, ColumnDtype, CoWeight, F64Col, GraphSnapshot, I64Col, NeighborGroups,
+    BoolCol, CoWeight, Col, Column, ColumnDtype, F64Col, GraphSnapshot, I64Col, NeighborGroups,
     NeighborsByType, Prop, PropExt, RelMatch, RelTypeFilter, RelationshipRef, RelationshipsByType,
     ShortestPaths, StrCol, ValueId,
 };

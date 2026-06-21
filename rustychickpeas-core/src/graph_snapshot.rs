@@ -2760,7 +2760,10 @@ impl GraphSnapshot {
         let value_id = value.into_value_id(self)?;
         let index_key = (label_id, key_id);
         {
-            let index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+            let index = self
+                .prop_index
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if let Some(key_index) = index.get(&index_key) {
                 return key_index.get(&value_id).and_then(|ns| ns.iter().next());
             }
@@ -2768,7 +2771,10 @@ impl GraphSnapshot {
         let label_nodes = self.nodes_with_label_id(label_id)?;
         let column = self.columns.get(&key_id)?;
         let key_index = Self::build_property_index_for_key_and_label(column, Some(label_nodes));
-        let mut index = self.prop_index.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut index = self
+            .prop_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let entry = index.entry(index_key).or_insert(key_index);
         entry.get(&value_id).and_then(|ns| ns.iter().next())
     }
@@ -2881,7 +2887,13 @@ impl GraphSnapshot {
     /// for every query token it contains). Returns `(node, score)` pairs sorted
     /// by score descending, ties broken by ascending node id. Shares the same
     /// lazily built `(label, key)` index as [`full_text_search`](Self::full_text_search).
-    pub fn full_text_search_ranked(&self, label: &str, key: &str, query: &str, k: usize) -> Vec<(NodeId, f32)> {
+    pub fn full_text_search_ranked(
+        &self,
+        label: &str,
+        key: &str,
+        query: &str,
+        k: usize,
+    ) -> Vec<(NodeId, f32)> {
         let (Some(label_id), Some(key_id)) =
             (self.label_from_str(label), self.property_key_from_str(key))
         else {
@@ -3522,9 +3534,7 @@ mod tests {
         assert_eq!(m.len(), 3); // 5->3 self-pair excluded
 
         // Unknown rel folds to nothing.
-        assert!(g
-            .fold_via("NOPE", Direction::Outgoing, &proj)
-            .is_empty());
+        assert!(g.fold_via("NOPE", Direction::Outgoing, &proj).is_empty());
     }
 
     #[test]
@@ -4189,7 +4199,10 @@ mod tests {
         let ids = s.as_ids().expect("dense str column");
         assert_eq!(ids.len(), 3);
         assert_eq!(s.id(1), Some(ids[1]));
-        let names: Vec<&str> = ids.iter().map(|&id| g.resolve_string(id).unwrap()).collect();
+        let names: Vec<&str> = ids
+            .iter()
+            .map(|&id| g.resolve_string(id).unwrap())
+            .collect();
         assert_eq!(names, vec!["p0", "p1", "p2"]);
 
         // dtype reports the logical type without narrowing.
@@ -4265,9 +4278,18 @@ mod tests {
         let out = Direction::Outgoing;
         assert_eq!(sorted(g.neighborhood(0, out, "knows", 1..=1)), vec![1, 4]); // exactly 1 hop
         assert_eq!(sorted(g.neighborhood(0, out, "knows", 2..=2)), vec![2]); // exactly 2 hops
-        assert_eq!(sorted(g.neighborhood(0, out, "knows", 1..=2)), vec![1, 2, 4]); // 1 or 2 hops
-        assert_eq!(sorted(g.neighborhood(0, out, "knows", 0..=2)), vec![0, 1, 2, 4]); // includes seed
-        assert!(g.neighborhood(0, out, "knows", 2..=1).iter().next().is_none()); // empty range
+        assert_eq!(
+            sorted(g.neighborhood(0, out, "knows", 1..=2)),
+            vec![1, 2, 4]
+        ); // 1 or 2 hops
+        assert_eq!(
+            sorted(g.neighborhood(0, out, "knows", 0..=2)),
+            vec![0, 1, 2, 4]
+        ); // includes seed
+           // `2..=1` is intentionally a reversed/empty hop range — it must yield nothing.
+        #[allow(clippy::reversed_empty_ranges)]
+        let empty = g.neighborhood(0, out, "knows", 2..=1);
+        assert!(empty.iter().next().is_none());
     }
 
     #[test]

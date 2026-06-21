@@ -48,12 +48,17 @@ impl GraphSnapshot {
     /// the `weight_key` rel property (`None` = unit weights); unreachable nodes get
     /// `f64::INFINITY`. Wraps [`dijkstra`](Self::dijkstra).
     pub fn sssp(&self, source: NodeId, directed: bool, weight_key: Option<&str>) -> Vec<f64> {
-        let sp = self.dijkstra(source, fwd(directed), &[] as &[&str], None, |_from, rel| {
-            match weight_key {
-                Some(k) => self.rel_prop(rel.pos, k).f64_or(1.0),
-                None => 1.0,
-            }
-        });
+        let sp =
+            self.dijkstra(
+                source,
+                fwd(directed),
+                &[] as &[&str],
+                None,
+                |_from, rel| match weight_key {
+                    Some(k) => self.rel_prop(rel.pos, k).f64_or(1.0),
+                    None => 1.0,
+                },
+            );
         (0..self.node_count())
             .map(|v| sp.distance(v).unwrap_or(f64::INFINITY))
             .collect()
@@ -192,8 +197,14 @@ impl GraphSnapshot {
     fn cdlp_label(&self, directed: bool, cur: &[u32], v: u32, buf: &mut Vec<u32>) -> u32 {
         buf.clear();
         if directed {
-            buf.extend(self.neighbors(v, Direction::Outgoing).map(|u| cur[u as usize]));
-            buf.extend(self.neighbors(v, Direction::Incoming).map(|u| cur[u as usize]));
+            buf.extend(
+                self.neighbors(v, Direction::Outgoing)
+                    .map(|u| cur[u as usize]),
+            );
+            buf.extend(
+                self.neighbors(v, Direction::Incoming)
+                    .map(|u| cur[u as usize]),
+            );
         } else {
             buf.extend(self.neighbors(v, Direction::Both).map(|u| cur[u as usize]));
         }
@@ -248,7 +259,7 @@ impl GraphSnapshot {
         std::thread::scope(|scope| {
             for _ in 0..nworkers {
                 scope.spawn(move || {
-                    let mut mark = vec![0u64; (n as usize + 63) / 64];
+                    let mut mark = vec![0u64; (n as usize).div_ceil(64)];
                     let mut nbrs: Vec<u32> = Vec::new();
                     loop {
                         let start = cursor.fetch_add(BATCH, Ordering::Relaxed);
@@ -441,7 +452,9 @@ mod tests {
         assert_eq!(days.get(&1), Some(&1));
         assert_eq!(days.get(&2), Some(&1));
         // Unknown rel / key -> empty.
-        assert!(g.co_occurring(0, "nope", Direction::Incoming, CoWeight::Count).is_empty());
+        assert!(g
+            .co_occurring(0, "nope", Direction::Incoming, CoWeight::Count)
+            .is_empty());
         assert!(g
             .co_occurring(0, "about", Direction::Incoming, CoWeight::Distinct("nokey"))
             .is_empty());

@@ -148,8 +148,11 @@ impl<'a> Aggregation<'a> {
         column: impl Into<String>,
         allowed: impl IntoIterator<Item = ValueId>,
     ) -> Self {
-        self.projected_filters
-            .push((projection.to_vec(), column.into(), allowed.into_iter().collect()));
+        self.projected_filters.push((
+            projection.to_vec(),
+            column.into(),
+            allowed.into_iter().collect(),
+        ));
         self
     }
 
@@ -551,8 +554,11 @@ mod tests {
         assert_eq!(res.total, 3); // nodes 0,1,2 are before the cutoff
         assert_eq!(res.fields, vec!["label", "len_bin"]);
         // label 0 = Post; node0 len10 -> bin0, node1 len50 -> bin1.
-        let mut got: Vec<(Vec<i64>, u64, i64)> =
-            res.rows.into_iter().map(|r| (r.key, r.count, r.sum)).collect();
+        let mut got: Vec<(Vec<i64>, u64, i64)> = res
+            .rows
+            .into_iter()
+            .map(|r| (r.key, r.count, r.sum))
+            .collect();
         got.sort();
         assert_eq!(got, vec![(vec![0, 0], 1, 10), (vec![0, 1], 1, 50)]);
     }

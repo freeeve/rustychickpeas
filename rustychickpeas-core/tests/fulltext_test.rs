@@ -96,10 +96,16 @@ fn ranked_search_orders_by_relevance_and_scopes_by_label() {
     assert_eq!(both, [2, 0]);
 
     // Label scoping: the "Other" node (3) never surfaces.
-    assert!(g.full_text_search_ranked("Doc", "body", "irrelevant", 10).is_empty());
+    assert!(g
+        .full_text_search_ranked("Doc", "body", "irrelevant", 10)
+        .is_empty());
 
     // Degenerate inputs.
     assert!(g.full_text_search_ranked("Doc", "body", "", 10).is_empty());
-    assert!(g.full_text_search_ranked("Doc", "body", "fox", 0).is_empty());
-    assert!(g.full_text_search_ranked("Nope", "body", "fox", 10).is_empty());
+    assert!(g
+        .full_text_search_ranked("Doc", "body", "fox", 0)
+        .is_empty());
+    assert!(g
+        .full_text_search_ranked("Nope", "body", "fox", 10)
+        .is_empty());
 }

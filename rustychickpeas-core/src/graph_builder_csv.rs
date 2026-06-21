@@ -823,6 +823,7 @@ impl GraphBuilder {
     /// one read and one index per node type, not a re-read and re-index per rel.
     ///
     /// Returns the number of relationships added for each spec, in order.
+    #[allow(clippy::type_complexity)] // shared property-index caches; a type alias would obscure more than it clarifies
     pub fn load_relationships_from_csv_multi(
         &mut self,
         path: &str,
@@ -901,7 +902,9 @@ impl GraphBuilder {
                 let rel_idx = self.add_relationship(start, end, &rels[ri].rel_type)?;
                 counts[ri] += 1;
                 for (col, key, ty) in &props[ri] {
-                    let Some(cell) = record.get(*col) else { continue };
+                    let Some(cell) = record.get(*col) else {
+                        continue;
+                    };
                     if cell.is_empty() {
                         continue;
                     }
@@ -916,7 +919,10 @@ impl GraphBuilder {
                                 .push((rel_idx, f64::from_bits(bits)));
                         }
                         ValueId::Bool(v) => {
-                            self.rel_col_bool.entry(*key).or_default().push((rel_idx, v));
+                            self.rel_col_bool
+                                .entry(*key)
+                                .or_default()
+                                .push((rel_idx, v));
                         }
                         ValueId::Str(v) => {
                             self.rel_col_str.entry(*key).or_default().push((rel_idx, v));
@@ -952,6 +958,7 @@ pub struct RelPropSpec {
 /// Build a [`RefIndex`] for one endpoint, reusing a previously-built property index for
 /// the same `(property_key, label)` from the caches (so the multi-rel loader builds each
 /// node index once).
+#[allow(clippy::type_complexity)] // shared property-index caches threaded through the resolver
 fn build_shared_ref(
     builder: &GraphBuilder,
     headers: &[String],
