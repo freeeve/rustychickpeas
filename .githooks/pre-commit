@@ -1,19 +1,14 @@
 #!/bin/sh
-# Pre-commit hook: mirror the CI static gates (.github/workflows/ci.yml) so a
-# CI-red commit is caught locally before it's pushed.
+# Pre-commit hook: the FAST half of CI's static gates (.github/workflows/ci.yml
+# Lint job) — `cargo fmt --all --check`. The slower `clippy` gate runs in
+# .githooks/pre-push (it compiles tests/benches/examples), so per-commit latency
+# stays low while a CI-red push is still caught before it leaves your machine.
 #
 # Enable once per clone:
 #     git config core.hooksPath .githooks
-#
-# (clippy --all-targets compiles benches/tests/examples, so the first run is
-# slow; subsequent runs are incremental. Move the clippy step to a pre-push
-# hook if per-commit latency bothers you.)
 set -e
 
 echo "pre-commit ▸ cargo fmt --all --check"
 cargo fmt --all --check
 
-echo "pre-commit ▸ cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
-
-echo "pre-commit ▸ ok"
+echo "pre-commit ▸ ok (clippy runs in pre-push)"

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Pre-push hook: mirror CI's full static gates (.github/workflows/ci.yml Lint job)
+# so a CI-red push is caught locally before it leaves your machine. This is where
+# the gated-commit / accumulated-lint failures of 2026-06-21 should have been
+# stopped (the .githooks gate had never been enabled — see below).
+#
+# fmt is re-checked here (cheap) so a push can't slip past even if pre-commit was
+# bypassed; clippy --all-targets is the slow part (it compiles tests/benches/
+# examples), so it lives here rather than per-commit.
+#
+# Enable once per clone:
+#     git config core.hooksPath .githooks
+set -e
+
+echo "pre-push ▸ cargo fmt --all --check"
+cargo fmt --all --check
+
+echo "pre-push ▸ cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-push ▸ ok"
