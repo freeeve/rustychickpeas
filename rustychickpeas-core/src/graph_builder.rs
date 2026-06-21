@@ -2214,7 +2214,10 @@ mod tests {
 
         let mut inc = std::collections::HashMap::new();
         for r in restored.relationships(3, Direction::Incoming, &["KNOWS"]) {
-            inc.insert(r.neighbor, restored.rel_prop(r.pos, "since").map(|p| p.value()));
+            inc.insert(
+                r.neighbor,
+                restored.rel_prop(r.pos, "since").map(|p| p.value()),
+            );
         }
         assert_eq!(inc.get(&1), Some(&Some(ValueId::I64(2020))));
         assert_eq!(inc.get(&2), Some(&Some(ValueId::I64(2018))));

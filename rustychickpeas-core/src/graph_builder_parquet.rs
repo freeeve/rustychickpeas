@@ -840,7 +840,6 @@ impl GraphBuilder {
         index
     }
 
-
     /// Load relationships from Parquet with flexible node reference support
     ///
     /// This version supports looking up nodes by:
