@@ -1,31 +1,33 @@
 <svg width="615" height="120" viewBox="0 0 615 120" xmlns="http://www.w3.org/2000/svg">
 <rect width="615" height="120" fill="transparent"/>
 <line x1="63" y1="67.5" x2="547" y2="67.5" stroke="currentColor" stroke-width="0.5" opacity="0.2" stroke-dasharray="2,2"/>
-<polyline fill="none" stroke="#3b82f6" stroke-width="2" points="48.0,112.0 103.3,107.5 143.7,107.8 184.0,101.1 224.3,66.5 264.7,107.9 305.0,97.7 345.3,95.4 385.7,23.0 426.0,102.2 466.3,99.8 506.7,100.6 547.0,96.4" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline fill="none" stroke="#3b82f6" stroke-width="2" points="48.0,112.0 100.2,107.5 137.5,107.8 174.7,101.1 211.9,66.5 249.2,107.9 286.4,97.7 323.6,95.4 360.8,23.0 398.1,102.2 435.3,99.8 472.5,100.6 509.8,96.4 547.0,95.6" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="48.0" cy="112.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
 <text x="48.0" y="104.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1 (47.96K ops/s)</text>
-<circle cx="103.3" cy="107.5" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="103.3" y="99.5" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1</text>
-<circle cx="143.7" cy="107.8" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="143.7" y="99.8" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.5.0</text>
-<circle cx="184.0" cy="101.1" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="184.0" y="93.1" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.5.0</text>
-<circle cx="224.3" cy="66.5" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="224.3" y="58.5" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.6.0</text>
-<circle cx="264.7" cy="107.9" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="264.7" y="99.9" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.6.1</text>
-<circle cx="305.0" cy="97.7" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="305.0" y="89.7" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.7.0</text>
-<circle cx="345.3" cy="95.4" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="345.3" y="87.4" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.7.0</text>
-<circle cx="385.7" cy="23.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="385.7" y="17.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.7.0 (61.97K ops/s)</text>
-<circle cx="426.0" cy="102.2" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="426.0" y="94.2" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
-<circle cx="466.3" cy="99.8" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="466.3" y="91.8" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
-<circle cx="506.7" cy="100.6" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="506.7" y="92.6" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
-<circle cx="547.0" cy="96.4" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
-<text x="547.0" y="88.4" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
+<circle cx="100.2" cy="107.5" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="100.2" y="99.5" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.4.1</text>
+<circle cx="137.5" cy="107.8" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="137.5" y="99.8" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.5.0</text>
+<circle cx="174.7" cy="101.1" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="174.7" y="93.1" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.5.0</text>
+<circle cx="211.9" cy="66.5" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="211.9" y="58.5" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.6.0</text>
+<circle cx="249.2" cy="107.9" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="249.2" y="99.9" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.6.1</text>
+<circle cx="286.4" cy="97.7" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="286.4" y="89.7" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.7.0</text>
+<circle cx="323.6" cy="95.4" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="323.6" y="87.4" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.7.0</text>
+<circle cx="360.8" cy="23.0" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="360.8" y="17.0" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.7.0 (61.97K ops/s)</text>
+<circle cx="398.1" cy="102.2" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="398.1" y="94.2" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
+<circle cx="435.3" cy="99.8" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="435.3" y="91.8" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
+<circle cx="472.5" cy="100.6" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="472.5" y="92.6" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
+<circle cx="509.8" cy="96.4" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="509.8" y="88.4" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
+<circle cx="547.0" cy="95.6" r="3" fill="#3b82f6" stroke="white" stroke-width="1"/>
+<text x="547.0" y="87.6" font-size="9" fill="#3b82f6" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="600" opacity="0.9">v0.8.0</text>
 </svg>
