@@ -8,7 +8,7 @@
 
 use crate::bitmap::NodeSet;
 use crate::error::{GraphError, Result};
-use crate::graph_snapshot::GraphSnapshot;
+use crate::graph_snapshot::{Column, GraphSnapshot, ValueId};
 use crate::types::{Direction, NodeId, RelationshipType};
 use hashbrown::{HashMap, HashSet};
 
@@ -79,6 +79,10 @@ pub struct Aggregation<'a> {
     through: Option<(String, Direction)>,
     /// With `through`, restrict counting to neighbors in this set (others skipped).
     neighbor_filter: Option<HashSet<NodeId>>,
+    /// Population filters on a *projected* node's property: keep a source `i` only
+    /// when `column.get(projection[i])` is in the allowed value set. `projection` is
+    /// a `node -> node` array (e.g. `roots_via`); applied with the scalar `filters`.
+    projected_filters: Vec<(Vec<NodeId>, String, HashSet<ValueId>)>,
 }
 
 /// One output group from [`Aggregation::run`]: the group-key values in field order
@@ -119,6 +123,7 @@ impl GraphSnapshot {
             sum: None,
             through: None,
             neighbor_filter: None,
+            projected_filters: Vec::new(),
         }
     }
 }
@@ -128,6 +133,23 @@ impl<'a> Aggregation<'a> {
     /// in [`AggResult::total`].
     pub fn filter(mut self, column: impl Into<String>, op: AggOp, value: i64) -> Self {
         self.filters.push((column.into(), op, value));
+        self
+    }
+
+    /// Population predicate on a *projected* node: keep a source node only when
+    /// `column` of its projected node (`projection[node]`) is in `allowed`. The
+    /// `projection` is a `node -> node` array (e.g. [`roots_via`](GraphSnapshot::roots_via),
+    /// mapping a message to its thread-root); `column` may be any value type
+    /// (membership test, not the i64 comparison of [`filter`](Self::filter)). Applied
+    /// with the scalar `filter`s, so only survivors pay it.
+    pub fn filter_via(
+        mut self,
+        projection: &[NodeId],
+        column: impl Into<String>,
+        allowed: impl IntoIterator<Item = ValueId>,
+    ) -> Self {
+        self.projected_filters
+            .push((projection.to_vec(), column.into(), allowed.into_iter().collect()));
         self
     }
 
@@ -181,6 +203,18 @@ impl<'a> Aggregation<'a> {
         let g = self.graph;
         let filters = resolve_filters(g, &self.filters)?;
         let having = resolve_filters(g, &self.having)?;
+        // Projected-property population filters: resolve each to (projection slice,
+        // raw column, allowed value set) once, tested per source in the fold.
+        let proj_filters: Vec<(&[NodeId], &Column, &HashSet<ValueId>)> = self
+            .projected_filters
+            .iter()
+            .map(|(proj, col, allowed)| {
+                let column = g.column_ref(col).ok_or_else(|| {
+                    GraphError::SchemaError(format!("column '{}' not found", col))
+                })?;
+                Ok((proj.as_slice(), column, allowed))
+            })
+            .collect::<Result<_>>()?;
         let gspecs: Vec<ResolvedGroup> = self
             .group
             .iter()
@@ -229,6 +263,15 @@ impl<'a> Aggregation<'a> {
                 |mut acc, node| {
                     let i = node as usize;
                     if !filters.iter().all(|(s, op, v)| op.test(s[i], *v)) {
+                        return acc;
+                    }
+                    // Projected-property filters: the source's projected node's
+                    // column value must be in the allowed set.
+                    if !proj_filters.iter().all(|(proj, col, allowed)| {
+                        proj.get(i)
+                            .and_then(|&p| col.get(p))
+                            .is_some_and(|v| allowed.contains(&v))
+                    }) {
                         return acc;
                     }
                     acc.1 += 1;
@@ -459,6 +502,37 @@ mod tests {
             b.set_prop_i64(id, "len", len).unwrap();
         }
         b.finalize(None)
+    }
+
+    #[test]
+    fn aggregate_filter_via_projected_property() {
+        // Messages 0,1 are thread roots carrying a `lang`; 2,3 are replies whose
+        // thread root is 0/1. `roots` maps each node to its thread root.
+        let mut b = GraphBuilder::new(Some(4), Some(0));
+        for i in 0..4u32 {
+            b.add_node(Some(i), &["Msg"]).unwrap();
+            b.set_prop_i64(i, "flag", 1).unwrap();
+        }
+        b.set_prop_str(0, "lang", "en").unwrap();
+        b.set_prop_str(1, "lang", "de").unwrap();
+        let g = b.finalize(None);
+        let roots = [0u32, 1, 0, 1];
+        let en = g.prop(0, "lang").unwrap().value();
+
+        // Keep only messages whose thread root's lang is "en": nodes 0 and 2.
+        let res = g
+            .aggregate(["Msg"])
+            .filter("flag", AggOp::Eq, 1)
+            .filter_via(&roots, "lang", [en])
+            .run()
+            .unwrap();
+        assert_eq!(res.total, 2);
+        // Unknown projected column -> error.
+        assert!(g
+            .aggregate(["Msg"])
+            .filter_via(&roots, "nope", [en])
+            .run()
+            .is_err());
     }
 
     #[test]

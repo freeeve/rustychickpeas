@@ -3089,6 +3089,13 @@ impl GraphSnapshot {
         })
     }
 
+    /// The raw dense [`Column`] for `key` (any value type), for in-crate kernels that
+    /// read values generically by node id (`column.get(node) -> Option<ValueId>`) —
+    /// e.g. the aggregate projected-property filter. `None` if the key is absent.
+    pub(crate) fn column_ref(&self, key: &str) -> Option<&Column> {
+        self.columns.get(&self.property_key_from_str(key)?)
+    }
+
     /// A resolved reader for the relationship property `key`, indexed by CSR
     /// position — the relationship analogue of [`col`](Self::col). Narrow with
     /// [`Col::i64`] / [`Col::bool`]; the position is a [`RelationshipRef::pos`]

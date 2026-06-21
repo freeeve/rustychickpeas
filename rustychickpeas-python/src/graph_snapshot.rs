@@ -845,6 +845,7 @@ impl GraphSnapshot {
             sum_col.as_deref(),
             None,
             None,
+            &[],
         )?;
         let res = py
             .allow_threads(|| agg.run())
@@ -875,6 +876,7 @@ impl GraphSnapshot {
             sum_col: None,
             through: None,
             neighbor_filter: None,
+            projected_filters: Vec::new(),
         }
     }
 
@@ -2495,6 +2497,7 @@ fn build_core_agg<'a>(
     sum_col: Option<&str>,
     through: Option<(&str, rustychickpeas_core::types::Direction)>,
     neighbor_filter: Option<&[u32]>,
+    projected_filters: &[(Vec<u32>, String, Vec<ValueId>)],
 ) -> PyResult<rustychickpeas_core::Aggregation<'a>> {
     let op = |s: &str| {
         AggOp::parse(s).map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
@@ -2502,6 +2505,9 @@ fn build_core_agg<'a>(
     let mut agg = snapshot.aggregate(labels.iter().cloned());
     for (c, o, v) in where_filters {
         agg = agg.filter(c.clone(), op(o)?, *v);
+    }
+    for (proj, col, allowed) in projected_filters {
+        agg = agg.filter_via(proj, col.clone(), allowed.iter().cloned());
     }
     for (c, o, v) in having_filters {
         agg = agg.having(c.clone(), op(o)?, *v);
@@ -2608,6 +2614,8 @@ pub struct Aggregation {
     sum_col: Option<String>,
     through: Option<(String, rustychickpeas_core::types::Direction)>,
     neighbor_filter: Option<Vec<u32>>,
+    /// `(projection, column, allowed value ids)` projected-property population filters.
+    projected_filters: Vec<(Vec<u32>, String, Vec<ValueId>)>,
 }
 
 #[pymethods]
@@ -2630,6 +2638,40 @@ impl Aggregation {
         let mut a = self.clone();
         a.where_filters.push((column, op, value));
         a
+    }
+
+    /// Population predicate on a *projected* node: keep a source whose projected
+    /// node (`projection[source]`, e.g. a `roots_via` array mapping a message to its
+    /// thread root) has `column` in `values`. Any value type (membership test, not
+    /// the i64 comparison of `where`); strings not interned in this snapshot can't
+    /// match and are dropped. Applied with the `where` filters.
+    fn where_via(
+        &self,
+        projection: &NodeArray,
+        column: String,
+        values: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<Aggregation> {
+        use rustychickpeas_core::PropertyValue;
+        let mut allowed: Vec<ValueId> = Vec::with_capacity(values.len());
+        for v in &values {
+            let vid = match py_to_property_value(v)? {
+                PropertyValue::String(s) => self.snapshot.atoms.get_id(&s).map(ValueId::Str),
+                PropertyValue::Integer(i) => Some(ValueId::I64(i)),
+                PropertyValue::Float(f) => Some(ValueId::from_f64(f)),
+                PropertyValue::Boolean(b) => Some(ValueId::Bool(b)),
+                PropertyValue::InternedString(_) => {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "InternedString not supported here",
+                    ))
+                }
+            };
+            if let Some(vid) = vid {
+                allowed.push(vid);
+            }
+        }
+        let mut a = self.clone();
+        a.projected_filters.push((projection.inner.to_vec(), column, allowed));
+        Ok(a)
     }
 
     /// Extra predicate applied to grouped rows only (after the population filters).
@@ -2698,6 +2740,7 @@ impl Aggregation {
             self.sum_col.as_deref(),
             self.through.as_ref().map(|(rt, dir)| (rt.as_str(), *dir)),
             self.neighbor_filter.as_deref(),
+            &self.projected_filters,
         )?;
         // The parallel scan lives in core; release the GIL while it runs.
         let res = py

@@ -92,3 +92,25 @@ def test_co_occurring_count_and_distinct():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_aggregate_where_via():
+    from rustychickpeas import Direction
+
+    # Msgs 0,1 are roots (lang en/de); 2 replyOf 0, 3 replyOf 1. Scalar cols so all pass.
+    b = GraphSnapshotBuilder(capacity_nodes=4, capacity_rels=2)
+    for i in range(4):
+        b.add_node(["Msg"], node_id=i)
+        b.set_prop(i, "day", 5)
+        b.set_prop(i, "content", 1)
+        b.set_prop(i, "len", 10)
+    b.set_prop(0, "lang", "en")
+    b.set_prop(1, "lang", "de")
+    b.add_relationship(2, 0, "replyOf")
+    b.add_relationship(3, 1, "replyOf")
+    g = b.finalize()
+
+    roots = g.roots_via("replyOf", Direction.Outgoing)  # 0->0,1->1,2->0,3->1
+    # Keep messages whose thread root's lang is "en": nodes 0 and 2.
+    res = g.aggregate("Msg").where("day", ">", 0).where_via(roots, "lang", ["en"]).run()
+    assert res.total == 2
