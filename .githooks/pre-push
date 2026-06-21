@@ -1,21 +1,33 @@
 #!/bin/sh
-# Pre-push hook: mirror CI's full static gates (.github/workflows/ci.yml Lint job)
-# so a CI-red push is caught locally before it leaves your machine. This is where
-# the gated-commit / accumulated-lint failures of 2026-06-21 should have been
-# stopped (the .githooks gate had never been enabled — see below).
+# Pre-push hook: mirror CI's static gates (.github/workflows/ci.yml Lint job)
+# against the COMMITTED state — exactly what's being pushed — NOT the working tree.
 #
-# fmt is re-checked here (cheap) so a push can't slip past even if pre-commit was
-# bypassed; clippy --all-targets is the slow part (it compiles tests/benches/
-# examples), so it lives here rather than per-commit.
+# Why the distinction matters: uncommitted WIP can MASK committed fmt/clippy issues.
+# On 2026-06-21 a local working tree looked fmt-clean (uncommitted rustfmt edits
+# covered for committed-but-unformatted code), the old working-tree check passed,
+# and CI failed right after the push. So here we stash everything not committed
+# (tracked changes + untracked files), run the gates on the clean committed tree,
+# then restore — guaranteeing the check sees what CI sees.
 #
-# Enable once per clone:
-#     git config core.hooksPath .githooks
+# fmt is cheap; clippy --all-targets compiles tests/benches/examples (slow), which
+# is why it lives in pre-push rather than per-commit.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
 set -e
 
-echo "pre-push ▸ cargo fmt --all --check"
+stashed=0
+if ! git diff --quiet HEAD || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+	git stash push --include-untracked --quiet --message "pre-push: check committed state"
+	stashed=1
+fi
+# Always restore the working tree, even if a check fails (set -e) or we're interrupted.
+restore() { [ "$stashed" -eq 1 ] && git stash pop --quiet || true; }
+trap restore EXIT INT TERM
+
+echo "pre-push ▸ cargo fmt --all --check (committed state)"
 cargo fmt --all --check
 
-echo "pre-push ▸ cargo clippy --workspace --all-targets -- -D warnings"
+echo "pre-push ▸ cargo clippy --workspace --all-targets -- -D warnings (committed state)"
 cargo clippy --workspace --all-targets -- -D warnings
 
 echo "pre-push ▸ ok"
