@@ -368,13 +368,13 @@ class TestGraphSnapshotBuilderQueries:
         assert labels == ["Person"]
     
     def test_get_neighbor_ids(self, builder):
-        """Test getting neighbor IDs from builder"""
+        """Neighbor IDs from the builder, same shape as GraphSnapshot."""
         builder.add_relationship(0, 1, "KNOWS")
         builder.add_relationship(0, 2, "KNOWS")
-        
-        outgoing, incoming = builder.neighbor_ids(0)
-        assert set(outgoing) == {1, 2}
-        assert incoming == []
+
+        assert set(builder.neighbor_ids(0)) == {1, 2}  # default Outgoing
+        assert builder.neighbor_ids(0, Direction.Incoming) == []
+        assert set(builder.neighbor_ids(0, Direction.Both)) == {1, 2}
     
     def test_get_nodes_with_property(self, builder):
         """Test getting nodes with property (label-scoped)"""

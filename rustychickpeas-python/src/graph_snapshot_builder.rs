@@ -1,5 +1,6 @@
 //! GraphSnapshotBuilder Python wrapper
 
+use crate::direction::Direction;
 use crate::graph_snapshot::GraphSnapshot;
 use crate::rusty_chickpeas::RustyChickpeas;
 use crate::utils::py_to_property_value;
@@ -878,12 +879,12 @@ impl GraphSnapshotBuilder {
         Ok(self.builder.node_labels(node_id))
     }
 
-    /// Get neighbors of a node (before finalization)
-    /// Returns (outgoing, incoming) as tuple of lists of node IDs
-    fn neighbor_ids(&self, node_id: u32) -> PyResult<(Vec<u32>, Vec<u32>)> {
+    /// Neighbours of a node before finalization, filtered by `direction` (default
+    /// Outgoing) — the same shape as `GraphSnapshot.neighbor_ids`.
+    #[pyo3(signature = (node_id, direction=Direction::Outgoing))]
+    fn neighbor_ids(&self, node_id: u32, direction: Direction) -> PyResult<Vec<u32>> {
         self.check_not_finalized()?;
-        let (out, inc) = self.builder.neighbor_ids(node_id);
-        Ok((out, inc))
+        Ok(self.builder.neighbor_ids(node_id, direction.into()))
     }
 
     /// Set the version for this snapshot

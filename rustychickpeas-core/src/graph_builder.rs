@@ -7,7 +7,7 @@ use crate::bitmap::NodeSet;
 use crate::error::GraphError;
 use crate::graph_snapshot::{Atoms, Column, GraphSnapshot, ValueId};
 use crate::interner::StringInterner;
-use crate::types::{Label, NodeId, PropertyKey, RelationshipType};
+use crate::types::{Direction, Label, NodeId, PropertyKey, RelationshipType};
 use hashbrown::HashMap;
 use roaring::RoaringBitmap;
 
@@ -801,23 +801,27 @@ impl GraphBuilder {
         }
     }
 
-    /// Get neighbors of a node (before finalization)
-    /// Returns (outgoing, incoming) neighbors as node IDs
-    pub fn neighbor_ids(&self, node_id: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
-        let mut outgoing = Vec::new();
-        let mut incoming = Vec::new();
-
-        // Find outgoing neighbors (where this node is the start)
-        for (start, end) in &self.rels {
-            if *start == node_id {
-                outgoing.push(*end);
-            }
-            if *end == node_id {
-                incoming.push(*start);
+    /// Neighbours of a node before finalization, filtered by `direction` — the
+    /// same shape as [`GraphSnapshot::neighbor_ids`](crate::GraphSnapshot::neighbor_ids).
+    /// `Outgoing` = targets of rels where this node is the source; `Incoming` =
+    /// sources where it is the target; `Both` = outgoing followed by incoming.
+    pub fn neighbor_ids(&self, node_id: NodeId, direction: Direction) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        if matches!(direction, Direction::Outgoing | Direction::Both) {
+            for (start, end) in &self.rels {
+                if *start == node_id {
+                    out.push(*end);
+                }
             }
         }
-
-        (outgoing, incoming)
+        if matches!(direction, Direction::Incoming | Direction::Both) {
+            for (start, end) in &self.rels {
+                if *end == node_id {
+                    out.push(*start);
+                }
+            }
+        }
+        out
     }
 
     /// Finalize the builder into an immutable GraphSnapshot
@@ -1334,19 +1338,17 @@ mod tests {
         builder.add_relationship(1, 2, "KNOWS").unwrap();
         builder.add_relationship(3, 1, "KNOWS").unwrap();
 
-        let (outgoing, incoming) = builder.neighbor_ids(1);
-        assert_eq!(outgoing.len(), 1);
-        assert_eq!(outgoing[0], 2); // Node 2
-        assert_eq!(incoming.len(), 1);
-        assert_eq!(incoming[0], 3); // Node 3
+        let outgoing = builder.neighbor_ids(1, Direction::Outgoing);
+        assert_eq!(outgoing, vec![2]); // Node 2
+        let incoming = builder.neighbor_ids(1, Direction::Incoming);
+        assert_eq!(incoming, vec![3]); // Node 3
+        assert_eq!(builder.neighbor_ids(1, Direction::Both), vec![2, 3]); // out then in
     }
 
     #[test]
     fn test_get_neighbors_nonexistent() {
         let builder = GraphBuilder::new(Some(10), Some(10));
-        let (outgoing, incoming) = builder.neighbor_ids(999);
-        assert_eq!(outgoing.len(), 0);
-        assert_eq!(incoming.len(), 0);
+        assert!(builder.neighbor_ids(999, Direction::Both).is_empty());
     }
 
     #[test]
