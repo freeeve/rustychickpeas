@@ -22,7 +22,7 @@ def _build_weighted(n, rels):
         b.add_node(["V"], node_id=i)
     for u, v, w in rels:
         b.add_relationship(u, v, "e")
-        b.set_relationship_prop_f64(u, v, "e", "weight", w)
+        b.set_relationship_prop(u, v, "e", "weight", w)
     return b.finalize()
 
 

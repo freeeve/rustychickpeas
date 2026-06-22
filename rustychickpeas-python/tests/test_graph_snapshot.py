@@ -964,7 +964,7 @@ class TestShortestPath:
             builder.add_node(["Person"], node_id=i)
         for (u, v, cost) in [(0, 1, 1.0), (1, 3, 1.0), (0, 2, 0.1), (2, 3, 0.1), (0, 3, 5.0)]:
             builder.add_relationship(u, v, "KNOWS")
-            builder.set_relationship_prop_f64(u, v, "KNOWS", "cost", cost)
+            builder.set_relationship_prop(u, v, "KNOWS", "cost", cost)
         # Node 4 is isolated (unreachable).
         builder.set_version("test")
         builder.finalize_into(manager)

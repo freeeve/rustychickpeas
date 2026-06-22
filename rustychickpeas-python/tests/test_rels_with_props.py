@@ -11,8 +11,8 @@ def _graph():
         b.add_node(["Account"], node_id=nid)
     for u, v, ts, amt in [(0, 1, 100, 5.0), (0, 2, 200, 7.5), (3, 0, 50, 1.0)]:
         b.add_relationship(u, v, "transfer")
-        b.set_relationship_prop_i64(u, v, "transfer", "ts", ts)
-        b.set_relationship_prop_f64(u, v, "transfer", "amt", amt)
+        b.set_relationship_prop(u, v, "transfer", "ts", ts)
+        b.set_relationship_prop(u, v, "transfer", "amt", amt)
     return b.finalize()
 
 
@@ -65,14 +65,14 @@ def test_set_relationship_prop_missing_rel_raises():
         b.add_node(["Account"], node_id=nid)
     b.add_relationship(0, 1, "transfer")
     with pytest.raises(ValueError):
-        b.set_relationship_prop_i64(0, 2, "transfer", "ts", 100)  # no 0->2 rel
+        b.set_relationship_prop(0, 2, "transfer", "ts", 100)  # no 0->2 rel
     with pytest.raises(ValueError):
-        b.set_relationship_prop_i64(0, 1, "nope", "ts", 100)  # wrong rel type
+        b.set_relationship_prop(0, 1, "nope", "ts", 100)  # wrong rel type
     with pytest.raises(ValueError):
         b.set_relationship_prop(0, 2, "transfer", "ts", 100)  # auto-typed
     with pytest.raises(ValueError):
         b.set_relationship_props(0, 2, "transfer", {"ts": 100})  # bulk
     # The existing rel still accepts properties.
-    b.set_relationship_prop_i64(0, 1, "transfer", "ts", 100)
+    b.set_relationship_prop(0, 1, "transfer", "ts", 100)
     nbrs, (ts,) = b.finalize().rels_with_props(0, Direction.Outgoing, "transfer", ["ts"])
     assert list(zip(nbrs, ts)) == [(1, 100)]

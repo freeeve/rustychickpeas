@@ -422,6 +422,33 @@ impl GraphBuilder {
         Ok(())
     }
 
+    /// Set a node property of any supported type — the generic counterpart of
+    /// `set_prop_{str,i64,f64,bool}`, dispatching on the value's [`ValueId`]
+    /// variant (`i64`/`i32`/`f64`/`bool`/`&str`/`String`). Errors only if the
+    /// node id exceeds capacity and the backing store can't grow.
+    pub fn set_prop<V: IntoValueIdBuilder>(
+        &mut self,
+        node_id: NodeId,
+        key: &str,
+        value: V,
+    ) -> Result<(), GraphError> {
+        let vid = value.into_value_id(self);
+        self.ensure_capacity(node_id)?;
+        let k = self.interner.get_or_intern(key);
+        match vid {
+            ValueId::Str(v) => self.node_col_str.entry(k).or_default().push((node_id, v)),
+            ValueId::I64(v) => self.node_col_i64.entry(k).or_default().push((node_id, v)),
+            ValueId::F64(bits) => self
+                .node_col_f64
+                .entry(k)
+                .or_default()
+                .push((node_id, f64::from_bits(bits))),
+            ValueId::Bool(v) => self.node_col_bool.entry(k).or_default().push((node_id, v)),
+        }
+        self.known_nodes.insert(node_id);
+        Ok(())
+    }
+
     /// Find relationship index by (u, v, rel_type)
     /// Returns None if relationship not found
     fn find_rel_index(&self, u: NodeId, v: NodeId, rel_type: &str) -> Option<usize> {
@@ -1270,6 +1297,24 @@ mod tests {
         builder.set_prop_i64(1, "age", 30).unwrap();
         builder.set_prop_f64(1, "score", 95.5).unwrap();
         builder.set_prop_bool(1, "active", true).unwrap();
+
+        let alice_id = builder.interner.get_or_intern("Alice");
+        assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(alice_id)));
+        assert_eq!(builder.prop(1, "age"), Some(ValueId::I64(30)));
+        assert_eq!(builder.prop(1, "score"), Some(ValueId::from_f64(95.5)));
+        assert_eq!(builder.prop(1, "active"), Some(ValueId::Bool(true)));
+    }
+
+    #[test]
+    fn test_set_prop_generic() {
+        // The generic set_prop dispatches by value type, like the typed setters.
+        let mut builder = GraphBuilder::new(Some(10), Some(10));
+        builder.add_node(Some(1), &["Person"]).unwrap();
+
+        builder.set_prop(1, "name", "Alice").unwrap();
+        builder.set_prop(1, "age", 30i64).unwrap();
+        builder.set_prop(1, "score", 95.5f64).unwrap();
+        builder.set_prop(1, "active", true).unwrap();
 
         let alice_id = builder.interner.get_or_intern("Alice");
         assert_eq!(builder.prop(1, "name"), Some(ValueId::Str(alice_id)));
