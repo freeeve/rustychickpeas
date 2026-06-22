@@ -1204,7 +1204,7 @@ impl GraphBuilder {
             prop_index: std::sync::Mutex::new(prop_index),
             fulltext_index: std::sync::Mutex::new(hashbrown::HashMap::new()),
             geo_index: std::sync::Mutex::new(hashbrown::HashMap::new()),
-            chain_root_index: std::sync::Mutex::new(hashbrown::HashMap::new()),
+            roots_via_index: std::sync::Mutex::new(hashbrown::HashMap::new()),
             atoms,
         }
     }

@@ -473,7 +473,7 @@ impl GraphSnapshot {
     /// over a per-node `root_via`. `None` if `rel` is unknown.
     fn roots_via(&self, rel: &str, direction: Direction) -> Option<NodeArray> {
         let rt = self.snapshot.relationship_type_from_str(rel)?;
-        let inner = self.snapshot.chain_roots(direction.into(), rt);
+        let inner = self.snapshot.roots_via(rt, direction.into());
         let len = inner.len() as ffi::Py_ssize_t;
         Some(NodeArray {
             inner,
@@ -487,7 +487,7 @@ impl GraphSnapshot {
     /// `roots_via` and index it. `None` if `rel` is unknown.
     fn root_via(&self, node: u32, rel: &str, direction: Direction) -> Option<u32> {
         let rt = self.snapshot.relationship_type_from_str(rel)?;
-        Some(self.snapshot.chain_root(node, direction.into(), rt))
+        Some(self.snapshot.root_via(node, rt, direction.into()))
     }
 
     /// The single neighbor each node reaches via the *functional* `rel` in `direction`
@@ -500,12 +500,7 @@ impl GraphSnapshot {
         let rt = self.snapshot.relationship_type_from_str(rel)?;
         let dir: rustychickpeas_core::Direction = direction.into();
         let snapshot = self.snapshot.clone();
-        let inner: Arc<[u32]> = py.allow_threads(move || {
-            let v: Vec<u32> = (0..snapshot.n_nodes)
-                .map(|node| snapshot.first_neighbor(node, dir, rt).unwrap_or(u32::MAX))
-                .collect();
-            v.into()
-        });
+        let inner = py.allow_threads(move || snapshot.neighbor_via(rt, dir));
         let len = inner.len() as ffi::Py_ssize_t;
         Some(NodeArray {
             inner,

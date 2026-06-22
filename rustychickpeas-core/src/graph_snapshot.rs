@@ -546,10 +546,10 @@ impl PartialOrd for DijkstraState {
 }
 
 /// A built forest-root array, returned by
-/// [`chain_roots`](GraphSnapshot::chain_roots): index it by node id for the
+/// [`roots_via`](GraphSnapshot::roots_via): index it by node id for the
 /// terminal of that node's functional-relationship chain. Shared (`Arc`) so a
 /// hot loop can hold it and index lock-free.
-pub type ChainRoots = Arc<[NodeId]>;
+pub type RootsVia = Arc<[NodeId]>;
 
 /// A resolved `i64` property column: [`I64Col::get`] reads a position via the
 /// dense `Vec<i64>` fast path when the column is dense, else the general column
@@ -1091,9 +1091,9 @@ pub struct GraphSnapshot {
     /// Lazily built forest-root arrays: `(direction, rel_type)` -> a per-node
     /// array whose `[node]` is the terminal of that node's functional `rel_type`
     /// chain. Built on first access by
-    /// [`chain_roots`](GraphSnapshot::chain_roots); the returned `Arc` slice is
+    /// [`roots_via`](GraphSnapshot::roots_via); the returned `Arc` slice is
     /// indexed lock-free, so a hot loop pays no per-node synchronization.
-    pub chain_root_index: Mutex<HashMap<(Direction, RelationshipType), ChainRoots>>,
+    pub roots_via_index: Mutex<HashMap<(Direction, RelationshipType), RootsVia>>,
 
     // --- String tables ---
     /// Flattened string interner
@@ -1200,7 +1200,7 @@ impl GraphSnapshot {
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
             geo_index: Mutex::new(HashMap::new()),
-            chain_root_index: Mutex::new(HashMap::new()),
+            roots_via_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(vec!["".to_string()]),
         }
     }
@@ -1439,7 +1439,7 @@ impl GraphSnapshot {
 
     /// [`neighbors_by_type`](Self::neighbors_by_type) over a pre-resolved
     /// [`RelMatch`], so a hot caller (e.g. [`bfs_distances`](Self::bfs_distances)
-    /// or [`chain_root`](Self::chain_root)) resolves the type filter once instead
+    /// or [`root_via`](Self::root_via)) resolves the type filter once instead
     /// of on every node.
     fn neighbors_with(
         &self,
@@ -2139,7 +2139,7 @@ impl GraphSnapshot {
     /// The array is built once per `(direction, rel_type)` in `O(node_count)` with
     /// path compression, then cached, so a hot loop should call this **once** and
     /// index the returned slice lock-free rather than calling
-    /// [`chain_root`](Self::chain_root) per node. Intended for a relationship that
+    /// [`root_via`](Self::root_via) per node. Intended for a relationship that
     /// is *functional* in `direction` (each node has at most one outgoing
     /// `rel_type` rel), so the reachable structure is a forest — e.g. walking
     /// `replyOf` from a reply up to its root message. Malformed, non-functional
@@ -2147,11 +2147,11 @@ impl GraphSnapshot {
     /// neighbor in CSR order and is broken by a `node_count` depth cap, resolving
     /// deterministically. Pass a pre-resolved [`RelationshipType`] (via
     /// [`rel_type`](Self::rel_type)).
-    pub fn chain_roots(&self, direction: Direction, rel_type: RelationshipType) -> ChainRoots {
+    pub fn roots_via(&self, rel_type: RelationshipType, direction: Direction) -> RootsVia {
         let key = (direction, rel_type);
         {
             let index = self
-                .chain_root_index
+                .roots_via_index
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             if let Some(roots) = index.get(&key) {
@@ -2160,9 +2160,9 @@ impl GraphSnapshot {
         }
         // Build outside the lock; another thread may race us, in which case the
         // first-inserted array wins (both are identical).
-        let roots: ChainRoots = self.build_chain_roots(direction, rel_type).into();
+        let roots: RootsVia = self.build_roots_via(direction, rel_type).into();
         let mut index = self
-            .chain_root_index
+            .roots_via_index
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         Arc::clone(index.entry(key).or_insert(roots))
@@ -2170,18 +2170,35 @@ impl GraphSnapshot {
 
     /// The terminal of `node`'s functional `rel_type` chain in `direction` (a node
     /// already terminal maps to itself). Convenience wrapper over
-    /// [`chain_roots`](Self::chain_roots); for a per-node hot loop, call
-    /// `chain_roots` once and index the slice instead of calling this per node.
-    pub fn chain_root(
+    /// [`roots_via`](Self::roots_via); for a per-node hot loop, call
+    /// `roots_via` once and index the slice instead of calling this per node.
+    pub fn root_via(
         &self,
         node: NodeId,
-        direction: Direction,
         rel_type: RelationshipType,
+        direction: Direction,
     ) -> NodeId {
-        self.chain_roots(direction, rel_type)
+        self.roots_via(rel_type, direction)
             .get(node as usize)
             .copied()
             .unwrap_or(node)
+    }
+
+    /// The single neighbour each node reaches via the *functional* `rel_type` in
+    /// `direction` (one hop -- e.g. a message's `hasCreator` -> its creator). The
+    /// depth-1 sibling of [`roots_via`](Self::roots_via): where that follows the
+    /// chain to its terminal, this takes one step. Node-indexed; a node with no
+    /// such neighbour maps to [`NodeId::MAX`]. Built fresh (not cached): one
+    /// [`first_neighbor`](Self::first_neighbor) per node. Pass a pre-resolved
+    /// [`RelationshipType`].
+    pub fn neighbor_via(&self, rel_type: RelationshipType, direction: Direction) -> RootsVia {
+        (0..self.n_nodes)
+            .map(|node| {
+                self.first_neighbor(node, direction, rel_type)
+                    .unwrap_or(NodeId::MAX)
+            })
+            .collect::<Vec<NodeId>>()
+            .into()
     }
 
     /// Build the forest-root array for `(direction, rel_type)`, where `root[n]` is
@@ -2189,7 +2206,7 @@ impl GraphSnapshot {
     /// via path compression. A depth cap of `node_count` breaks any cycle a
     /// malformed, non-functional graph might contain, so the build always
     /// terminates and is deterministic.
-    fn build_chain_roots(&self, direction: Direction, rel_type: RelationshipType) -> Vec<NodeId> {
+    fn build_roots_via(&self, direction: Direction, rel_type: RelationshipType) -> Vec<NodeId> {
         let n = self.n_nodes as usize;
         let matcher = RelMatch::one(rel_type);
         const UNRESOLVED: NodeId = NodeId::MAX;
@@ -2579,7 +2596,7 @@ impl GraphSnapshot {
     ///
     /// `projection` is a flat `node -> node` array indexed by node id — typically the
     /// `Vec`/slice behind a one-hop functional neighbour map (the binding's
-    /// `neighbor_via`) or a chain-root map ([`chain_roots`](Self::chain_roots)). The
+    /// `neighbor_via`) or a chain-root map ([`roots_via`](Self::roots_via)). The
     /// canonical use is BI Q19 / IC14's interaction graph: fold `replyOf` rels
     /// (comment -> parent) through each message's `hasCreator`, yielding a
     /// person-pair -> reply-count map. Runs in parallel over the node range (each
@@ -3349,7 +3366,7 @@ mod tests {
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
             geo_index: Mutex::new(HashMap::new()),
-            chain_root_index: Mutex::new(HashMap::new()),
+            roots_via_index: Mutex::new(HashMap::new()),
             atoms,
         }
     }
@@ -4346,7 +4363,7 @@ mod tests {
             prop_index: Mutex::new(HashMap::new()),
             fulltext_index: Mutex::new(HashMap::new()),
             geo_index: Mutex::new(HashMap::new()),
-            chain_root_index: Mutex::new(HashMap::new()),
+            roots_via_index: Mutex::new(HashMap::new()),
             atoms: Atoms::new(atoms_vec),
         };
 
@@ -4835,7 +4852,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_root_walks_reply_forest_to_root() {
+    fn test_root_via_walks_reply_forest_to_root() {
         // replyOf forest (child -replyOf-> parent): 0 is a root message,
         //   1 -> 0, 2 -> 1, 3 -> 1, 4 -> 2; 5 is a separate childless root.
         // (Contiguous ids so external == internal node id.)
@@ -4852,28 +4869,28 @@ mod tests {
 
         // Every node in the tree resolves to root 0.
         for n in [0, 1, 2, 3, 4] {
-            assert_eq!(snapshot.chain_root(n, Direction::Outgoing, reply_of), 0);
+            assert_eq!(snapshot.root_via(n, reply_of, Direction::Outgoing), 0);
         }
         // A node with no parent rel is its own root.
-        assert_eq!(snapshot.chain_root(5, Direction::Outgoing, reply_of), 5);
+        assert_eq!(snapshot.root_via(5, reply_of, Direction::Outgoing), 5);
         // The cached second call returns the same terminal.
-        assert_eq!(snapshot.chain_root(4, Direction::Outgoing, reply_of), 0);
+        assert_eq!(snapshot.root_via(4, reply_of, Direction::Outgoing), 0);
 
-        // chain_roots exposes the whole per-node array (built once, cached).
-        let roots = snapshot.chain_roots(Direction::Outgoing, reply_of);
+        // roots_via exposes the whole per-node array (built once, cached).
+        let roots = snapshot.roots_via(reply_of, Direction::Outgoing);
         assert_eq!(roots[2], 0);
         assert_eq!(roots[5], 5);
         // The (direction, rel_type) index entry is now present.
         let index = snapshot
-            .chain_root_index
+            .roots_via_index
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         assert!(index.contains_key(&(Direction::Outgoing, reply_of)));
     }
 
     #[test]
-    fn test_chain_root_terminates_on_cycle() {
-        // Malformed, non-functional data: a 3-cycle. chain_root must terminate
+    fn test_root_via_terminates_on_cycle() {
+        // Malformed, non-functional data: a 3-cycle. root_via must terminate
         // via the depth cap and return a node deterministically rather than hang.
         let mut builder = GraphBuilder::new(Some(4), Some(4));
         for id in [0, 1, 2] {
@@ -4884,8 +4901,26 @@ mod tests {
         builder.add_relationship(2, 0, "loops").unwrap();
         let snapshot = builder.finalize(None);
         let loops = snapshot.rel_type("loops").unwrap();
-        let root = snapshot.chain_root(0, Direction::Outgoing, loops);
+        let root = snapshot.root_via(0, loops, Direction::Outgoing);
         assert!([0, 1, 2].contains(&root));
+    }
+
+    #[test]
+    fn test_neighbor_via_one_hop() {
+        // hasCreator: post 0 -> person 2, post 1 -> person 3; post 4 has none.
+        let mut builder = GraphBuilder::new(Some(8), Some(8));
+        for id in 0..5 {
+            builder.add_node(Some(id), &["N"]).unwrap();
+        }
+        builder.add_relationship(0, 2, "hasCreator").unwrap();
+        builder.add_relationship(1, 3, "hasCreator").unwrap();
+        let snapshot = builder.finalize(None);
+        let has_creator = snapshot.rel_type("hasCreator").unwrap();
+
+        let nbr = snapshot.neighbor_via(has_creator, Direction::Outgoing);
+        assert_eq!(nbr[0], 2);
+        assert_eq!(nbr[1], 3);
+        assert_eq!(nbr[4], NodeId::MAX); // one hop only; node 4 has no hasCreator
     }
 
     #[test]
