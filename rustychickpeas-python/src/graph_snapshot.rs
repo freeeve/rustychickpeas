@@ -1148,16 +1148,10 @@ impl GraphSnapshot {
         Ok(None)
     }
 
-    /// Get property value for a node
+    /// The value of node property `key`, or `None` when the node has no such
+    /// property — including an unknown key (a lookup, like `dict.get`, not an
+    /// error). Out-of-range node ids likewise have no properties.
     fn get_property(&self, node_id: u32, key: String) -> PyResult<Option<PyObject>> {
-        let key_id = self.property_key_from_str(&key);
-        if key_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Property key '{}' not found",
-                key
-            )));
-        }
-
         let value_id = self.snapshot.prop(node_id, &key).map(|p| p.value());
 
         Python::with_gil(|py| {

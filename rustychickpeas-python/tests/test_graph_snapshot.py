@@ -163,9 +163,8 @@ class TestGraphSnapshotProperties:
         assert age == 30
     
     def test_get_node_property_nonexistent(self, property_snapshot):
-        """Test getting nonexistent property"""
-        with pytest.raises(ValueError, match="Property key 'nonexistent' not found"):
-            property_snapshot.get_property(0, "nonexistent")
+        """An unknown property key returns None (dict.get semantics)."""
+        assert property_snapshot.get_property(0, "nonexistent") is None
     
     def test_get_nodes_with_property(self, property_snapshot):
         """Test getting nodes with a specific property value (label-scoped)"""
@@ -1054,10 +1053,7 @@ class TestRcpgSerialization:
         nbrs = sorted(n.id() for n in loaded.neighbors(0, Direction.Outgoing))
         assert nbrs == [1, 2]
         # Property columns were omitted: the data must not be recoverable.
-        try:
-            assert loaded.get_property(0, "name") is None
-        except ValueError:
-            pass  # the property key itself was dropped -- also acceptable
+        assert loaded.get_property(0, "name") is None
 
     def test_read_missing_file_raises(self, tmp_path):
         with pytest.raises(Exception):

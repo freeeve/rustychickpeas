@@ -16,17 +16,10 @@ pub struct Node {
 
 #[pymethods]
 impl Node {
-    /// Get property value for this node
+    /// The value of this node's property `key`, or `None` when it has no such
+    /// property — including an unknown key (a lookup, like `dict.get`, not an
+    /// error).
     fn get_property(&self, key: String) -> PyResult<Option<PyObject>> {
-        let key_id = self.snapshot.atoms.get_id(&key);
-
-        if key_id.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Property key '{}' not found",
-                key
-            )));
-        }
-
         let value_id = self.snapshot.prop(self.node_id, &key).map(|p| p.value());
 
         Python::with_gil(|py| {

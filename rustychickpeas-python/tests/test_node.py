@@ -167,10 +167,9 @@ class TestNodeProperties:
         assert active is True
     
     def test_get_property_nonexistent(self, property_graph):
-        """Test getting nonexistent property"""
+        """An unknown property key returns None (dict.get semantics)."""
         node = property_graph.node(0)
-        with pytest.raises(ValueError, match="Property key 'nonexistent' not found"):
-            node.get_property("nonexistent")
+        assert node.get_property("nonexistent") is None
     
     def test_get_property_different_nodes(self, property_graph):
         """Test getting properties from different nodes"""

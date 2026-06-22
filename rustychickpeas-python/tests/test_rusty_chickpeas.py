@@ -226,9 +226,8 @@ class TestRustyChickpeasWorkflow:
         snapshot1 = manager.graph_snapshot("v1.0")
         snapshot2 = manager.graph_snapshot("v1.1")
         
-        # v1.0 doesn't have age property, should raise ValueError
-        with pytest.raises(ValueError, match="Property key 'age' not found"):
-            snapshot1.get_property(0, "age")
+        # v1.0 doesn't have the age property -> None (not an error).
+        assert snapshot1.get_property(0, "age") is None
         assert snapshot2.get_property(0, "age") == 30
 
 
