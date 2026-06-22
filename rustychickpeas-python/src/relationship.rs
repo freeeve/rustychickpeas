@@ -20,7 +20,8 @@ pub struct Relationship {
 
 #[pymethods]
 impl Relationship {
-    /// Get the start node (source) of this relationship
+    /// The source [`Node`] of this relationship (its `Outgoing` endpoint). Raises
+    /// `ValueError` if the relationship index is out of range.
     fn start_node(&self) -> PyResult<Node> {
         let start_id = if self.is_outgoing {
             // For outgoing relationships, find which node has this relationship
@@ -42,7 +43,8 @@ impl Relationship {
         })
     }
 
-    /// Get the end node (destination) of this relationship
+    /// The destination [`Node`] of this relationship (its `Incoming` endpoint).
+    /// Raises `ValueError` if the relationship index is out of range.
     fn end_node(&self) -> PyResult<Node> {
         let end_id = if self.is_outgoing {
             // For outgoing relationships, the end node is in out_nbrs
@@ -63,7 +65,8 @@ impl Relationship {
         })
     }
 
-    /// Get the relationship type
+    /// The relationship type as a string. Raises `ValueError` if the index is out
+    /// of range or the type cannot be resolved.
     fn reltype(&self) -> PyResult<String> {
         let rel_type = if self.is_outgoing {
             if self.rel_index as usize >= self.snapshot.out_types.len() {
@@ -90,7 +93,7 @@ impl Relationship {
         }
     }
 
-    /// Get the relationship index (internal ID)
+    /// The internal index identifying this relationship within the snapshot.
     fn id(&self) -> u32 {
         self.rel_index
     }

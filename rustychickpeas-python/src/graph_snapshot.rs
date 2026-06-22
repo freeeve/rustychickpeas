@@ -831,7 +831,9 @@ impl GraphSnapshot {
     /// The interned id (code) for `s` in this snapshot, or `None` if `s` was never
     /// interned (so no node can carry it). Resolve filter targets to codes once,
     /// then compare them against a string [`Column`]'s codes (dtype `'string'`)
-    /// vectorized — e.g. `numpy.isin(numpy.asarray(g.column("lang")), [c1, c2])`.
+    /// over the buffer protocol — e.g. iterate `memoryview(g.column("lang"))`
+    /// against the resolved code set. (numpy can consume the same buffer if you
+    /// already use it, but is never required to filter.)
     fn string_id(&self, s: &str) -> Option<u32> {
         self.get_string_id(s)
     }
@@ -839,8 +841,9 @@ impl GraphSnapshot {
     /// A dense property column as a self-describing [`Column`] (its dtype is
     /// intrinsic — no `.i64()` narrowing), or `None` when the key is absent or the
     /// column is not stored densely. The `Column` supports the buffer protocol, so
-    /// `numpy.asarray(col)` / `pyarrow.py_buffer(col)` / `memoryview(col)` read it
-    /// zero-copy, and `col.to_pylist()` gives a plain Python list.
+    /// `memoryview(col)` reads it zero-copy and `col.to_pylist()` gives a plain
+    /// Python list; any buffer consumer (e.g. `numpy.asarray(col)` /
+    /// `pyarrow.py_buffer(col)`) works too, but is never required to filter.
     fn column(&self, key: &str) -> Option<Column> {
         Column::build(self.snapshot.clone(), key)
     }
@@ -963,8 +966,9 @@ impl GraphSnapshot {
         Ok(cost)
     }
 
-    /// Get relationships by type using the type_index bitmap for O(1) lookup
-    /// Returns Relationship objects for all relationships of the specified type
+    /// Every relationship of type `rel_type`, as [`Relationship`] objects (each
+    /// listed once, from its outgoing side). Raises `ValueError` if `rel_type` is
+    /// not a known relationship type in this snapshot.
     fn relationships_with_type(&self, rel_type: String) -> PyResult<Vec<Relationship>> {
         let rel_type_id = self.rel_type_from_str(&rel_type).ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -988,7 +992,8 @@ impl GraphSnapshot {
         }
     }
 
-    /// Get all nodes (returns all node IDs that have data: labels, rels, or properties)
+    /// All node ids that carry any data — a label, a relationship, or a property —
+    /// as a list. Ids that were never assigned data are omitted.
     fn all_nodes(&self) -> PyResult<Vec<u32>> {
         use std::collections::HashSet;
         let mut nodes = HashSet::new();
@@ -1066,8 +1071,8 @@ impl GraphSnapshot {
         Ok(result)
     }
 
-    /// Get all relationships as Relationship objects
-    /// Returns all relationships in the graph
+    /// Every relationship in the snapshot as [`Relationship`] objects, each listed
+    /// once (from its outgoing side).
     fn all_relationships(&self) -> PyResult<Vec<Relationship>> {
         let mut relationships = Vec::with_capacity(self.snapshot.out_nbrs.len());
 

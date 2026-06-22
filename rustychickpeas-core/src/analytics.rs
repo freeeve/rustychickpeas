@@ -44,7 +44,7 @@ fn workers() -> usize {
 const BATCH: u32 = 2048;
 
 impl GraphSnapshot {
-    /// Single-source shortest paths over forward rels, additive edge weights from
+    /// Single-source shortest paths over forward rels, additive rel weights from
     /// the `weight_key` rel property (`None` = unit weights); unreachable nodes get
     /// `f64::INFINITY`. Wraps [`dijkstra`](Self::dijkstra).
     pub fn sssp(&self, source: NodeId, directed: bool, weight_key: Option<&str>) -> Vec<f64> {

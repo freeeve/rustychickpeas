@@ -394,13 +394,6 @@ impl Atoms {
     }
 }
 
-/// A relationship incident to a node, as returned by
-/// [`GraphSnapshot::relationships`].
-///
-/// Carries the other endpoint, the relationship type, the direction relative to
-/// the queried node, and the CSR position used to read the relationship's
-/// properties via [`GraphSnapshot::rel_prop`] — which the plain
-/// neighbor accessors do not expose. `pos` is valid for property access in
 /// Weight mode for [`GraphSnapshot::co_occurring`] — how each co-occurring node's
 /// weight is accumulated over the shared centers (declarative, so the kernel needs
 /// no per-element callback).
@@ -414,8 +407,15 @@ pub enum CoWeight<'a> {
     Distinct(&'a str),
 }
 
-/// **both** directions (for incoming relationships it is mapped to the position
-/// where the property is stored).
+/// A relationship incident to a node, as returned by
+/// [`GraphSnapshot::relationships`].
+///
+/// Carries the other endpoint, the relationship type, the direction relative to
+/// the queried node, and the CSR position used to read the relationship's
+/// properties via [`GraphSnapshot::rel_prop`] — which the plain neighbor
+/// accessors do not expose. `pos` is valid for property access in **both**
+/// directions (for incoming relationships it is mapped to the position where the
+/// property is stored).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelationshipRef {
     /// The other endpoint of the relationship, relative to the queried node.
