@@ -465,14 +465,14 @@ impl GraphSnapshot {
         self.snapshot.follow(start, &steps)
     }
 
-    /// The root each node reaches by following the *functional* `rel` in `direction`
+    /// The root each node reaches by following the *functional* `rel_type` in `direction`
     /// (each node has one successor — e.g. a message's `replyOf` thread root); a node
     /// already terminal maps to itself. Returns a `NodeArray` array indexed by node id —
     /// `roots[node]` or `memoryview(roots)` in a hot loop. The forest-root array is
     /// built once and cached on the snapshot, so this is the bulk form to reach for
-    /// over a per-node `root_via`. `None` if `rel` is unknown.
-    fn roots_via(&self, rel: &str, direction: Direction) -> Option<NodeArray> {
-        let rt = self.snapshot.relationship_type_from_str(rel)?;
+    /// over a per-node `root_via`. `None` if `rel_type` is unknown.
+    fn roots_via(&self, rel_type: &str, direction: Direction) -> Option<NodeArray> {
+        let rt = self.snapshot.relationship_type_from_str(rel_type)?;
         let inner = self.snapshot.roots_via(rt, direction.into());
         let len = inner.len() as ffi::Py_ssize_t;
         Some(NodeArray {
@@ -482,22 +482,27 @@ impl GraphSnapshot {
         })
     }
 
-    /// The root of a single `node` via the functional `rel` in `direction` (see
+    /// The root of a single `node` via the functional `rel_type` in `direction` (see
     /// `roots_via`). Convenience for a one-off lookup; in a per-node loop prefer
-    /// `roots_via` and index it. `None` if `rel` is unknown.
-    fn root_via(&self, node: u32, rel: &str, direction: Direction) -> Option<u32> {
-        let rt = self.snapshot.relationship_type_from_str(rel)?;
+    /// `roots_via` and index it. `None` if `rel_type` is unknown.
+    fn root_via(&self, node: u32, rel_type: &str, direction: Direction) -> Option<u32> {
+        let rt = self.snapshot.relationship_type_from_str(rel_type)?;
         Some(self.snapshot.root_via(node, rt, direction.into()))
     }
 
-    /// The single neighbor each node reaches via the *functional* `rel` in `direction`
+    /// The single neighbor each node reaches via the *functional* `rel_type` in `direction`
     /// (one hop — e.g. a message's `hasCreator` -> its creator). The depth-1 sibling of
     /// `roots_via`: where that follows the chain to its terminal, this takes one step.
     /// Returns a `NodeArray` indexed by node id; a node with no such neighbor maps to
     /// `u32::MAX` (4294967295). Built fresh each call (one `first_neighbor` per node,
-    /// GIL released), so hold the result for a hot loop. `None` if `rel` is unknown.
-    fn neighbor_via(&self, py: Python<'_>, rel: &str, direction: Direction) -> Option<NodeArray> {
-        let rt = self.snapshot.relationship_type_from_str(rel)?;
+    /// GIL released), so hold the result for a hot loop. `None` if `rel_type` is unknown.
+    fn neighbor_via(
+        &self,
+        py: Python<'_>,
+        rel_type: &str,
+        direction: Direction,
+    ) -> Option<NodeArray> {
+        let rt = self.snapshot.relationship_type_from_str(rel_type)?;
         let dir: rustychickpeas_core::Direction = direction.into();
         let snapshot = self.snapshot.clone();
         let inner = py.allow_threads(move || snapshot.neighbor_via(rt, dir));
@@ -509,10 +514,10 @@ impl GraphSnapshot {
         })
     }
 
-    /// Fold relationship `rel` (in `direction`) into a `PairWeights` map by projecting
+    /// Fold relationship `rel_type` (in `direction`) into a `PairWeights` map by projecting
     /// both endpoints of each rel through `projection` (a `NodeArray`, e.g. from
     /// `neighbor_via` or `roots_via`) — the one-mode / bipartite projection ("network
-    /// folding") of a relation onto a derived node set. For each `rel` rel `a -> b`,
+    /// folding") of a relation onto a derived node set. For each `rel_type` rel `a -> b`,
     /// the unordered pair `(min, max)` of `projection[a]` / `projection[b]` gets one
     /// count; self-pairs and endpoints mapping to the `u32::MAX` sentinel are skipped.
     /// Runs the parallel core kernel with the GIL released. The result stays resident
@@ -523,17 +528,17 @@ impl GraphSnapshot {
     fn fold_via(
         &self,
         py: Python<'_>,
-        rel: &str,
+        rel_type: &str,
         direction: Direction,
         projection: &NodeArray,
     ) -> PairWeights {
         let snapshot = self.snapshot.clone();
         let dir: rustychickpeas_core::Direction = direction.into();
-        let rel = rel.to_owned();
+        let rel_type = rel_type.to_owned();
         let proj = projection.inner.clone();
         let map: std::collections::HashMap<(u32, u32), u64> = py.allow_threads(move || {
             snapshot
-                .fold_via(&rel, dir, proj.as_ref())
+                .fold_via(&rel_type, dir, proj.as_ref())
                 .into_iter()
                 .collect()
         });
@@ -542,7 +547,7 @@ impl GraphSnapshot {
         }
     }
 
-    /// Single-source weighted shortest paths (Dijkstra) from `source` along `rel` in
+    /// Single-source weighted shortest paths (Dijkstra) from `source` along `rel_type` in
     /// `direction`, with rel costs derived from a resident `weights` map (`PairWeights`,
     /// e.g. from `fold_via`). The cost of rel `(u, v)` is `1.0 / (weights[(u, v)] + base)`;
     /// a pair absent from `weights` is untraversable when `prune_missing` (else costs
@@ -552,13 +557,13 @@ impl GraphSnapshot {
     /// interaction path: ``g.dijkstra(p1, Direction.Outgoing, "knows", weights=interaction,
     /// base=0.0, prune_missing=True)``.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (source, direction, rel, *, weights, base=0.0, prune_missing=false, target=None))]
+    #[pyo3(signature = (source, direction, rel_type, *, weights, base=0.0, prune_missing=false, target=None))]
     fn dijkstra(
         &self,
         py: Python<'_>,
         source: u32,
         direction: Direction,
-        rel: &str,
+        rel_type: &str,
         weights: &PairWeights,
         base: f64,
         prune_missing: bool,
@@ -566,10 +571,10 @@ impl GraphSnapshot {
     ) -> std::collections::HashMap<u32, f64> {
         let snapshot = self.snapshot.clone();
         let dir: rustychickpeas_core::Direction = direction.into();
-        let rel = rel.to_owned();
+        let rel_type = rel_type.to_owned();
         let map = weights.inner.clone();
         py.allow_threads(move || {
-            let paths = snapshot.dijkstra(source, dir, rel.as_str(), target, |from, r| {
+            let paths = snapshot.dijkstra(source, dir, rel_type.as_str(), target, |from, r| {
                 let key = if from < r.neighbor {
                     (from, r.neighbor)
                 } else {
@@ -767,7 +772,7 @@ impl GraphSnapshot {
         }
     }
 
-    /// Build a `NeighborGroups` query over each source node's `rel` neighbors (in
+    /// Build a `NeighborGroups` query over each source node's `rel_type` neighbors (in
     /// `direction`): group each source's neighbors by a projected attribute and
     /// reduce per source. Nothing runs until a terminal (`.sizes()` /
     /// `.top_by_size(...)`). E.g. BI Q4's biggest single-country membership per
@@ -777,13 +782,13 @@ impl GraphSnapshot {
     fn neighbor_groups(
         &self,
         sources: Vec<u32>,
-        rel: String,
+        rel_type: String,
         direction: Direction,
     ) -> NeighborGroups {
         NeighborGroups {
             snapshot: self.snapshot.clone(),
             sources,
-            rel,
+            rel_type,
             direction: direction.into(),
             project: Vec::new(),
         }
@@ -1352,19 +1357,19 @@ impl GraphSnapshot {
     }
 
     /// Seeded co-occurrence — one-mode / bipartite projection by shared neighbour.
-    /// From `seed`, over relationship `rel`, the nodes that share a `rel`-neighbour
-    /// with `seed` (seed -> shared centers -> their other `rel`-neighbours), `seed`
+    /// From `seed`, over relationship `rel_type`, the nodes that share a `rel_type`-neighbour
+    /// with `seed` (seed -> shared centers -> their other `rel_type`-neighbours), `seed`
     /// excluded. `weight="count"` (default) weighs each co-occurring node by its
     /// shared-center count; `weight="distinct"` (with `distinct_key`) by the number
     /// of distinct values of that property over the shared centers (e.g. distinct
     /// days). Returns `{other: weight}`. GIL released.
     /// Wraps `GraphSnapshot::co_occurring`.
-    #[pyo3(signature = (seed, rel, direction, weight=None, distinct_key=None))]
+    #[pyo3(signature = (seed, rel_type, direction, weight=None, distinct_key=None))]
     fn co_occurring(
         &self,
         py: Python<'_>,
         seed: u32,
-        rel: String,
+        rel_type: String,
         direction: Direction,
         weight: Option<String>,
         distinct_key: Option<String>,
@@ -1393,7 +1398,7 @@ impl GraphSnapshot {
             };
             // core returns a hashbrown map; collect into std so PyO3 hands back a dict.
             snapshot
-                .co_occurring(seed, &rel, dir, w)
+                .co_occurring(seed, &rel_type, dir, w)
                 .into_iter()
                 .collect()
         });
@@ -2622,7 +2627,7 @@ fn build_core_agg<'a>(
 pub struct NeighborGroups {
     snapshot: Arc<CoreGraphSnapshot>,
     sources: Vec<u32>,
-    rel: String,
+    rel_type: String,
     direction: rustychickpeas_core::types::Direction,
     project: Vec<(rustychickpeas_core::types::Direction, String)>,
 }
@@ -2635,7 +2640,7 @@ impl NeighborGroups {
         NeighborGroups {
             snapshot: self.snapshot.clone(),
             sources: self.sources.clone(),
-            rel: self.rel.clone(),
+            rel_type: self.rel_type.clone(),
             direction: self.direction,
             project: steps.into_iter().map(|(d, r)| (d.into(), r)).collect(),
         }
@@ -2645,14 +2650,14 @@ impl NeighborGroups {
     fn sizes(&self, py: Python<'_>) -> Vec<(u32, u32)> {
         let snapshot = self.snapshot.clone();
         let sources = self.sources.clone();
-        let rel = self.rel.clone();
+        let rel_type = self.rel_type.clone();
         let direction = self.direction;
         let project = self.project.clone();
         py.allow_threads(move || {
             let steps: Vec<(rustychickpeas_core::types::Direction, &str)> =
                 project.iter().map(|(d, r)| (*d, r.as_str())).collect();
             snapshot
-                .neighbor_groups(&sources, &rel, direction)
+                .neighbor_groups(&sources, &rel_type, direction)
                 .project(&steps)
                 .sizes()
         })
@@ -2666,14 +2671,14 @@ impl NeighborGroups {
     fn top_by_size(&self, py: Python<'_>, n: usize, tie: Option<String>) -> Vec<(u32, u32)> {
         let snapshot = self.snapshot.clone();
         let sources = self.sources.clone();
-        let rel = self.rel.clone();
+        let rel_type = self.rel_type.clone();
         let direction = self.direction;
         let project = self.project.clone();
         py.allow_threads(move || {
             let steps: Vec<(rustychickpeas_core::types::Direction, &str)> =
                 project.iter().map(|(d, r)| (*d, r.as_str())).collect();
             snapshot
-                .neighbor_groups(&sources, &rel, direction)
+                .neighbor_groups(&sources, &rel_type, direction)
                 .project(&steps)
                 .top_by_size(n, tie.as_deref())
         })

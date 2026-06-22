@@ -20,6 +20,19 @@ def test_roots_via_getitem():
     assert [roots[i] for i in range(4)] == [0, 0, 0, 3]  # everyone -> thread root; P3 itself
 
 
+def test_via_family_rel_type_kwarg():
+    # The relationship-type arg is the canonical `rel_type` keyword across the family.
+    g = _thread()
+    assert [g.roots_via(rel_type="replyOf", direction=Direction.Outgoing)[i] for i in range(4)] == [
+        0,
+        0,
+        0,
+        3,
+    ]
+    assert g.root_via(2, rel_type="replyOf", direction=Direction.Outgoing) == 0
+    assert g.neighbor_via(rel_type="replyOf", direction=Direction.Outgoing)[2] == 1  # one hop
+
+
 def test_roots_via_buffer():
     mv = memoryview(_thread().roots_via("replyOf", Direction.Outgoing))
     assert mv.format == "I"
