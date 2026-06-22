@@ -67,7 +67,7 @@ impl Relationship {
 
     /// The relationship type as a string. Raises `ValueError` if the index is out
     /// of range or the type cannot be resolved.
-    fn reltype(&self) -> PyResult<String> {
+    fn rel_type(&self) -> PyResult<String> {
         let rel_type = if self.is_outgoing {
             if self.rel_index as usize >= self.snapshot.out_types.len() {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -93,13 +93,19 @@ impl Relationship {
         }
     }
 
+    /// Deprecated alias for [`rel_type`](Self::rel_type), kept for backward
+    /// compatibility; prefer `rel_type()`.
+    fn reltype(&self) -> PyResult<String> {
+        self.rel_type()
+    }
+
     /// The internal index identifying this relationship within the snapshot.
     fn id(&self) -> u32 {
         self.rel_index
     }
 
     fn __repr__(&self) -> PyResult<String> {
-        let rel_type = self.reltype()?;
+        let rel_type = self.rel_type()?;
         let start = self.start_node()?;
         let end = self.end_node()?;
         Ok(format!(

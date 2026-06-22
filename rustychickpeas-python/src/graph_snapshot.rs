@@ -203,7 +203,7 @@ impl GraphSnapshot {
     /// * `node_id` - The node ID
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
-    #[pyo3(signature = (node_id, direction, rel_types=None))]
+    #[pyo3(signature = (node_id, direction=Direction::Outgoing, rel_types=None))]
     fn relationships(
         &self,
         node_id: u32,
@@ -299,7 +299,7 @@ impl GraphSnapshot {
 
     /// Neighbor node IDs in `direction`, optionally restricted to `rel_types`
     /// (deduplicated, ascending, when types are given).
-    #[pyo3(signature = (node_id, direction, rel_types=None))]
+    #[pyo3(signature = (node_id, direction=Direction::Outgoing, rel_types=None))]
     fn neighbor_ids(
         &self,
         node_id: u32,
@@ -343,7 +343,7 @@ impl GraphSnapshot {
 
     /// Get neighbors of a node as Node objects
     /// Returns a list of Node objects for neighbors in the specified direction
-    #[pyo3(signature = (node_id, direction, rel_types=None))]
+    #[pyo3(signature = (node_id, direction=Direction::Outgoing, rel_types=None))]
     fn neighbors(
         &self,
         node_id: u32,
@@ -386,7 +386,7 @@ impl GraphSnapshot {
 
     /// Degree of a node — O(1) from the CSR offsets when untyped; with
     /// `rel_type`, the count of neighbors reached via that type.
-    #[pyo3(signature = (node_id, direction, rel_type=None))]
+    #[pyo3(signature = (node_id, direction=Direction::Outgoing, rel_type=None))]
     fn degree(&self, node_id: u32, direction: Direction, rel_type: Option<&str>) -> usize {
         match rel_type {
             Some(rt) => self

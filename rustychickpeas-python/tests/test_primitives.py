@@ -139,3 +139,18 @@ def test_relationships_incoming_via_in_to_out():
     assert len(inc) == 1
     both = n1.relationships(Direction.Both)
     assert len(both) == 2
+
+
+def test_rel_type_alias_and_default_direction():
+    g = chain()  # 0 -KNOWS-> 1 -KNOWS-> 2
+    # Read-side neighbor methods default direction to Outgoing.
+    assert g.neighbor_ids(0) == [1]
+    assert g.degree(1) == 1  # out-degree
+    n1 = g.node(1)
+    assert n1.neighbor_ids() == [2]
+    assert n1.degree() == 1
+    assert len(n1.relationships()) == 1  # outgoing
+    # rel_type() is canonical; reltype() is the kept-for-compat alias.
+    rel = g.relationships(0, O, ["KNOWS"])[0]
+    assert rel.rel_type() == "KNOWS"
+    assert rel.reltype() == rel.rel_type()

@@ -39,7 +39,7 @@ impl Node {
     /// # Arguments
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
-    #[pyo3(signature = (direction, rel_types=None))]
+    #[pyo3(signature = (direction=Direction::Outgoing, rel_types=None))]
     fn relationships(
         &self,
         direction: Direction,
@@ -202,7 +202,7 @@ impl Node {
     /// # Arguments
     /// * `direction` - Direction of relationships (Outgoing, Incoming, Both)
     /// * `rel_types` - Optional list of relationship types to filter by
-    #[pyo3(signature = (direction, rel_types=None))]
+    #[pyo3(signature = (direction=Direction::Outgoing, rel_types=None))]
     fn neighbor_ids(
         &self,
         direction: Direction,
@@ -239,7 +239,7 @@ impl Node {
 
     /// Degree of this node — O(1) from the CSR offsets when untyped; with
     /// `rel_type`, the count of neighbors reached via that type.
-    #[pyo3(signature = (direction, rel_type=None))]
+    #[pyo3(signature = (direction=Direction::Outgoing, rel_type=None))]
     fn degree(&self, direction: Direction, rel_type: Option<&str>) -> usize {
         match rel_type {
             Some(rt) => self
