@@ -445,12 +445,14 @@ impl GraphBuilder {
         rel_type: &str,
         key: &str,
         val: &str,
-    ) {
-        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
-            let k = self.interner.get_or_intern(key);
-            let v = self.interner.get_or_intern(val);
-            self.rel_col_str.entry(k).or_default().push((rel_idx, v));
-        }
+    ) -> Result<(), GraphError> {
+        let rel_idx = self
+            .find_rel_index(u, v, rel_type)
+            .ok_or_else(|| GraphError::RelationshipNotFound(u, v, rel_type.to_string()))?;
+        let k = self.interner.get_or_intern(key);
+        let v = self.interner.get_or_intern(val);
+        self.rel_col_str.entry(k).or_default().push((rel_idx, v));
+        Ok(())
     }
 
     /// Set i64 property on a relationship
@@ -461,11 +463,13 @@ impl GraphBuilder {
         rel_type: &str,
         key: &str,
         val: i64,
-    ) {
-        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
-            let k = self.interner.get_or_intern(key);
-            self.rel_col_i64.entry(k).or_default().push((rel_idx, val));
-        }
+    ) -> Result<(), GraphError> {
+        let rel_idx = self
+            .find_rel_index(u, v, rel_type)
+            .ok_or_else(|| GraphError::RelationshipNotFound(u, v, rel_type.to_string()))?;
+        let k = self.interner.get_or_intern(key);
+        self.rel_col_i64.entry(k).or_default().push((rel_idx, val));
+        Ok(())
     }
 
     /// Set f64 property on a relationship
@@ -476,11 +480,13 @@ impl GraphBuilder {
         rel_type: &str,
         key: &str,
         val: f64,
-    ) {
-        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
-            let k = self.interner.get_or_intern(key);
-            self.rel_col_f64.entry(k).or_default().push((rel_idx, val));
-        }
+    ) -> Result<(), GraphError> {
+        let rel_idx = self
+            .find_rel_index(u, v, rel_type)
+            .ok_or_else(|| GraphError::RelationshipNotFound(u, v, rel_type.to_string()))?;
+        let k = self.interner.get_or_intern(key);
+        self.rel_col_f64.entry(k).or_default().push((rel_idx, val));
+        Ok(())
     }
 
     /// Set boolean property on a relationship
@@ -491,11 +497,13 @@ impl GraphBuilder {
         rel_type: &str,
         key: &str,
         val: bool,
-    ) {
-        if let Some(rel_idx) = self.find_rel_index(u, v, rel_type) {
-            let k = self.interner.get_or_intern(key);
-            self.rel_col_bool.entry(k).or_default().push((rel_idx, val));
-        }
+    ) -> Result<(), GraphError> {
+        let rel_idx = self
+            .find_rel_index(u, v, rel_type)
+            .ok_or_else(|| GraphError::RelationshipNotFound(u, v, rel_type.to_string()))?;
+        let k = self.interner.get_or_intern(key);
+        self.rel_col_bool.entry(k).or_default().push((rel_idx, val));
+        Ok(())
     }
 
     /// Set multiple properties on a single relationship by index
@@ -1959,7 +1967,9 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder
+            .set_relationship_prop_str(1, 2, "KNOWS", "since", "2020")
+            .unwrap();
 
         // Verify property was set by checking the internal storage
         let since_key = builder.interner.get_or_intern("since");
@@ -1979,7 +1989,9 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5);
+        builder
+            .set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5)
+            .unwrap();
 
         // Verify property was set
         let weight_key = builder.interner.get_or_intern("weight");
@@ -1995,7 +2007,9 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_relationship_prop_f64(1, 2, "KNOWS", "score", 0.85);
+        builder
+            .set_relationship_prop_f64(1, 2, "KNOWS", "score", 0.85)
+            .unwrap();
 
         // Verify property was set
         let score_key = builder.interner.get_or_intern("score");
@@ -2013,7 +2027,9 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_relationship_prop_bool(1, 2, "KNOWS", "verified", true);
+        builder
+            .set_relationship_prop_bool(1, 2, "KNOWS", "verified", true)
+            .unwrap();
 
         // Verify property was set
         let verified_key = builder.interner.get_or_intern("verified");
@@ -2029,10 +2045,18 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
-        builder.set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5);
-        builder.set_relationship_prop_f64(1, 2, "KNOWS", "score", 0.85);
-        builder.set_relationship_prop_bool(1, 2, "KNOWS", "verified", true);
+        builder
+            .set_relationship_prop_str(1, 2, "KNOWS", "since", "2020")
+            .unwrap();
+        builder
+            .set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5)
+            .unwrap();
+        builder
+            .set_relationship_prop_f64(1, 2, "KNOWS", "score", 0.85)
+            .unwrap();
+        builder
+            .set_relationship_prop_bool(1, 2, "KNOWS", "verified", true)
+            .unwrap();
 
         // Verify all properties were set
         let rel_idx = builder.find_rel_index(1, 2, "KNOWS").unwrap();
@@ -2078,10 +2102,14 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         // Don't add the relationship
 
-        // Setting property on non-existent relationship should not panic
-        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
+        // Setting a property on a missing relationship returns RelationshipNotFound
+        // (no longer a silent drop).
+        let err = builder
+            .set_relationship_prop_str(1, 2, "KNOWS", "since", "2020")
+            .unwrap_err();
+        assert!(matches!(err, GraphError::RelationshipNotFound(1, 2, ref t) if t == "KNOWS"));
 
-        // Property should not be set
+        // And nothing was written.
         let since_key = builder.interner.get_or_intern("since");
         assert!(
             !builder.rel_col_str.contains_key(&since_key)
@@ -2098,7 +2126,9 @@ mod tests {
         builder.add_relationship(1, 2, "LIKES").unwrap(); // Different type
 
         // Set property on KNOWS relationship
-        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
+        builder
+            .set_relationship_prop_str(1, 2, "KNOWS", "since", "2020")
+            .unwrap();
 
         // Verify property is only on KNOWS, not LIKES
         let since_key = builder.interner.get_or_intern("since");
@@ -2117,8 +2147,12 @@ mod tests {
         builder.add_node(Some(2), &["Person"]).unwrap();
         builder.add_relationship(1, 2, "KNOWS").unwrap();
 
-        builder.set_relationship_prop_str(1, 2, "KNOWS", "since", "2020");
-        builder.set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5);
+        builder
+            .set_relationship_prop_str(1, 2, "KNOWS", "since", "2020")
+            .unwrap();
+        builder
+            .set_relationship_prop_i64(1, 2, "KNOWS", "weight", 5)
+            .unwrap();
 
         let snapshot = builder.finalize(None);
 
@@ -2156,9 +2190,15 @@ mod tests {
         builder.add_relationship(1, 2, "KNOWS").unwrap();
         builder.add_relationship(1, 3, "KNOWS").unwrap();
         builder.add_relationship(4, 2, "KNOWS").unwrap();
-        builder.set_relationship_prop_i64(1, 2, "KNOWS", "since", 2020);
-        builder.set_relationship_prop_i64(1, 3, "KNOWS", "since", 2021);
-        builder.set_relationship_prop_i64(4, 2, "KNOWS", "since", 2019);
+        builder
+            .set_relationship_prop_i64(1, 2, "KNOWS", "since", 2020)
+            .unwrap();
+        builder
+            .set_relationship_prop_i64(1, 3, "KNOWS", "since", 2021)
+            .unwrap();
+        builder
+            .set_relationship_prop_i64(4, 2, "KNOWS", "since", 2019)
+            .unwrap();
         let g = builder.finalize(None);
 
         // Outgoing from 1.
@@ -2208,8 +2248,12 @@ mod tests {
         }
         builder.add_relationship(1, 3, "KNOWS").unwrap();
         builder.add_relationship(2, 3, "KNOWS").unwrap();
-        builder.set_relationship_prop_i64(1, 3, "KNOWS", "since", 2020);
-        builder.set_relationship_prop_i64(2, 3, "KNOWS", "since", 2018);
+        builder
+            .set_relationship_prop_i64(1, 3, "KNOWS", "since", 2020)
+            .unwrap();
+        builder
+            .set_relationship_prop_i64(2, 3, "KNOWS", "since", 2018)
+            .unwrap();
         let restored = GraphSnapshot::from_graph_section(builder.finalize(None).to_graph_section());
 
         let mut inc = std::collections::HashMap::new();
@@ -2234,7 +2278,7 @@ mod tests {
         }
         for &(u, v, w) in &[(1, 2, 1), (1, 3, 5), (2, 3, 1), (3, 4, 2), (2, 4, 10)] {
             b.add_relationship(u, v, "E").unwrap();
-            b.set_relationship_prop_i64(u, v, "E", "w", w);
+            b.set_relationship_prop_i64(u, v, "E", "w", w).unwrap();
         }
         let g = b.finalize(None);
         let cost = |_from: NodeId, rel: &crate::RelationshipRef| match g

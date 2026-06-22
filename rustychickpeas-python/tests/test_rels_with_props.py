@@ -53,3 +53,26 @@ def test_unknown_rel_type_empty():
     nbrs, cols = g.rels_with_props(0, Direction.Outgoing, "nope", ["ts"])
     assert nbrs == [] and cols == [[]]
     assert len(g.rel_view(0, Direction.Outgoing, "nope", ["ts"])) == 0
+
+
+def test_set_relationship_prop_missing_rel_raises():
+    """A property set on a non-existent rel now raises instead of silently
+    dropping (typed, auto-typed, and bulk setters)."""
+    import pytest
+
+    b = GraphSnapshotBuilder()
+    for nid in range(3):
+        b.add_node(["Account"], node_id=nid)
+    b.add_relationship(0, 1, "transfer")
+    with pytest.raises(ValueError):
+        b.set_relationship_prop_i64(0, 2, "transfer", "ts", 100)  # no 0->2 rel
+    with pytest.raises(ValueError):
+        b.set_relationship_prop_i64(0, 1, "nope", "ts", 100)  # wrong rel type
+    with pytest.raises(ValueError):
+        b.set_relationship_prop(0, 2, "transfer", "ts", 100)  # auto-typed
+    with pytest.raises(ValueError):
+        b.set_relationship_props(0, 2, "transfer", {"ts": 100})  # bulk
+    # The existing rel still accepts properties.
+    b.set_relationship_prop_i64(0, 1, "transfer", "ts", 100)
+    nbrs, (ts,) = b.finalize().rels_with_props(0, Direction.Outgoing, "transfer", ["ts"])
+    assert list(zip(nbrs, ts)) == [(1, 100)]

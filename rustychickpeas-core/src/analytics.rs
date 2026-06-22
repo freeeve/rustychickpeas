@@ -385,7 +385,7 @@ mod tests {
         }
         for &(u, v, w) in rels {
             b.add_relationship(u, v, "e").unwrap();
-            b.set_relationship_prop_f64(u, v, "e", "weight", w);
+            b.set_relationship_prop_f64(u, v, "e", "weight", w).unwrap();
         }
         b.finalize(None)
     }

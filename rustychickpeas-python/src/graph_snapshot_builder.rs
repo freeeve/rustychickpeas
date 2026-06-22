@@ -283,7 +283,8 @@ impl GraphSnapshotBuilder {
     ) -> PyResult<()> {
         self.check_not_finalized()?;
         self.builder
-            .set_relationship_prop_str(u, v, &rel_type, &key, &value);
+            .set_relationship_prop_str(u, v, &rel_type, &key, &value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
         Ok(())
     }
 
@@ -298,7 +299,8 @@ impl GraphSnapshotBuilder {
     ) -> PyResult<()> {
         self.check_not_finalized()?;
         self.builder
-            .set_relationship_prop_i64(u, v, &rel_type, &key, value);
+            .set_relationship_prop_i64(u, v, &rel_type, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
         Ok(())
     }
 
@@ -313,7 +315,8 @@ impl GraphSnapshotBuilder {
     ) -> PyResult<()> {
         self.check_not_finalized()?;
         self.builder
-            .set_relationship_prop_f64(u, v, &rel_type, &key, value);
+            .set_relationship_prop_f64(u, v, &rel_type, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
         Ok(())
     }
 
@@ -328,7 +331,8 @@ impl GraphSnapshotBuilder {
     ) -> PyResult<()> {
         self.check_not_finalized()?;
         self.builder
-            .set_relationship_prop_bool(u, v, &rel_type, &key, value);
+            .set_relationship_prop_bool(u, v, &rel_type, &key, value)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
         Ok(())
     }
 
@@ -342,19 +346,26 @@ impl GraphSnapshotBuilder {
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         self.check_not_finalized()?;
+        let map_err = |e: rustychickpeas_core::GraphError| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+        };
         // Check bool first, as True/False can be extracted as int
         if let Ok(b) = value.extract::<bool>() {
             self.builder
-                .set_relationship_prop_bool(u, v, &rel_type, &key, b);
+                .set_relationship_prop_bool(u, v, &rel_type, &key, b)
+                .map_err(map_err)?;
         } else if let Ok(s) = value.extract::<String>() {
             self.builder
-                .set_relationship_prop_str(u, v, &rel_type, &key, &s);
+                .set_relationship_prop_str(u, v, &rel_type, &key, &s)
+                .map_err(map_err)?;
         } else if let Ok(i) = value.extract::<i64>() {
             self.builder
-                .set_relationship_prop_i64(u, v, &rel_type, &key, i);
+                .set_relationship_prop_i64(u, v, &rel_type, &key, i)
+                .map_err(map_err)?;
         } else if let Ok(f) = value.extract::<f64>() {
             self.builder
-                .set_relationship_prop_f64(u, v, &rel_type, &key, f);
+                .set_relationship_prop_f64(u, v, &rel_type, &key, f)
+                .map_err(map_err)?;
         } else {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                 "Property value must be str, int, float, or bool",
@@ -383,6 +394,9 @@ impl GraphSnapshotBuilder {
         properties: &Bound<'_, PyDict>,
     ) -> PyResult<()> {
         self.check_not_finalized()?;
+        let map_err = |e: rustychickpeas_core::GraphError| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+        };
         for (key_obj, value_obj) in properties {
             let key: String = key_obj.extract()?;
             let value = &value_obj;
@@ -390,16 +404,20 @@ impl GraphSnapshotBuilder {
             // Check bool first, as True/False can be extracted as int
             if let Ok(b) = value.extract::<bool>() {
                 self.builder
-                    .set_relationship_prop_bool(u, v, &rel_type, &key, b);
+                    .set_relationship_prop_bool(u, v, &rel_type, &key, b)
+                    .map_err(map_err)?;
             } else if let Ok(s) = value.extract::<String>() {
                 self.builder
-                    .set_relationship_prop_str(u, v, &rel_type, &key, &s);
+                    .set_relationship_prop_str(u, v, &rel_type, &key, &s)
+                    .map_err(map_err)?;
             } else if let Ok(i) = value.extract::<i64>() {
                 self.builder
-                    .set_relationship_prop_i64(u, v, &rel_type, &key, i);
+                    .set_relationship_prop_i64(u, v, &rel_type, &key, i)
+                    .map_err(map_err)?;
             } else if let Ok(f) = value.extract::<f64>() {
                 self.builder
-                    .set_relationship_prop_f64(u, v, &rel_type, &key, f);
+                    .set_relationship_prop_f64(u, v, &rel_type, &key, f)
+                    .map_err(map_err)?;
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
                     "Property value for key '{}' must be str, int, float, or bool",

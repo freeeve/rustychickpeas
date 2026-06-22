@@ -16,6 +16,8 @@ pub enum GraphError {
     CsvError(String),
     #[error("Serialization error: {0}")]
     SerializationError(String),
+    #[error("Relationship not found: {0} -> {1} of type '{2}'")]
+    RelationshipNotFound(u32, u32, String),
 }
 
 pub type Result<T> = std::result::Result<T, GraphError>;
