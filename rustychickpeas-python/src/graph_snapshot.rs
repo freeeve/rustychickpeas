@@ -1291,8 +1291,10 @@ impl GraphSnapshot {
     /// PageRank after `iterations` synchronous pull updates with damping `damping`
     /// (sinks redistribute their rank uniformly). `directed` picks the forward
     /// direction (outgoing for a directed graph, both for undirected). Returns one
-    /// score per node id. Runs in Rust with the GIL released.
-    /// Wraps `GraphSnapshot::pagerank`.
+    /// score per node id. Runs in Rust with the GIL released. Defaults
+    /// (`directed=True, damping=0.85, iterations=30`) make `g.pagerank()` the
+    /// common case. Wraps `GraphSnapshot::pagerank`.
+    #[pyo3(signature = (directed=true, damping=0.85, iterations=30))]
     fn pagerank(&self, py: Python<'_>, directed: bool, damping: f64, iterations: u32) -> Vec<f64> {
         let snapshot = self.snapshot.clone();
         py.allow_threads(move || snapshot.pagerank(directed, damping, iterations))
@@ -1310,9 +1312,10 @@ impl GraphSnapshot {
     /// (most-frequent neighbour label, smallest on a tie; in+out counted separately
     /// for a directed graph). `seed` gives explicit initial labels per node id
     /// (default: node ids) — pass original vertex ids to match a vertex-id-keyed
-    /// reference. One label per node id. GIL released.
+    /// reference. One label per node id. GIL released. Defaults
+    /// (`directed=True, iterations=10`) make `g.cdlp()` the common case.
     /// Wraps `GraphSnapshot::cdlp` / `cdlp_seeded`.
-    #[pyo3(signature = (directed, iterations, seed=None))]
+    #[pyo3(signature = (directed=true, iterations=10, seed=None))]
     fn cdlp(
         &self,
         py: Python<'_>,
@@ -1330,7 +1333,8 @@ impl GraphSnapshot {
     /// Local clustering coefficient per node: rels among each node's undirected
     /// neighbour set over the maximum possible (0 when degree <= 1). `directed`
     /// picks the forward direction for the rel count. One value per node id. GIL
-    /// released. Wraps `GraphSnapshot::lcc`.
+    /// released. `directed` defaults to `True`. Wraps `GraphSnapshot::lcc`.
+    #[pyo3(signature = (directed=true))]
     fn lcc(&self, py: Python<'_>, directed: bool) -> Vec<f64> {
         let snapshot = self.snapshot.clone();
         py.allow_threads(move || snapshot.lcc(directed))
@@ -1339,8 +1343,8 @@ impl GraphSnapshot {
     /// Single-source shortest paths from `source` over forward rels with additive
     /// weights from the `weight_key` rel property (`None` = unit weights);
     /// unreachable nodes get `inf`. One distance per node id. GIL released.
-    /// Wraps `GraphSnapshot::sssp`.
-    #[pyo3(signature = (source, directed, weight_key=None))]
+    /// `directed` defaults to `True`. Wraps `GraphSnapshot::sssp`.
+    #[pyo3(signature = (source, directed=true, weight_key=None))]
     fn sssp(
         &self,
         py: Python<'_>,

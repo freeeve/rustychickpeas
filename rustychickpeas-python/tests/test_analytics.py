@@ -114,3 +114,15 @@ def test_aggregate_where_via():
     # Keep messages whose thread root's lang is "en": nodes 0 and 2.
     res = g.aggregate("Msg").where("day", ">", 0).where_via(roots, "lang", ["en"]).run()
     assert res.total == 2
+
+
+def test_analytics_defaults_and_kwargs():
+    # Defaults make the common case argument-free; kwargs read clearly.
+    g = _build(3, [(0, 1), (1, 2), (2, 0)])
+    assert abs(sum(g.pagerank()) - 1.0) < 1e-9  # directed=True, damping=0.85, iters=30
+    assert len(g.pagerank(directed=False)) == 3
+    assert g.cdlp() == [0, 0, 0]  # default iterations converge to min label
+    assert g.cdlp(directed=False, iterations=2) == [0, 0, 0]
+    assert len(g.lcc()) == 3
+    d = g.sssp(0)  # default directed=True, unit weights on the 0->1->2 cycle
+    assert abs(d[1] - 1.0) < 1e-9 and abs(d[2] - 2.0) < 1e-9
