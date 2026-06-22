@@ -538,7 +538,7 @@ impl GraphSnapshot {
         let proj = projection.inner.clone();
         let map: std::collections::HashMap<(u32, u32), u64> = py.allow_threads(move || {
             snapshot
-                .fold_via(&rel_type, dir, proj.as_ref())
+                .fold_via(rel_type.as_str(), dir, proj.as_ref())
                 .into_iter()
                 .collect()
         });
@@ -1398,7 +1398,7 @@ impl GraphSnapshot {
             };
             // core returns a hashbrown map; collect into std so PyO3 hands back a dict.
             snapshot
-                .co_occurring(seed, &rel_type, dir, w)
+                .co_occurring(seed, rel_type.as_str(), dir, w)
                 .into_iter()
                 .collect()
         });
@@ -2657,7 +2657,7 @@ impl NeighborGroups {
             let steps: Vec<(rustychickpeas_core::types::Direction, &str)> =
                 project.iter().map(|(d, r)| (*d, r.as_str())).collect();
             snapshot
-                .neighbor_groups(&sources, &rel_type, direction)
+                .neighbor_groups(&sources, rel_type.as_str(), direction)
                 .project(&steps)
                 .sizes()
         })
@@ -2678,7 +2678,7 @@ impl NeighborGroups {
             let steps: Vec<(rustychickpeas_core::types::Direction, &str)> =
                 project.iter().map(|(d, r)| (*d, r.as_str())).collect();
             snapshot
-                .neighbor_groups(&sources, &rel_type, direction)
+                .neighbor_groups(&sources, rel_type.as_str(), direction)
                 .project(&steps)
                 .top_by_size(n, tie.as_deref())
         })

@@ -923,7 +923,7 @@ impl<'a> PropExt<'a> for Option<Prop<'a>> {
 pub struct NeighborGroups<'a> {
     graph: &'a GraphSnapshot,
     sources: &'a [NodeId],
-    rel: &'a str,
+    rel_match: RelMatch,
     direction: Direction,
     project: Vec<(Direction, &'a str)>,
 }
@@ -940,14 +940,11 @@ impl<'a> NeighborGroups<'a> {
 
     /// Per source, the size of its largest cohort, as `(source, size)` — the raw
     /// reduction. Sources with no projectable neighbours yield `0`. Runs in
-    /// parallel over the sources; an unknown `rel`/projection type yields all-zero
+    /// parallel over the sources; an unknown `rel_type`/projection type yields all-zero
     /// sizes.
     pub fn sizes(&self) -> Vec<(NodeId, u32)> {
         use rayon::prelude::*;
         let g = self.graph;
-        let Some(rel_t) = g.relationship_type_from_str(self.rel) else {
-            return self.sources.iter().map(|&s| (s, 0)).collect();
-        };
         let Some(proj_steps) = self
             .project
             .iter()
@@ -961,8 +958,9 @@ impl<'a> NeighborGroups<'a> {
             .map(|&src| {
                 // Tally this source's neighbours by their projected group node and
                 // keep the largest cohort. The map is thread-local, so no sharing.
+                // An unknown rel type matches nothing, so the cohort is empty -> 0.
                 let mut counts: HashMap<NodeId, u32> = HashMap::new();
-                for m in g.neighbors_by_type(src, self.direction, rel_t) {
+                for m in g.neighbors_with(src, self.direction, self.rel_match.clone()) {
                     let mut cur = m;
                     let mut projected = true;
                     for &(d, t) in &proj_steps {
@@ -2561,7 +2559,7 @@ impl GraphSnapshot {
         Some(cur)
     }
 
-    /// Build a [`NeighborGroups`] query over each source node's `rel` neighbours
+    /// Build a [`NeighborGroups`] query over each source node's `rel_type` neighbours
     /// (in `direction`): group every source's neighbours by a projected attribute
     /// and reduce per source. Nothing runs until a terminal is called. E.g. BI
     /// Q4's biggest single-country membership per forum:
@@ -2574,22 +2572,22 @@ impl GraphSnapshot {
     pub fn neighbor_groups<'a>(
         &'a self,
         sources: &'a [NodeId],
-        rel: &'a str,
+        rel_type: impl RelTypeFilter,
         direction: Direction,
     ) -> NeighborGroups<'a> {
         NeighborGroups {
             graph: self,
             sources,
-            rel,
+            rel_match: rel_type.into_match(self),
             direction,
             project: Vec::new(),
         }
     }
 
-    /// Fold relationship `rel` (in `direction`) into a weighted node-pair map by
+    /// Fold relationship `rel_type` (in `direction`) into a weighted node-pair map by
     /// projecting both endpoints of each rel through `projection` — the one-mode /
     /// bipartite projection ("network folding") of a relation onto a derived node
-    /// set. For every `rel` rel `a -> b`, map `a' = projection[a]` and
+    /// set. For every `rel_type` rel `a -> b`, map `a' = projection[a]` and
     /// `b' = projection[b]` and add one to the count of the *unordered* pair
     /// `(min(a',b'), max(a',b'))`. Self-pairs (`a' == b'`) and endpoints projecting
     /// to the `u32::MAX` sentinel (no neighbour) are skipped.
@@ -2600,18 +2598,18 @@ impl GraphSnapshot {
     /// canonical use is BI Q19 / IC14's interaction graph: fold `replyOf` rels
     /// (comment -> parent) through each message's `hasCreator`, yielding a
     /// person-pair -> reply-count map. Runs in parallel over the node range (each
-    /// worker folds into a thread-local map, merged at the end); an unknown `rel`
+    /// worker folds into a thread-local map, merged at the end); an unknown `rel_type`
     /// yields an empty map.
     pub fn fold_via(
         &self,
-        rel: &str,
+        rel_type: impl RelTypeFilter,
         direction: Direction,
         projection: &[NodeId],
     ) -> HashMap<(NodeId, NodeId), u64> {
         use rayon::prelude::*;
-        let Some(rel_t) = self.relationship_type_from_str(rel) else {
-            return HashMap::new();
-        };
+        // Resolve the type filter once; an unknown type matches nothing, so the
+        // fold below naturally yields an empty map.
+        let matcher = rel_type.into_match(self);
         (0..self.n_nodes)
             .into_par_iter()
             .fold(HashMap::new, |mut acc, src| {
@@ -2621,7 +2619,7 @@ impl GraphSnapshot {
                 if a == u32::MAX {
                     return acc;
                 }
-                for dst in self.neighbors_by_type(src, direction, rel_t) {
+                for dst in self.neighbors_with(src, direction, matcher.clone()) {
                     if let Some(&b) = projection.get(dst as usize) {
                         if b != u32::MAX && a != b {
                             let key = if a < b { (a, b) } else { (b, a) };
@@ -2641,30 +2639,29 @@ impl GraphSnapshot {
     }
 
     /// Seeded co-occurrence — one-mode / bipartite projection by shared neighbour.
-    /// From `seed`, over relationship `rel`: the nodes that share a `rel`-neighbour
-    /// with `seed` (`seed -(rel,direction)-> shared centers -(rel, reversed)-> the
+    /// From `seed`, over relationship `rel_type`: the nodes that share a `rel_type`-neighbour
+    /// with `seed` (`seed -(rel_type,direction)-> shared centers -(rel_type, reversed)-> the
     /// co-occurring nodes`), `seed` itself excluded. Each co-occurring node's weight
     /// is its shared-center count ([`CoWeight::Count`]) or the number of distinct
     /// values of a center property ([`CoWeight::Distinct`], e.g. distinct days).
     /// Returns `{other: weight}`. The seeded row of the node-node co-occurrence
     /// matrix; the by-shared-neighbour complement of [`fold_via`](Self::fold_via)'s
-    /// by-rel-endpoint projection. Unknown `rel`/`key` yields an empty map.
+    /// by-rel-endpoint projection. Unknown `rel_type`/`key` yields an empty map.
     pub fn co_occurring(
         &self,
         seed: NodeId,
-        rel: &str,
+        rel_type: impl RelTypeFilter,
         direction: Direction,
         weight: CoWeight,
     ) -> HashMap<NodeId, u64> {
-        let Some(rel_t) = self.relationship_type_from_str(rel) else {
-            return HashMap::new();
-        };
+        // Resolve the type filter once; an unknown type matches nothing -> empty map.
+        let matcher = rel_type.into_match(self);
         let back = Self::reverse_direction(direction);
         match weight {
             CoWeight::Count => {
                 let mut counts: HashMap<NodeId, u64> = HashMap::new();
-                for center in self.neighbors_by_type(seed, direction, rel_t) {
-                    for other in self.neighbors_by_type(center, back, rel_t) {
+                for center in self.neighbors_with(seed, direction, matcher.clone()) {
+                    for other in self.neighbors_with(center, back, matcher.clone()) {
                         if other != seed {
                             *counts.entry(other).or_insert(0) += 1;
                         }
@@ -2677,13 +2674,13 @@ impl GraphSnapshot {
                     return HashMap::new();
                 };
                 let mut sets: HashMap<NodeId, std::collections::HashSet<ValueId>> = HashMap::new();
-                for center in self.neighbors_by_type(seed, direction, rel_t) {
+                for center in self.neighbors_with(seed, direction, matcher.clone()) {
                     // The distinct value carried by this center (e.g. its day); a
                     // center without it contributes no co-occurrence.
                     let Some(val) = self.prop_id(center, key_id) else {
                         continue;
                     };
-                    for other in self.neighbors_by_type(center, back, rel_t) {
+                    for other in self.neighbors_with(center, back, matcher.clone()) {
                         if other != seed {
                             sets.entry(other).or_default().insert(val);
                         }
