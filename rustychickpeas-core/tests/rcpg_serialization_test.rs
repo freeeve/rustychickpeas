@@ -28,7 +28,7 @@ fn assert_snapshots_equivalent(a: &GraphSnapshot, b: &GraphSnapshot, max_id: u32
 
 #[test]
 fn rcpg_round_trip_with_properties() {
-    let mut builder = GraphBuilder::with_version("v2.3", None, None);
+    let mut builder = GraphBuilder::new(None, None).with_version("v2.3");
     builder.add_node(Some(0), &["Person"]).unwrap();
     builder.add_node(Some(1), &["Person", "Admin"]).unwrap();
     // sparse IDs: skip 2..=9

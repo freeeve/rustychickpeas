@@ -233,19 +233,11 @@ impl GraphBuilder {
         }
     }
 
-    /// Create a new GraphBuilder with a version
-    pub fn with_version(
-        version: &str,
-        capacity_nodes: Option<usize>,
-        capacity_rels: Option<usize>,
-    ) -> Self {
-        let mut builder = Self::new(capacity_nodes, capacity_rels);
-        builder.version = Some(version.to_string());
-        builder
-    }
-
-    /// Set the version for this snapshot (builder pattern)
-    pub fn with_version_builder(mut self, version: &str) -> Self {
+    /// Set the version on this builder, consuming and returning it — the `with_*`
+    /// builder form. For an initial version use
+    /// `GraphBuilder::new(..).with_version(..)`; to set it in place, use
+    /// [`set_version`](Self::set_version).
+    pub fn with_version(mut self, version: &str) -> Self {
         self.version = Some(version.to_string());
         self
     }
@@ -1254,7 +1246,7 @@ mod tests {
 
     #[test]
     fn test_builder_with_version() {
-        let builder = GraphBuilder::with_version("v1.0", None, None);
+        let builder = GraphBuilder::new(None, None).with_version("v1.0");
         assert_eq!(builder.version, Some("v1.0".to_string()));
     }
 
@@ -1411,8 +1403,8 @@ mod tests {
     }
 
     #[test]
-    fn test_with_version_builder() {
-        let builder = GraphBuilder::new(Some(10), Some(10)).with_version_builder("v2.0");
+    fn test_with_version_chain() {
+        let builder = GraphBuilder::new(Some(10), Some(10)).with_version("v2.0");
         assert_eq!(builder.version, Some("v2.0".to_string()));
     }
 

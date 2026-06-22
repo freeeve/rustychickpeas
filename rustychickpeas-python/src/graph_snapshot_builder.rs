@@ -106,7 +106,7 @@ impl GraphSnapshotBuilder {
         capacity_rels: Option<usize>,
     ) -> Self {
         let builder = if let Some(ref v) = version {
-            GraphBuilder::with_version(v, capacity_nodes, capacity_rels)
+            GraphBuilder::new(capacity_nodes, capacity_rels).with_version(v)
         } else {
             GraphBuilder::new(capacity_nodes, capacity_rels)
         };

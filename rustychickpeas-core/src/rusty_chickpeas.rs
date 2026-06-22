@@ -44,7 +44,7 @@ impl RustyChickpeas {
         capacity_rels: Option<usize>,
     ) -> GraphBuilder {
         if let Some(v) = version {
-            GraphBuilder::with_version(v, capacity_nodes, capacity_rels)
+            GraphBuilder::new(capacity_nodes, capacity_rels).with_version(v)
         } else {
             GraphBuilder::new(capacity_nodes, capacity_rels)
         }

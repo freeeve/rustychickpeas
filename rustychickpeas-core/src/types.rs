@@ -200,18 +200,18 @@ pub enum PropertyValue {
 }
 
 impl PropertyValue {
-    /// Resolve a property value to a string representation
-    /// For interned strings, requires access to the interner
-    pub fn as_string(&self, interner: Option<&crate::interner::StringInterner>) -> String {
-        match self {
+    /// Resolve a property value to its string form. Returns `None` only for an
+    /// [`InternedString`](PropertyValue::InternedString) when no `interner` is
+    /// supplied to resolve it; every other variant is always `Some` (and ignores
+    /// `interner`). Previously panicked on the missing-interner case.
+    pub fn as_string(&self, interner: Option<&crate::interner::StringInterner>) -> Option<String> {
+        Some(match self {
             PropertyValue::String(s) => s.clone(),
-            PropertyValue::InternedString(id) => interner
-                .expect("Interner required to resolve interned string")
-                .resolve(*id),
+            PropertyValue::InternedString(id) => interner?.resolve(*id),
             PropertyValue::Integer(i) => i.to_string(),
             PropertyValue::Float(f) => f.to_string(),
             PropertyValue::Boolean(b) => b.to_string(),
-        }
+        })
     }
 }
 
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_property_value_string() {
         let pv = PropertyValue::String("hello".to_string());
-        assert_eq!(pv.as_string(None), "hello");
+        assert_eq!(pv.as_string(None), Some("hello".to_string()));
     }
 
     #[test]
@@ -261,27 +261,29 @@ mod tests {
         let interner = StringInterner::new();
         let id = interner.get_or_intern("world");
         let pv = PropertyValue::InternedString(id);
-        assert_eq!(pv.as_string(Some(&interner)), "world");
+        assert_eq!(pv.as_string(Some(&interner)), Some("world".to_string()));
+        // Without an interner the interned id can't be resolved -> None (was a panic).
+        assert_eq!(pv.as_string(None), None);
     }
 
     #[test]
     fn test_property_value_integer() {
         let pv = PropertyValue::Integer(42);
-        assert_eq!(pv.as_string(None), "42");
+        assert_eq!(pv.as_string(None), Some("42".to_string()));
     }
 
     #[test]
     fn test_property_value_float() {
         let pv = PropertyValue::Float(2.5);
-        assert_eq!(pv.as_string(None), "2.5");
+        assert_eq!(pv.as_string(None), Some("2.5".to_string()));
     }
 
     #[test]
     fn test_property_value_boolean() {
         let pv = PropertyValue::Boolean(true);
-        assert_eq!(pv.as_string(None), "true");
+        assert_eq!(pv.as_string(None), Some("true".to_string()));
         let pv = PropertyValue::Boolean(false);
-        assert_eq!(pv.as_string(None), "false");
+        assert_eq!(pv.as_string(None), Some("false".to_string()));
     }
 
     #[test]
