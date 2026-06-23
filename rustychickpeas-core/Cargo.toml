@@ -11,7 +11,7 @@ documentation = "https://github.com/freeeve/rustychickpeas#readme"
 
 [dependencies]
 roaring = { workspace = true }
-rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.9.0" }
+rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.10.0" }
 thiserror = { workspace = true }
 lasso = { workspace = true }
 parquet = { workspace = true, features = ["async", "object_store"] }

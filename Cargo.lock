@@ -2591,7 +2591,7 @@ dependencies = [
 
 [[package]]
 name = "rustychickpeas-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2621,7 +2621,7 @@ dependencies = [
 
 [[package]]
 name = "rustychickpeas-format"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bitvec",
  "proptest",
@@ -2630,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "rustychickpeas-pipeline"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "roaring",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "rustychickpeas-python"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "pyo3",
  "roaring",
@@ -2650,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "rustychickpeas-reader"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "futures",
  "roaring",

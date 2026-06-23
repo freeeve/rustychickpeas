@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 rustychickpeas-core = { path = "../rustychickpeas-core" }
-rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.9.0" }
+rustychickpeas-format = { path = "../rustychickpeas-format", version = "0.10.0" }
 roaring = { workspace = true }
 # Search-index builder (trigram .rrs) over the shared doc-ID space. Pinned to a
 # rev for reproducibility; bump in lockstep with the reader crate.
