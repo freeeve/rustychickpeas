@@ -129,7 +129,7 @@ pub fn build_artifacts(mut docs: Vec<Document>, cfg: &BuildConfig) -> Result<Art
     roaringrange::build::write_index(&mut index_rrs, cfg.gram_size, 0, entries)?;
 
     // 3. Graph (topology-only): node ID == doc ID; rels resolved key -> ID.
-    let mut builder = GraphBuilder::with_version(&cfg.version, Some(n_docs as usize), None);
+    let mut builder = GraphBuilder::new(Some(n_docs as usize), None).with_version(&cfg.version);
     let label = [cfg.node_label.as_str()];
     for id in 0..n_docs {
         builder.add_node(Some(id), &label)?;

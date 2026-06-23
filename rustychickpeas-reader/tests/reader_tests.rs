@@ -9,7 +9,7 @@ use rustychickpeas_reader::records::{MemoryFetch, RecordStore};
 use rustychickpeas_reader::{Direction, GraphReader};
 
 fn demo_graph_bytes() -> Vec<u8> {
-    let mut builder = GraphBuilder::with_version("demo", None, None);
+    let mut builder = GraphBuilder::new(None, None).with_version("demo");
     builder.add_node(Some(0), &["Person"]).unwrap();
     builder.add_node(Some(1), &["Person"]).unwrap();
     builder.add_node(Some(2), &["Company"]).unwrap();

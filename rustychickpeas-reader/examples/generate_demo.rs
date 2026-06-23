@@ -14,7 +14,7 @@ const PEOPLE: u32 = 60;
 const COMPANIES: u32 = 8;
 
 fn main() {
-    let mut builder = GraphBuilder::with_version("demo-v1", None, None);
+    let mut builder = GraphBuilder::new(None, None).with_version("demo-v1");
 
     // IDs 0..PEOPLE are people, PEOPLE..PEOPLE+COMPANIES are companies
     for id in 0..PEOPLE {
